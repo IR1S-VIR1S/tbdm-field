@@ -11,7 +11,7 @@ const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Bas
   END_STUDY: 'End of study', QC_LOG: 'Verification check', R_SCORES: 'Radiograph score' };
 const BY_FIELDS = ['entered_by', 'screened_by', 'examined_by', 'recorded_by', 'interviewer', 'operator', 'checker', 'reader_initials'];
 const LAB_GROUPS = [
-  ['Sample', ['sample_date', 'time_drawn', 'time_analysed', 'fasting', 'symptomatic', 'lab_status', 'source_report_no'], null],
+  ['Sample', ['sample_date', 'time_drawn', 'time_analysed', 'fasting', 'symptomatic', 'lab_status', 'analyser_id', 'source_report_no'], null],
   ['Blood count', ['hb', 'tlc', 'neut_abs', 'neut_pct', 'lymph_abs', 'lymph_pct', 'mono_abs', 'eos_pct', 'plt', 'rdw', 'mpv'], ['V1', 'V3', 'V5']],
   ['HbA1c', ['hba1c_unit', 'hba1c'], ['V1', 'V4', 'V5']],
   ['Glucose and lipids (fasting)', ['glucose_unit', 'fpg', 'lipid_unit', 'tg', 'hdl', 'tc', 'ldl'], ['V1']],
@@ -22,9 +22,6 @@ const VISIT_FORMS = { V1: [['S2_BASELINE'], ['LABS', 'V1'], ['PHQ_GAD', 'V1'], [
   V3: [['VISITS', 'V3'], ['LABS', 'V3']], V4: [['VISITS', 'V4'], ['LABS', 'V4']],
   V5: [['VISITS', 'V5'], ['LABS', 'V5'], ['SPIRO'], ['PHQ_GAD', 'V5'], ['END_STUDY']] };
 
-// Study numbers always show the TBDM- prefix; the user types only the number
-function idDigits_(v) { return String(v || '').replace(/^TBDM-?/i, '').replace(/\D/g, '').slice(0, 3); }
-function idShown_(v) { const d = idDigits_(v); return d ? 'TBDM-' + d : 'TBDM-'; }
 let S = null;          // decrypted state: { cfg, server, outbox, lastSync }
 let KEY = null;        // AES key, in memory only while unlocked
 const T = { nav: [], syncing: false, syncError: '', idle: null, hiddenAt: 0, salt: null, pin: '', join: null, form: null };
@@ -580,19 +577,10 @@ function fieldEl(c) {
     const isNum = ['num', 'int', 'uniqueint', 'unitnum'].indexOf(c.type) >= 0;
     const type = c.type === 'date' ? 'date' : c.type === 'time' ? 'time' : 'text';
     const unitMissing = c.type === 'unitnum' && !s_(F.vals[c.unit]);
-    const isId = ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0;
-    const inp = el('input', { id: 'i-' + c.key, type, value: isId ? idShown_(val) : val, autocomplete: 'off', inputmode: isId ? 'numeric' : isNum ? (c.type === 'int' || c.type === 'uniqueint' ? 'numeric' : 'decimal') : null,
-      autocapitalize: isId || BY_FIELDS.indexOf(c.key) >= 0 ? 'characters' : 'off',
-      maxlength: isId ? '8' : c.type === 'text' ? String(c.max) : null, disabled: unitMissing, placeholder: unitMissing ? 'choose the unit first' : null,
-      oninput: (ev) => {
-        if (!isId) return set(ev.target.value);
-        const d = idDigits_(ev.target.value); ev.target.value = 'TBDM-' + d; set(d ? 'TBDM-' + d : '');
-      },
-      onchange: (ev) => {
-        if (!isId) return set(ev.target.value);
-        let d = idDigits_(ev.target.value); if (d) d = d.padStart(3, '0');
-        ev.target.value = 'TBDM-' + d; set(d ? 'TBDM-' + d : '');
-      } });
+    const inp = el('input', { id: 'i-' + c.key, type, value: val, autocomplete: 'off', inputmode: isNum ? (c.type === 'int' || c.type === 'uniqueint' ? 'numeric' : 'decimal') : null,
+      autocapitalize: ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 || BY_FIELDS.indexOf(c.key) >= 0 ? 'characters' : 'off',
+      maxlength: c.type === 'text' ? String(c.max) : null, disabled: unitMissing, placeholder: unitMissing ? 'choose the unit first' : c.type === 'sidnew' || c.type === 'sid' ? 'TBDM-' : null,
+      oninput: (ev) => set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? ev.target.value.toUpperCase() : ev.target.value), onchange: (ev) => set(ev.target.value) });
     if (type === 'date' || type === 'time') {
       box.append(el('div', { class: 'inline' }, inp, el('button', { type: 'button', class: 'now', onclick: () => { inp.value = type === 'date' ? todayIso() : nowHm(); set(inp.value); } }, type === 'date' ? 'Today' : 'Now')));
     } else box.append(inp);
