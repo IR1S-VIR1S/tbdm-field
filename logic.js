@@ -53,7 +53,7 @@ function tbSymptoms_(sfx) {
     col('tb_night_sweats', 'TBscore: night sweats' + sfx, 'list', { codes: YN })];
 }
 function signs_(sfx) {
-  return [col('temp_c', 'Temperature, deg C, axillary' + sfx, 'num', { min: 34, max: 42 }),
+  return [col('temp_f', 'Temperature, deg F, axillary' + sfx, 'num', { min: 93, max: 108 }),
     col('pulse_min', 'Pulse per minute, counted for a full minute' + sfx, 'int', { min: 30, max: 200 }),
     col('pallor', 'Conjunctival pallor' + sfx, 'list', { codes: PRESENT }),
     col('auscultation', 'Chest auscultation' + sfx, 'list', { codes: AUSC })];
@@ -139,7 +139,6 @@ const SCHEMA = [
     col('fasting', 'Fasting at the time of the sample (Visit 1)', 'list', { codes: YN }),
     col('symptomatic', 'Hepatotoxicity symptoms when this test was taken (U visits only)', 'list', { codes: YN }),
     col('lab_status', 'Status of this laboratory visit', 'list', { codes: [['1', 'done'], ['2', 'not done'], ['3', 'declined'], ['4', 'sample rejected']] }),
-    col('analyser_id', 'Haematology analyser ID', 'text', { max: 20 }),
     col('source_report_no', 'Laboratory report number (source document)', 'text', { max: 30 }),
     col('hb', 'Haemoglobin, g/dL', 'num', { min: 3, max: 25 }),
     col('tlc', 'Total leucocyte count, x10^9/L', 'num', { min: 0.5, max: 100 }),
@@ -397,14 +396,14 @@ function ratio_(a, b) { const x = num_(a), y = num_(b); return x === null || y =
 function timika_(pct, cavity) { const p = num_(pct), c = code_(cavity); if (p === null || (c !== 'Y' && c !== 'N')) return ''; return p + (c === 'Y' ? 40 : 0); }
 
 function tbscore_(r, bmi, pulseLimit) {                     // Bandim TBscore, 0 to 13; blank if any item missing
-  const need = TB_SYMPTOMS.concat(['pallor', 'auscultation', 'temp_c', 'pulse_min', 'muac_mm']);
+  const need = TB_SYMPTOMS.concat(['pallor', 'auscultation', 'temp_f', 'pulse_min', 'muac_mm']);
   for (let i = 0; i < need.length; i++) if (str_(r[need[i]]) === '') return '';
   if (bmi === '' || bmi === null) return '';
   let s = 0;
   TB_SYMPTOMS.forEach(function (k) { if (code_(r[k]) === 'Y') s++; });
   if (code_(r.pallor) === 'P') s++;
   if (code_(r.auscultation) === 'P') s++;
-  if (num_(r.temp_c) > 37) s++;
+  if (num_(r.temp_f) > 98.6) s++;   // 37 C
   if (num_(r.pulse_min) > pulseLimit) s++;
   if (bmi < 18) s++;
   if (bmi < 16) s++;
