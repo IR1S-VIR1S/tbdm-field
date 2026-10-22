@@ -179,7 +179,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) T.idle = setTimeout(lock, IDLE_LOCK_MS); }
-function lock() { KEY = null; S = null; T.form = null; T.nav = []; T.pin = ''; clearTimeout(T.idle); render(); }
+function lock() { KEY = null; S = null; T.form = null; T.reg = null; T.nav = []; T.pin = ''; clearTimeout(T.idle); render(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -205,7 +205,7 @@ function render() {
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
   const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
-    queries: queries, attention: attention, films: films, settings: settings, screening: screening, qclog: qclog };
+    queries: queries, attention: attention, films: films, settings: settings, screening: screening, qclog: qclog, register: registerScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
 }
@@ -302,6 +302,7 @@ function lockScreen() {
 function role() { return S.cfg.role || 'data'; }
 const canData = () => role() === 'data' || role() === 'pi';
 function home() {
+  if (role() === 'dots') return registerScreen();
   if (!S.server) return topBar('TBDM Field').concat([el('main', null, el('div', { class: 'card' }, navigator.onLine ? 'Fetching the study data…' : 'Connect to the internet once to fetch the study data.'))]);
   if (role() === 'reader1' || role() === 'reader2') return films();
   const out = derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
@@ -318,11 +319,78 @@ function home() {
       el('button', { class: 'tile', onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
       el('button', { class: 'tile', onclick: () => go('screening') }, el('b', null, 'Screening log'), el('span', null, view('S0_SCREEN').length + ' screened')),
       role() === 'qc' || role() === 'pi' ? el('button', { class: 'tile', onclick: () => go('qclog') }, el('b', null, 'Verification log'), el('span', null, view('QC_LOG').length + ' checks')) : null,
+      role() === 'pi' ? el('button', { class: 'tile', onclick: () => go('register') }, el('b', null, 'Study numbers'), el('span', null, 'Assign or look up')) : null,
       el('button', { class: 'tile', onclick: () => go('settings') }, el('b', null, 'Settings'), el('span', null, S.cfg.email || ''))),
     el('h2', null, 'Safety'),
     el('div', { class: 'card small' }, 'PHQ-9 item 9 above 0, or a liver result meeting the definition: act the same day (manual Part 4). The app and the e-mail alerts are only a backup.'));
   return topBar('TBDM Field').concat([main]);
 }
+// ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
+const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']];
+function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', age: '', sex: '', reason: '', pendingRid: null, q: '' }); }
+async function regLoad() {
+  const st = regState();
+  st.err = '';
+  if (!navigator.onLine) { st.err = 'No internet connection. The numbers register works only online.'; render(); return; }
+  st.loading = true; render();
+  try {
+    const res = await api({ op: 'register_list', token: S.cfg.token });
+    if (!res.ok) throw new Error(res.error || 'could not load');
+    st.list = res;
+  } catch (e) { st.err = 'Could not load the register. ' + e.message; }
+  st.loading = false; render();
+}
+async function regAssign() {
+  const st = regState();
+  if (st.busy) return;
+  if (!navigator.onLine) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
+  st.pendingRid = st.pendingRid || rid();              // the same id on a retry, so a number is never assigned twice
+  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, age: st.age, sex: st.sex, reason: st.reason };
+  st.busy = true; st.err = ''; st.done = ''; render();
+  try {
+    const res = await api(body);
+    if (!res.ok) throw new Error(res.error || 'not assigned');
+    st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id;
+    st.pendingRid = null; st.age = ''; st.sex = ''; st.reason = ''; st.status = 'E';
+  } catch (e) { st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.'; }
+  st.busy = false;
+  await regLoad();
+}
+function registerScreen() {
+  const st = regState();
+  if (st.list === null && !st.loading && !st.err && navigator.onLine) regLoad();
+  const L = st.list, rows = L ? L.rows : [], q = st.q.trim().toUpperCase();
+  const shown = q ? rows.filter((r) => r.study_id.indexOf(q) >= 0) : rows;
+  const seg = (opts, cur, set) => el('div', { class: 'seg' }, opts.map((o) => el('button', { type: 'button', class: cur === o[0] ? 'on' : '', onclick: () => { set(o[0]); render(); } }, o[1])));
+  const spoiled = st.status === 'S';
+  const off = !navigator.onLine;
+  return topBar('Study numbers').concat([el('main', null,
+    el('div', { class: 'card small muted' }, 'Study numbers only. No names, addresses, telephone numbers or record numbers are entered or shown here. Those stay on paper in the locked cabinet.'),
+    off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'This works only online. Nothing is stored on this phone.')) : null,
+    st.err ? el('div', { class: 'card alert' }, st.err) : null,
+    st.done ? el('div', { class: 'card' }, el('b', null, st.done)) : null,
+    el('div', { class: 'card' },
+      el('div', { class: 'muted small' }, 'Next free number'),
+      el('div', { style: 'font-size:28px;font-weight:700' }, L ? L.next : (st.loading ? 'loading…' : '–')),
+      el('button', { class: 'btn block', type: 'button', disabled: off || st.loading, onclick: () => regLoad() }, 'Refresh')),
+    el('h2', null, 'Assign a number'),
+    el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Outcome'), seg(REG_STATUS_OPTS, st.status, (v) => { st.status = v; })),
+    spoiled ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Age in years'),
+      el('input', { type: 'text', inputmode: 'numeric', maxlength: '3', value: st.age, oninput: (ev) => { st.age = ev.target.value.replace(/\D/g, ''); } })),
+    spoiled ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Sex'), seg([['M', 'Male'], ['F', 'Female']], st.sex, (v) => { st.sex = v; })),
+    spoiled ? el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Reason the number is spoiled'),
+      el('input', { type: 'text', maxlength: '80', value: st.reason, oninput: (ev) => { st.reason = ev.target.value; } })) : null,
+    el('button', { class: 'btn primary block', type: 'button', disabled: off || st.busy || !L, onclick: () => regAssign() }, st.busy ? 'Assigning…' : 'Assign number'),
+    el('h2', null, 'Look up a number'),
+    el('input', { class: 'search', type: 'search', placeholder: 'Type a number, e.g. TBDM-012', autocomplete: 'off', value: st.q,
+      oninput: (ev) => { st.q = ev.target.value; render(); } }),
+    el('div', { class: 'list' }, shown.length ? shown.map((r) => el('div', { class: 'row' }, el('div', { class: 'main' },
+      el('div', null, r.study_id),
+      el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.age && r.sex ? r.age + ' y, ' + r.sex : '', r.assigned_date].filter(Boolean).join(' · ')) )))
+      : el('div', { class: 'empty' }, L ? 'No numbers match.' : (st.loading ? 'Loading…' : ''))))
+  ]);
+}
+
 function participants() {
   const out = derived(), next = {};
   out.schedule.forEach((r) => { if (!next[r[0]]) next[r[0]] = r; });
