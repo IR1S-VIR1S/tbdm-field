@@ -11,11 +11,11 @@ const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Bas
   END_STUDY: 'End of study', QC_LOG: 'Verification check', R_SCORES: 'Radiograph score' };
 const BY_FIELDS = ['entered_by', 'screened_by', 'examined_by', 'recorded_by', 'interviewer', 'operator', 'checker', 'reader_initials'];
 const LAB_GROUPS = [
-  ['Sample', ['sample_date', 'time_drawn', 'time_analysed', 'fasting', 'symptomatic', 'lab_status', 'analyser_id', 'source_report_no'], null],
+  ['Sample', ['sample_date', 'time_analysed', 'fasting', 'symptomatic', 'lab_status'], null],
   ['Blood count', ['hb', 'tlc', 'neut_abs', 'neut_pct', 'lymph_abs', 'lymph_pct', 'mono_abs', 'eos_pct', 'plt', 'rdw', 'mpv'], ['V1', 'V3', 'V5']],
   ['HbA1c', ['hba1c_unit', 'hba1c'], ['V1', 'V4', 'V5']],
   ['Glucose and lipids (fasting)', ['glucose_unit', 'fpg', 'lipid_unit', 'tg', 'hdl', 'tc', 'ldl'], ['V1']],
-  ['Liver tests', ['alt', 'alt_uln', 'ast', 'alp', 'tbili', 'bili_uln', 'albumin', 'tprotein'], ['V1', 'V2', 'V3', 'V5', 'U']],
+  ['Liver tests', ['alt', 'alt_uln', 'ast', 'ast_uln', 'alp', 'alp_uln', 'tbili', 'bili_uln', 'albumin', 'tprotein'], ['V1', 'V2', 'V3', 'V5', 'U']],
   ['Serology', ['hbsag', 'anti_hcv', 'hiv'], ['V1']],
   ['Entered by', ['entered_by'], null]];
 const VISIT_FORMS = { V1: [['S2_BASELINE'], ['LABS', 'V1'], ['PHQ_GAD', 'V1'], ['S3_CXR']], V2: [['VISITS', 'V2'], ['LABS', 'V2']],
@@ -67,6 +67,7 @@ async function deriveKey(pin, salt) {
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: PBKDF2_ROUNDS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
 async function saveState() {
+  if (T.practice) { practiceCommit(); return; }
   if (!S || !KEY) return;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, KEY, new TextEncoder().encode(JSON.stringify(S)));
@@ -103,7 +104,11 @@ function view(tab) {
   return rows;
 }
 function data() { const d = {}; SCHEMA.forEach((t) => { d[t.tab] = view(t.tab); }); return d; }
-function derived() { return computeDerived_(data(), todayIso()); }
+function derived() {
+  const out = computeDerived_(data(), todayIso());
+  if (T.practice) out.queries = out.queries.filter((q) => !/^Study number skipped/.test(q[4]));      // practice numbers sit at the top of the range on purpose
+  return out;
+}
 function enrolledMap() { const m = {}; view('S1_ENROL').forEach((r) => { if (r.study_id) m[s_(r.study_id).toUpperCase()] = true; }); return m; }
 function find(tab, key) { return view(tab).filter((r) => sameRec(tab, r, key))[0] || null; }
 function serverValue(tab, key, k) { const r = serverRows(tab).filter((x) => sameRec(tab, x, key))[0]; return r ? s_(r[k]) : null; }
@@ -136,6 +141,7 @@ function queueSave(tab, existing, values) {
 
 // ------------------------------------------------------------------ server
 async function api(body) {
+  if (T.practice) throw new Error('practice mode: the app never contacts the study');
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 45000);
   try {
     const r = await fetch(S ? S.cfg.api : T.join.api, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -144,15 +150,24 @@ async function api(body) {
   } finally { clearTimeout(timer); }
 }
 async function sync() {
-  if (!S || T.syncing) return;
+  if (!S || T.syncing || T.practice) return;
   if (!navigator.onLine) { T.syncError = 'offline'; paintSync(); return; }
   T.syncing = true; paintSync();
+  const mine = S, still = () => { if (S !== mine) throw Object.assign(new Error('stopped'), { quiet: true }); };   // the phone was locked or switched to practice meanwhile
   try {
+    const hi = await api({ op: 'hello', token: S.cfg.token }); still();          // do the app and the workbook speak the same column layout?
+    if (hi.code === 401) throw Object.assign(new Error(hi.error || 'not authorised'), { code: 401 });
+    const srv = hi.ok && hi.schema ? Number(hi.schema) : 1;
+    if (srv > CFG.SCHEMA_VER) {
+      if (navigator.serviceWorker) navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {});
+      throw Object.assign(new Error('A newer version of the app is ready. Close the app and open it again while online. Your entries are kept.'), { code: 409 });
+    }
+    if (srv < CFG.SCHEMA_VER) throw Object.assign(new Error('The study workbook has not been upgraded yet. Your entries stay on this phone and are sent after the upgrade.'), { code: 409 });
     const pending = S.outbox.filter((c) => c.status === 'pending');
     for (let i = 0; i < pending.length; i += 50) {
       const batch = pending.slice(i, i + 50).map((c) => ({ cid: c.cid, tab: c.tab, rid: c.rid, create: c.create, values: c.values, base: c.base, by: c.by }));
       const revs = {}; pending.slice(i, i + 50).forEach((c) => { revs[c.cid] = c.rev; });
-      const res = await api({ op: 'push', token: S.cfg.token, changes: batch });
+      const res = await api({ op: 'push', token: S.cfg.token, schema: CFG.SCHEMA_VER, changes: batch }); still();
       if (!res.ok) throw Object.assign(new Error(res.error || 'the server refused'), { code: res.code });
       res.results.forEach((r) => {
         const c = S.outbox.filter((x) => x.cid === r.cid)[0];
@@ -162,13 +177,14 @@ async function sync() {
       });
       await saveState();
     }
-    const pull = await api({ op: 'pull', token: S.cfg.token });
+    const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
     S.server = { tabs: pull.tabs, films: pull.films || [], at: Date.now() };
     S.cfg.role = pull.role; S.cfg.email = pull.email;
     S.lastSync = Date.now(); T.syncError = ''; T.revoked = false;
     await saveState();
   } catch (e) {
+    if (e.quiet) return;
     T.syncError = e.name === 'AbortError' ? 'timed out' : (e.message || 'failed');
     if (e.code === 401) T.revoked = true;
   } finally {
@@ -179,7 +195,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) T.idle = setTimeout(lock, IDLE_LOCK_MS); }
-function lock() { KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.nav = []; T.pin = ''; clearTimeout(T.idle); render(); }
+function lock() { T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.nav = []; T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -205,7 +221,7 @@ function render() {
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
   const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
-    queries: queries, attention: attention, films: films, settings: settings, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen };
+    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, visits: visitsScreen, visitguide: visitGuideScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
 }
@@ -218,6 +234,7 @@ function topBar(title, opts) {
   return [bar, el('div', { id: 'syncbar' }, syncBar())];
 }
 function syncBar() {
+  if (T.practice) return el('div', { class: 'sync practice' }, el('span', { class: 'grow' }, 'PRACTICE: nothing is saved or sent'), el('button', { onclick: practiceStop }, 'Leave'));
   const n = S.outbox.filter((c) => c.status === 'pending').length, bad = S.outbox.filter((c) => c.status !== 'pending').length;
   const online = navigator.onLine;
   const text = T.syncing ? 'Sending and updating…' : T.revoked ? 'This phone no longer has access. Tell the PI.'
@@ -238,9 +255,17 @@ function modal(title, body, actions, stop) {
 // ------------------------------------------------------------------ setup and lock screens
 function setupScreen() {
   if (!T.join) {
+    const box = el('input', { type: 'text', autocomplete: 'off', autocapitalize: 'off', placeholder: 'Paste the invitation link here' });
+    const m0 = el('div', { class: 'msg' });
     return el('div', { class: 'lock' }, el('h1', null, 'TBDM Field App'),
-      el('p', null, 'Open the invitation link the principal investigator sent you, on this phone, to set it up.'),
-      el('p', { class: 'small' }, 'No study data are stored until you join.'));
+      el('p', null, 'Set up this phone with the invitation link the principal investigator sent you. Tap it on this phone, or paste it below.'),
+      box, m0,
+      el('button', { class: 'btn primary block', onclick: () => {
+        const v = s_(box.value), k = v.indexOf('#join=');
+        if (k < 0 || !readJoin(v.slice(k))) { m0.textContent = 'That is not an invitation link. Copy the whole link and paste it again.'; return; }
+        render();
+      } }, 'Continue'),
+      el('p', { class: 'small' }, 'If you added this app to the Home Screen after joining in the browser, the Home Screen copy starts empty. Ask for a new invitation and paste it here. No study data are stored until you join.'));
   }
   const ini = el('input', { type: 'text', maxlength: '10', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. AG' });
   const p1 = el('input', { type: 'password', inputmode: 'numeric', maxlength: '12', autocomplete: 'new-password', placeholder: '6 digits or more' });
@@ -300,12 +325,13 @@ function lockScreen() {
 
 // ------------------------------------------------------------------ home and lists
 function role() { return S.cfg.role || 'data'; }
-const canData = () => role() === 'data' || role() === 'pi';
+const canData = () => role() === 'data' || role() === 'pi' || role() === 'nurse';
+const isNurse = () => role() === 'nurse';
 function home() {
   if (role() === 'dots') return registerScreen();
   if (!S.server) return topBar('TBDM Field').concat([el('main', null, el('div', { class: 'card' }, navigator.onLine ? 'Fetching the study data…' : 'Connect to the internet once to fetch the study data.'))]);
   if (role() === 'reader1' || role() === 'reader2') return films();
-  const out = derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
+  const out = isNurse() ? { schedule: [], queries: [] } : derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
   const oldest = waiting.reduce((m, c) => Math.min(m, c.at), Infinity);
   const dueN = out.schedule.filter((r) => r[5] !== 'upcoming').length;
   const main = el('main', null,
@@ -314,15 +340,18 @@ function home() {
     el('div', { class: 'tiles' },
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, 'Add a screening line')) : null,
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrol'), el('span', null, 'New study number')) : null,
-      el('button', { class: 'tile', onclick: () => go('participants') }, el('b', null, 'Participants'), el('span', null, Object.keys(enrolledMap()).length + ' enrolled')),
-      el('button', { class: 'tile', onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
-      el('button', { class: 'tile', onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
+      isNurse() ? el('button', { class: 'tile primary', onclick: () => go('measure') }, el('b', null, 'Measurements'), el('span', null, 'Height, weight, waist, arm')) : null,
+      isNurse() ? null : el('button', { class: 'tile primary', onclick: () => go('visits') }, el('b', null, 'Visit checklist'), el('span', null, 'What to order and do')),
+      isNurse() ? null : el('button', { class: 'tile', onclick: () => go('participants') }, el('b', null, 'Participants'), el('span', null, Object.keys(enrolledMap()).length + ' enrolled')),
+      isNurse() ? null : el('button', { class: 'tile', onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
+      isNurse() ? null : el('button', { class: 'tile', onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
       el('button', { class: 'tile', onclick: () => go('screening') }, el('b', null, 'Screening log'), el('span', null, view('S0_SCREEN').length + ' screened')),
       role() === 'qc' || role() === 'pi' ? el('button', { class: 'tile', onclick: () => go('qclog') }, el('b', null, 'Verification log'), el('span', null, view('QC_LOG').length + ' checks')) : null,
-      role() === 'pi' ? el('button', { class: 'tile', onclick: () => go('register') }, el('b', null, 'Study numbers'), el('span', null, 'Assign or look up')) : null,
+      role() === 'pi' && !T.practice ? el('button', { class: 'tile', onclick: () => go('register') }, el('b', null, 'Study numbers'), el('span', null, 'Assign or look up')) : null,
+      T.practice ? null : el('button', { class: 'tile', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, el('b', null, 'Practice'), el('span', null, 'Learn with made-up patients')),
       el('button', { class: 'tile', onclick: () => go('settings') }, el('b', null, 'Settings'), el('span', null, S.cfg.email || ''))),
-    el('h2', null, 'Safety'),
-    el('div', { class: 'card small' }, 'PHQ-9 item 9 above 0, or a liver result meeting the definition: act the same day (manual Part 4). The app and the e-mail alerts are only a backup.'));
+    isNurse() ? null : el('h2', null, 'Safety'),
+    isNurse() ? null : el('div', { class: 'card small' }, 'PHQ-9 item 9 above 0, or a liver result meeting the definition: act the same day (manual Part 4). The app and the e-mail alerts are only a backup.'));
   return topBar('TBDM Field').concat([main]);
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
@@ -365,6 +394,7 @@ function registerScreen() {
   const spoiled = st.status === 'S';
   const off = !navigator.onLine;
   return topBar('Study numbers').concat([el('main', null,
+    el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('visits') }, el('div', { class: 'main' }, el('div', null, 'Visit checklist'), el('div', { class: 'sub' }, 'What to order and do at each visit')), el('span', { class: 'chev' }))),
     el('div', { class: 'card small muted' }, 'Study numbers only. No names, addresses, telephone numbers or record numbers are entered or shown here. Those stay on paper in the locked cabinet.'),
     off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'This works only online. Nothing is stored on this phone.')) : null,
     st.err ? el('div', { class: 'card alert' }, st.err) : null,
@@ -448,6 +478,190 @@ function linkScreen(p) {
   )]);
 }
 
+// ---- PHQ-9 and GAD-7 item wording, shown beside each scored item. Urdu text: Pfizer PHQ-9 and GAD-7 Urdu version (form TS35615/06-Urdu) supplied by the PI; English: standard PHQ-9 and GAD-7 wording
+const ITEM_STEM = ['Over the last 2 weeks, how often have you been bothered by:', 'گزشتہ 2 ہفتوں کے دوران، آپ کو درجِ ذیل مسائل کی وجہ سے کتنی مرتبہ مشکل پیش آئی ہے؟'];
+const ITEM_SCALE_UR = ['بالکل نہیں', 'کئی دن', 'آدھے دن سے زیادہ', 'تقریباً روزانہ'];
+const ITEM_TEXT = {
+  phq1: ['Little interest or pleasure in doing things', 'کچھ بھی کرنے میں بہت کم دلچسپی یا خوشی ہوتی ہے۔'],
+  phq2: ['Feeling down, depressed or hopeless', 'پژمردہ، افسردہ یا ناامید ہونا۔'],
+  phq3: ['Trouble falling or staying asleep, or sleeping too much', 'سونے یا سوئے رہنے میں مشکل ہونا، یا بہت زیادہ سونا۔'],
+  phq4: ['Feeling tired or having little energy', 'تھکان محسوس کرنا یا بہت کم توانائی محسوس کرنا۔'],
+  phq5: ['Poor appetite or overeating', 'بھوک میں کمی یا بہت زیادہ کھانا۔'],
+  phq6: ['Feeling bad about yourself, or that you are a failure or have let yourself or your family down', 'اپنے متعلق برا محسوس کرنا۔ یا یہ کہ آپ نا کارہ ہیں یا آپ نے خود کو یا اپنے خاندان کو مایوس کیا ہے۔'],
+  phq7: ['Trouble concentrating on things, such as reading the newspaper or watching television', 'کسی کام میں توجہ مرکوز کرنے میں مشکل ہونا، جیسے کہ اخبار پڑھنا یا ٹی وی دیکھنا۔'],
+  phq8: ['Moving or speaking so slowly that other people could have noticed, or the opposite: being so fidgety or restless that you have been moving around a lot more than usual', 'اتنا آہستہ حرکت یا بات کرنا جسے دوسرے لوگ محسوس کر سکتے تھے؟ یا اس کا الٹ۔ اتنی بے چینی محسوس کرنا کہ آپ معمول سے زیادہ حرکت کریں۔'],
+  phq9: ['Thoughts that you would be better off dead, or of hurting yourself in some way', 'اس قسم کے خیالات آنا کہ آپ کا مر جانا ہی بہتر ہے یا خود کو کسی طریقے سے تکلیف پہنچانے کے بارے میں سوچنا۔'],
+  gad1: ['Feeling nervous, anxious or on edge', 'حواس باختہ، مضطرب یا بے بس محسوس کرنا'],
+  gad2: ['Not being able to stop or control worrying', 'فکر کرنا بند نہ کرنا یا اس پر قابو نہ پانا۔'],
+  gad3: ['Worrying too much about different things', 'مختلف چیزوں کے بارے میں بہت زیادہ فکر کرنا۔'],
+  gad4: ['Trouble relaxing', 'سستانے میں مشکل محسوس کرنا۔'],
+  gad5: ['Being so restless that it is hard to sit still', 'اتنا بے چین محسوس کرنا کہ ایک جگہ بیٹھنا مشکل ہو۔'],
+  gad6: ['Becoming easily annoyed or irritable', 'بہت آسانی سے ناراض یا غصہ ہو جانا۔'],
+  gad7: ['Feeling afraid, as if something awful might happen', 'یہ ڈر محسوس کرنا کہ کچھ برا ہونے والا ہے']
+};
+function itemWording(key) {
+  const t = ITEM_TEXT[key]; if (!t) return null;
+  return el('div', { class: 'itemq' },
+    /1$/.test(key) ? el('div', { class: 'small muted' }, ITEM_STEM[0]) : null,
+    /1$/.test(key) ? el('div', { class: 'ur small muted', dir: 'rtl', lang: 'ur' }, ITEM_STEM[1]) : null,
+    el('div', null, t[0]), el('div', { class: 'ur', dir: 'rtl', lang: 'ur' }, t[1]),
+    el('div', { class: 'scaleur', dir: 'ltr' }, ITEM_SCALE_UR.map((t, i) => el('span', { dir: 'rtl', lang: 'ur' }, i + ' = ' + t))));
+}
+
+// ---- E2 drug-induced liver injury: RUCAM total, CTCAE 5.0 suggestion from the laboratory rows, Hy's law check, details panels
+function e2Labs(sid) { return view('LABS').filter((r) => s_(r.study_id).toUpperCase() === sid && num_(r.alt) !== null && num_(r.alt_uln) > 0); }
+const ULN_KEY = { alt: 'alt_uln', ast: 'ast_uln', alp: 'alp_uln', tbili: 'bili_uln' };
+const xUln = (r, k) => (num_(r[k]) !== null && num_(r[ULN_KEY[k]]) > 0 ? num_(r[k]) / num_(r[ULN_KEY[k]]) : null);
+function ctcaeFromLabs(sid) {
+  const rows = e2Labs(sid); if (!rows.length) return null;
+  const base = rows.filter((r) => r.visit === 'V1')[0];
+  // CTCAE 5.0: multiples of ULN; when the V1 value was already above ULN, multiples of that baseline value.
+  // g1 is the lower edge of grade 1 against an abnormal baseline (1.5 for ALT and AST, 2.0 for ALP, above 1.0 for bilirubin).
+  const grade = (r, k, cuts, g1) => {
+    const val = num_(r[k]), uln = num_(r[ULN_KEY[k]]); if (val === null || !(uln > 0)) return 0;
+    const bVal = base ? num_(base[k]) : null, abn = bVal !== null && bVal > uln, m = abn ? val / bVal : val / uln;
+    if (m > cuts[2]) return 4; if (m > cuts[1]) return 3; if (m > cuts[0]) return 2;
+    return (abn ? (g1 === 1 ? m > 1 : m >= g1) : m > 1) ? 1 : 0;
+  };
+  let best = { g: -1 };
+  rows.forEach((r) => {
+    const g = Math.max(grade(r, 'alt', [3, 5, 20], 1.5), grade(r, 'ast', [3, 5, 20], 1.5), grade(r, 'alp', [2.5, 5, 20], 2), grade(r, 'tbili', [1.5, 3, 10], 1));
+    if (g > best.g) best = { g: g, visit: r.visit };
+  });
+  return best;
+}
+// Hy's law laboratory criteria on one sample: ALT or AST above 3 x ULN, bilirubin above 2 x ULN, ALP below 2 x ULN.
+function hysFromLabs(sid) {
+  const rows = view('LABS').filter((r) => s_(r.study_id).toUpperCase() === sid);
+  for (const r of rows) {
+    const t = xUln(r, 'alt'), a = xUln(r, 'ast'), b = xUln(r, 'tbili');
+    if (!((t !== null && t > 3) || (a !== null && a > 3)) || b === null || !(b > 2)) continue;
+    const p = xUln(r, 'alp');
+    if (p === null) return { visit: r.visit, text: 'ALT or AST above 3 × and bilirubin above 2 × ULN at ' + r.visit + '; ALP or its upper limit missing, so cholestasis cannot be checked' };
+    if (p >= 2) continue;
+    return { visit: r.visit, text: 'lab criteria met at ' + r.visit + ' (ALP below 2 × ULN); now rule out other causes' };
+  }
+  return null;
+}
+// Injury pattern for RUCAM: R = (ALT / ULN) / (ALP / ULN) on the row with the highest ALT multiple.
+function rFromLabs(sid) {
+  let top = null;
+  view('LABS').filter((r) => s_(r.study_id).toUpperCase() === sid).forEach((r) => { const a = xUln(r, 'alt'); if (a !== null && xUln(r, 'alp') !== null && (!top || a > top.a)) top = { a: a, p: xUln(r, 'alp'), visit: r.visit }; });
+  if (!top || !(top.p > 0)) return null;
+  const R = Math.round((top.a / top.p) * 10) / 10;
+  return { R: R, visit: top.visit, type: R >= 5 ? 'H' : 'C', text: 'R = ' + R + ' at ' + top.visit + ': ' + (R >= 5 ? 'hepatocellular' : R <= 2 ? 'cholestatic' : 'mixed') };
+}
+function rucamLive(v) {
+  const t = rucamTotal_(v); if (t === '') return null;
+  return t + ' (' + rucamBand_(t) + ')';
+}
+function tbl(rows, head) {
+  return el('table', { class: 'info-tbl' }, head ? el('thead', null, el('tr', null, head.map((h) => el('th', null, h)))) : null,
+    el('tbody', null, rows.map((r) => el('tr', null, r.map((c) => el('td', null, c))))));
+}
+const INFO = {
+  e2_ctcae: () => [
+    el('p', null, el('b', null, 'CTCAE version 5.0, liver terms'), ' (grade the worst of ALT, AST, ALP and bilirubin; use the V1 value as the baseline)'),
+    tbl([['ALT or AST increased', 'above ULN to 3 × ULN', 'above 3 to 5 × ULN', 'above 5 to 20 × ULN', 'above 20 × ULN'],
+         ['Bilirubin increased', 'above ULN to 1.5 × ULN', 'above 1.5 to 3 × ULN', 'above 3 to 10 × ULN', 'above 10 × ULN'],
+         ['ALP increased', 'above ULN to 2.5 × ULN', 'above 2.5 to 5 × ULN', 'above 5 to 20 × ULN', 'above 20 × ULN'],
+         ['Hepatic failure', '–', '–', 'asterixis, mild encephalopathy, drug-induced liver injury, limits self-care', 'moderate or severe encephalopathy, coma, life-threatening']], ['Term', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4']),
+    el('p', { class: 'small' }, 'If the V1 value was already above the upper limit, CTCAE grades ALT and AST by the multiple of the baseline value: 1.5 to 3 × baseline is grade 1, above 3 to 5 grade 2, above 5 to 20 grade 3, above 20 grade 4. ALP: 2 to 2.5 × baseline grade 1, above 2.5 to 5 grade 2, above 5 to 20 grade 3, above 20 grade 4. Bilirubin: above 1 to 1.5 × baseline grade 1, above 1.5 to 3 grade 2, above 3 to 10 grade 3, above 10 grade 4. Grade 5: death.'),
+    el('p', null, el('b', null, 'For this study (people on ATT)')),
+    el('ul', { class: 'steps' },
+      el('li', null, 'Use the laboratory result at the time of the event, and the same laboratory upper limit of normal that is printed on the report.'),
+      el('li', null, 'Grade 1 is ALT up to 3 × ULN. An ALT of exactly 3 × ULN is still grade 1, but it already meets the study liver injury definition if there are symptoms or jaundice.'),
+      el('li', null, 'Grade 2 and above, or any rise with symptoms or jaundice: check the study definition (manual Part 4.2), tell the treating team the same day and complete form E2.'),
+      el('li', null, 'Grade 5 only if the death is attributed to the liver injury. A death from tuberculosis or another cause is not grade 5 for this event.'),
+      el('li', null, 'Stopping or changing ATT is the treating team\'s decision, not the study\'s.'))],
+  e2_hys_law: () => [
+    el('p', null, el('b', null, 'Hy\'s law: all four must be true')),
+    el('ul', { class: 'steps' },
+      el('li', null, 'ALT or AST above 3 × the upper limit of normal'),
+      el('li', null, 'Total bilirubin above 2 × the upper limit of normal'),
+      el('li', null, 'No initial cholestasis: ALP is not raised to 2 × ULN or more'),
+      el('li', null, 'No other explanation for the combination (viral hepatitis, biliary obstruction, alcohol, another drug): see RUCAM item 5')),
+    el('p', { class: 'small' }, 'The bilirubin rise and the ALT or AST rise should be from the same blood sample or from samples taken close together. Answer Y only when all four are met. If an alternative cause is found, answer N.'),
+    el('p', { class: 'small' }, 'If Y: tell the treating team the same day. Judge whether the event is serious (death, hospital admission or longer stay, lasting disability, life-threatening) and, if so, report to the IRB within 7 days (manual 4.2).')],
+  e2_rucam_type: () => [
+    el('p', null, el('b', null, 'R ratio'), ' = (ALT ÷ ALT upper limit) ÷ (ALP ÷ ALP upper limit), from the first abnormal result of the event.'),
+    tbl([['R 5 or more', 'hepatocellular', 'H'], ['R above 2 and below 5', 'mixed', 'C'], ['R 2 or less', 'cholestatic', 'C']], ['R', 'Pattern', 'Choose']),
+    el('p', { class: 'small' }, 'Hepatocellular uses the ALT scale. Cholestatic and mixed share the ALP scale, which also counts pregnancy and has longer time windows. The app suggests the pattern from the lab rows; you confirm it.')],
+  e2_rucam_course: () => [el('p', { class: 'small' }, 'Use ALT for the hepatocellular pattern (answers A to E) and ALP for cholestatic or mixed (answers F to H). Compare the value after the drug was stopped with the highest value. If the drug was not stopped, choose the "drug was continued" answer for your pattern.')],
+  e2_rucam_conmed: () => [el('p', { class: 'small' }, 'This study scores the whole ATT regimen as one suspect. Do not count isoniazid, rifampicin, pyrazinamide or ethambutol here. Count only other drugs or herbs taken in the same period.')],
+  e2_rucam_altcause: () => [
+    el('p', null, el('b', null, 'Group I (7 causes)')),
+    el('ul', { class: 'steps' }, ['Hepatitis A: anti-HAV IgM', 'Hepatitis B: HBsAg, anti-HBc IgM, HBV DNA', 'Hepatitis C: anti-HCV, HCV RNA', 'Hepatitis E: anti-HEV IgM, IgG, HEV RNA', 'Liver and bile duct imaging: ultrasound with Doppler, or CT, or MRC', 'Alcoholism: AST/ALT ratio 2 or more', 'Recent acute low blood pressure'].map((t) => el('li', null, t))),
+    el('p', null, el('b', null, 'Group II')),
+    el('ul', { class: 'steps' }, ['Complications of an underlying disease: sepsis, metastatic cancer, autoimmune hepatitis, chronic hepatitis B or C, primary biliary or sclerosing cholangitis, genetic liver disease', 'Infection suggested by symptoms, ultrasound or tests: CMV, EBV, HSV, VZV'].map((t) => el('li', null, t)))],
+  e2_rucam_prev: () => [el('p', { class: 'small' }, 'Isoniazid, rifampicin and pyrazinamide each carry a liver warning in their product information, so the usual answer is "labelled".')],
+  e2_rucam_onset: () => [el('p', { class: 'small' }, 'Count from the day ATT was started (day 0). After a restart of ATT, count from the restart. Answer C only if the reaction began after ATT had been stopped.')]
+};
+function infoBtn(key) {
+  const f = INFO[key]; if (!f) return null;
+  const panel = el('div', { class: 'info-panel', hidden: true }, f());
+  const b = el('button', { type: 'button', class: 'btn info-btn', onclick: () => { panel.hidden = !panel.hidden; b.textContent = panel.hidden ? 'Details' : 'Hide details'; } }, 'Details');
+  return el('div', { class: 'info' }, b, panel);
+}
+
+// ---- visit checklist: what to do and order at each visit (from manual Part 3). Fixed text, no patient data.
+const BLOOD_FULL = 'Blood count with differential (CBC), liver tests (ALT, AST, ALP, total bilirubin), HbA1c, lipids (triglycerides, HDL, total and LDL cholesterol), HBsAg, anti-HCV, HIV';
+const M_ALL = ['Weight in kg, light clothing, shoes off', 'Waist in cm, midway between the lowest rib and the hip bone, after a normal breath out', 'Mid-upper arm circumference (MUAC) in mm, left arm'];
+const M_V1 = ['Height in cm, shoes off'].concat(M_ALL);
+const E_ALL = ['Temperature (axillary)', 'Pulse, counted for a full minute', 'Conjunctival pallor', 'Chest auscultation'];
+const S_TB = 'TBscore symptoms: cough, haemoptysis, breathlessness, chest pain, night sweats';
+const S_HEP = 'Liver symptoms: nausea, vomiting, loss of appetite, abdominal pain, dark urine, yellow eyes or skin, unexplained tiredness';
+const VISIT_GUIDE = {
+  V1: { name: 'Visit 1 · Baseline', when: 'Day 0 to 7 after ATT started', measure: M_V1, examine: E_ALL, symptoms: [S_TB, 'How many weeks the symptoms have lasted', S_HEP],
+    order: [['Fasting bloods, 08:00 to 10:00. Write the draw time on the slip', BLOOD_FULL], ['Chest radiograph', 'The routine film. Tell the PI when it is ready']],
+    do: ['Consent, then assign the next study number', 'History: smoking, alcohol, diabetes, hypertension', 'Questionnaires PHQ-9 and GAD-7, unless declined'],
+    enter: ['Enrolment first', 'Baseline form', 'Laboratory results when they return', 'Chest radiograph date', 'Questionnaires (V1)'] },
+  V2: { name: 'Visit 2 · Month 1', when: 'Day 21 to 35', measure: [], examine: [], symptoms: [S_HEP],
+    order: [['Liver tests (ALT, AST, ALP, total bilirubin)', 'If any symptom is present, draw them the same day']],
+    do: ['Ask about each liver symptom directly', 'Treatment status and adherence'],
+    enter: ['Visit form (V2)', 'Laboratory results when they return', 'Check the liver injury definition as soon as the result is back'] },
+  V3: { name: 'Visit 3 · Month 2', when: 'Day 49 to 70 · end of intensive phase', measure: M_ALL, examine: E_ALL, symptoms: [S_TB, S_HEP],
+    order: [['Blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', ''], ['Sputum smear', 'Record the date and result']],
+    do: ['Treatment status and adherence', 'Sputum conversion: Y, N or U. Never leave it blank'],
+    enter: ['Visit form (V3)', 'Laboratory results when they return', 'Check the liver injury definition'] },
+  V4: { name: 'Visit 4 · Month 3', when: 'Day 77 to 98', measure: [], examine: [], symptoms: [S_HEP],
+    order: [['HbA1c, blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', 'Enter the HbA1c with its unit']],
+    do: ['Treatment status and adherence', 'New diabetes found: refer for diabetes care and record it'],
+    enter: ['Visit form (V4)', 'Laboratory results when they return'] },
+  V5: { name: 'Visit 5 · Month 6', when: 'Day 154 to 182 · treatment completion', measure: M_ALL, examine: E_ALL, symptoms: [S_TB, S_HEP],
+    order: [['Blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', ''], ['Sputum smear', 'Record the date and result'], ['Spirometry', 'Only if smear negative and not declined']],
+    do: ['Treatment status and adherence', 'Treatment outcome', 'Questionnaires PHQ-9 and GAD-7, unless declined'],
+    enter: ['Visit form (V5)', 'Laboratory results when they return', 'Spirometry', 'Questionnaires (V5)', 'End of study: status C and the date'] }
+};
+function visitsScreen() {
+  const due = role() === 'dots' || !S.server ? [] : derived().schedule.filter((r) => r[5] !== 'upcoming');
+  return topBar('Visit checklist').concat([el('main', null,
+    el('div', { class: 'card small muted' }, 'Tap a visit to see what to order and do. Every visit is counted from the day ATT started.'),
+    el('div', { class: 'list' }, Object.keys(VISIT_GUIDE).map((v) => el('button', { class: 'row', onclick: () => go('visitguide', { v: v }) },
+      el('div', { class: 'main' }, el('div', null, VISIT_GUIDE[v].name), el('div', { class: 'sub' }, VISIT_GUIDE[v].when)),
+      due.filter((r) => r[1] === v).length ? el('span', { class: 'chip warn' }, due.filter((r) => r[1] === v).length + ' due') : null, el('span', { class: 'chev' })))))
+  ]);
+}
+function visitGuideScreen(p) {
+  const g = VISIT_GUIDE[p.v], due = role() === 'dots' || !S.server ? [] : derived().schedule.filter((r) => r[1] === p.v && r[5] !== 'upcoming');
+  const list = (items) => el('ul', { class: 'steps' }, items.map((t) => el('li', null, t)));
+  return topBar(g.name).concat([el('main', null,
+    el('div', { class: 'card' }, el('b', null, g.when)),
+    g.measure.length + g.examine.length + g.symptoms.length ? [el('h2', null, 'Examine and measure'),
+      el('div', { class: 'card' },
+        g.measure.length ? [el('b', null, 'Measure'), list(g.measure)] : null,
+        g.examine.length ? [el('b', null, 'Examine'), list(g.examine)] : null,
+        g.symptoms.length ? [el('b', null, 'Ask about'), list(g.symptoms)] : null)] : null,
+    el('h2', null, 'Order'),
+    el('div', { class: 'list' }, g.order.map((o) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', null, o[0]), o[1] ? el('div', { class: 'sub' }, o[1]) : null)))),
+    el('h2', null, 'Do at the visit'), el('div', { class: 'card' }, list(g.do)),
+    el('h2', null, 'Enter in this app'), el('div', { class: 'card' }, list(g.enter)),
+    due.length ? [el('h2', null, 'Due now or overdue'), el('div', { class: 'list' }, due.map((r) => el('button', { class: 'row', onclick: () => go('participant', { sid: r[0] }) },
+      el('div', { class: 'main' }, el('div', null, r[0])), el('span', { class: 'chip ' + (r[5] === 'overdue' ? 'bad' : 'warn') }, r[5]), el('span', { class: 'chev' }))))] : null,
+    el('div', { class: 'card small muted' }, 'Abnormal results and urgent events: manual Part 4. Liver injury and PHQ-9 item 9 above 0 are acted on the same day.')
+  )]);
+}
+
 function participants() {
   const out = derived(), next = {};
   out.schedule.forEach((r) => { if (!next[r[0]]) next[r[0]] = r; });
@@ -474,6 +688,14 @@ function statusChip(row) {
   if (row._pending) return el('span', { class: 'chip bad' }, 'needs fixing');
   return el('span', { class: 'chip ok' }, 'in workbook');
 }
+// A visit's forms stay faded and cannot be opened until the visit window starts (counted from the date ATT started).
+// A form that already has a record stays open, and so does everything once the window has begun, including late entry.
+function visitOpens(sid, v) {
+  const e = find('S1_ENROL', { study_id: sid }), d0 = e ? dayNo_(e.att_start_date) : null, w = CFG.WINDOWS[v], t = dayNo_(todayIso());
+  if (d0 === null || !w || t === null || t >= d0 + w[1]) return '';
+  return isoOf_(d0 + w[1]);
+}
+function lockedRow(name, opens) { return el('div', { class: 'row locked', 'aria-disabled': 'true' }, el('div', { class: 'main' }, el('div', null, name), el('div', { class: 'sub' }, 'opens ' + opens)), el('span', { class: 'chip' }, 'not yet')); }
 function participant(p) {
   const sid = p.sid, out = derived(), e = find('S1_ENROL', { study_id: sid });
   if (!e) return topBar(sid).concat([el('main', null, el('div', { class: 'card' }, 'This study number is not in the workbook (it may have been withdrawn).'))]);
@@ -482,16 +704,19 @@ function participant(p) {
   const d0 = dayNo_(e.att_start_date), today = dayNo_(todayIso()), sched = {};
   out.schedule.filter((r) => r[0] === sid).forEach((r) => { sched[r[1]] = r[5]; });
   const optQ = e.optout_questionnaires === 'Y', optS = e.optout_spirometry === 'Y';
+  let curV = 'V1';
   const formRow = (tab, visit) => {
     if ((tab === 'PHQ_GAD' && optQ) || (tab === 'SPIRO' && optS)) return el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', null, NAMES[tab]), el('div', { class: 'sub' }, 'declined on the consent form')));
     const key = visit ? { study_id: sid, visit } : { study_id: sid };
+    const opens = visitOpens(sid, curV);
+    if (opens && tab !== 'END_STUDY' && !find(tab, key)) return lockedRow(NAMES[tab], opens);
     return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, NAMES[tab])), statusChip(find(tab, key)), el('span', { class: 'chev' }));
   };
   const visits = ['V1', 'V2', 'V3', 'V4', 'V5'].map((v) => {
     const w = CFG.WINDOWS[v], range = d0 !== null ? isoOf_(d0 + w[1]) + ' to ' + isoOf_(d0 + w[2]) : 'set the date ATT started';
     const st = sched[v];
-    return [el('h2', null, v + ' · day ' + w[0] + ' ', st ? el('span', { class: 'chip ' + (st === 'overdue' ? 'bad' : st === 'due now' ? 'warn' : '') }, st) : null),
-      el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)), VISIT_FORMS[v].map((f) => formRow(f[0], f[1])))];
+    return [el('h2', null, v + ' · ' + (v === 'V1' ? 'baseline' : 'month ' + ({ V2: 1, V3: 2, V4: 3, V5: 6 })[v]) + ' ', st ? el('span', { class: 'chip ' + (st === 'overdue' ? 'bad' : st === 'due now' ? 'warn' : '') }, st) : null),
+      el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)), (curV = v, VISIT_FORMS[v].map((f) => formRow(f[0], f[1]))))];
   });
   const usedU = view('LABS').filter((r) => r.study_id === sid && /^U/.test(r.visit)).map((r) => r.visit);
   const nextU = ['U1', 'U2', 'U3', 'U4', 'U5'].filter((u) => usedU.indexOf(u) < 0)[0];
@@ -503,7 +728,7 @@ function participant(p) {
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
-    role() === 'pi' ? el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Link'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : null,
+    role() === 'pi' && !T.practice ? el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Link'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : null,
     visits,
     el('h2', null, 'Unscheduled and events'),
     el('div', { class: 'list' },
@@ -513,6 +738,32 @@ function participant(p) {
       canData() ? el('button', { class: 'row', onclick: () => go('form', { tab: 'EVENTS', key: {}, preset: { study_id: sid } }) }, el('div', { class: 'main' }, el('div', null, '+ Record an event (E1 to E4)')), el('span', { class: 'chev' })) : null));
   return topBar(sid).concat([main]);
 }
+// ---- measurement nurse: pick an enrolled participant, then the height, weight, waist and arm forms only
+function measureList() {
+  const q = el('input', { class: 'search', type: 'search', placeholder: 'Search study number', autocomplete: 'off' });
+  const list = el('div', { class: 'list' });
+  const fill = () => {
+    const f = s_(q.value).toUpperCase();
+    const rows = view('S1_ENROL').filter((r) => r.study_id && s_(r.study_id).toUpperCase().includes(f)).sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
+    list.replaceChildren(...(rows.length ? rows.map((r) => el('button', { class: 'row', onclick: () => go('measurefor', { sid: r.study_id }) },
+      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, 'enrolled ' + (r.enrol_date || '?'))),
+      r._pending ? el('span', { class: 'chip ' + (r._pending === 'pending' ? 'pend' : 'bad') }, r._pending === 'pending' ? 'unsent' : 'fix') : null, el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, 'No participants yet. Enrol first.')]));
+  };
+  q.addEventListener('input', fill); fill();
+  return topBar('Measurements').concat([el('main', null, q, list)]);
+}
+function measureFor(p) {
+  const sid = p.sid, row = (tab, key, name) => {
+    const opens = visitOpens(sid, key.visit || 'V1');
+    if (opens && !find(tab, key)) return lockedRow(name, opens);
+    return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, name)), statusChip(find(tab, key)), el('span', { class: 'chev' }));
+  };
+  return topBar(sid).concat([el('main', null,
+    el('div', { class: 'list' }, row('S2_BASELINE', { study_id: sid }, 'V1 baseline: height, weight, waist, arm'),
+      NURSE_VISITS.map((v) => row('VISITS', { study_id: sid, visit: v }, v + ': weight, waist, arm'))),
+    el('h2', null, 'Enrolment'),
+    el('div', { class: 'list' }, row('S1_ENROL', { study_id: sid }, 'Enrolment details')))]);
+}
 function due() {
   const out = derived();
   const rows = out.schedule.filter((r) => r[5] !== 'upcoming').concat(out.schedule.filter((r) => r[5] === 'upcoming'));
@@ -520,11 +771,31 @@ function due() {
     el('div', { class: 'main' }, el('div', null, r[0] + ' · ' + r[1]), el('div', { class: 'sub' }, 'window ' + r[3] + ' to ' + r[4])),
     el('span', { class: 'chip ' + (r[5] === 'overdue' ? 'bad' : r[5] === 'due now' ? 'warn' : '') }, r[5]), el('span', { class: 'chev' }))) : el('div', { class: 'empty' }, 'Nothing due')))]);
 }
+// ---- query navigation: open the exact form, scroll to the field and flash it, with the query shown on top
+function fieldName(tab, k) { const d = defOf(tab), c = d && d.cols.filter((x) => x.key === k)[0]; return c ? c.label.split(' (')[0] : k; }
+function openQuery(q) {
+  const tab = q[1], keys = APP_KEYS[tab], query = q[4] + (q[5] ? ': ' + q[5] : '');
+  if (!keys || !defOf(tab)) return q[0] ? go('participant', { sid: q[0] }) : go('screening');
+  let key = null;
+  if (tab === 'S0_SCREEN' || tab === 'EVENTS') key = q[7] ? { [APP_SERIAL[tab]]: q[7] } : null;
+  else { key = {}; keys.forEach((k) => { key[k] = k === 'study_id' ? q[0] : k === 'visit' ? q[3] : ''; }); if (keys.some((k) => !key[k])) key = null; }
+  if (!key) return q[0] ? go('participant', { sid: q[0] }) : go('screening');
+  go('form', { tab: tab, key: key, focus: q[6], query: query });
+}
+function focusField(k) {
+  let n = document.getElementById('f-' + k);
+  if (!n && T.form && T.form.tab === 'LABS' && !T.form.showAll) { T.form.showAll = true; T.refill(); n = document.getElementById('f-' + k); }
+  if (!n) return;
+  n.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  n.classList.remove('flash'); void n.offsetWidth; n.classList.add('flash');
+  setTimeout(() => n.classList.remove('flash'), 2600);
+}
 function queries() {
   const out = derived();
   return topBar('Queries').concat([el('main', null, el('p', { class: 'small muted' }, 'Worked out on this phone from the latest data, including entries not yet sent.'),
-    el('div', { class: 'list' }, out.queries.length ? out.queries.map((q) => el('button', { class: 'row', onclick: () => q[0] ? go('participant', { sid: q[0] }) : go('screening') },
-      el('div', { class: 'main' }, el('div', null, (q[0] || 'Screening log') + (q[3] ? ' · ' + q[3] : '') + ' · ' + q[1]), el('div', { class: 'sub' }, q[4] + (q[5] ? ': ' + q[5] : ''))), el('span', { class: 'chev' }))) : el('div', { class: 'empty' }, 'No queries')))]);
+    el('div', { class: 'list' }, out.queries.length ? out.queries.map((q) => el('button', { class: 'row', onclick: () => openQuery(q) },
+      el('div', { class: 'main' }, el('div', null, (q[0] || 'Screening log') + (q[3] ? ' · ' + q[3] : '') + ' · ' + (NAMES[q[1]] || q[1])), el('div', { class: 'sub' }, q[4] + (q[5] ? ': ' + q[5] : '')),
+        q[6] ? el('div', { class: 'sub qfield' }, 'Opens at: ' + fieldName(q[1], q[6])) : null), el('span', { class: 'chev' }))) : el('div', { class: 'empty' }, 'No queries')))]);
 }
 function screening() {
   const rows = view('S0_SCREEN').slice().reverse();
@@ -564,12 +835,14 @@ function films() {
     el('button', { class: 'btn block', onclick: () => go('settings') }, 'Settings'))]);
 }
 function settings() {
+  if (T.practice) return topBar('Settings').concat([el('main', null, practiceCard())]);
   const pending = S.outbox.length;
   return topBar('Settings').concat([el('main', null,
     el('div', { class: 'list' }, [['Account', S.cfg.email], ['Role', S.cfg.role], ['Initials', S.cfg.initials], ['Server', (S.cfg.api || '').replace(/^https:\/\/([^/]+).*$/, '$1')],
       ['App version', APP_VERSION + ' (rules v' + CFG.VERSION + ')'], ['Last update', S.lastSync ? new Date(S.lastSync).toLocaleString('en-GB') : 'never'], ['Entries on this phone not yet in the workbook', String(pending)]]
       .map((r) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', { class: 'sub' }, r[0]), el('div', null, r[1] || '–'))))),
     el('button', { class: 'btn primary block', onclick: () => sync() }, 'Sync now'), el('p'),
+    role() !== 'dots' ? el('button', { class: 'btn block', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, 'Practice mode (training)') : null, el('p'),
     el('button', { class: 'btn block', onclick: () => lock() }, 'Lock now'), el('p'),
     el('button', { class: 'btn danger block', onclick: resetPhone }, 'Reset this phone'),
     el('p', { class: 'small muted' }, 'Reset removes the study data and your access from this phone. Use it before passing the phone to someone else.'))]);
@@ -584,6 +857,7 @@ function resetPhone() {
 // ------------------------------------------------------------------ the generic form
 function visible(tab, c, v, vals) {
   if (c.pi && role() !== 'pi') return false;
+  if (isNurse() && !nurseCol_(tab, c.key)) return false;
   const visit = s_(vals.visit);
   if (tab === 'VISITS') {
     if (/\(V3, V5\)$/.test(c.label) || c.key === 'smear_date' || c.key === 'smear_result') return visit === 'V3' || visit === 'V5';
@@ -596,12 +870,17 @@ function visible(tab, c, v, vals) {
   if (tab === 'PHQ_GAD' && c.key === 'e1_form_no') return num_(vals.phq9) > 0;
   if (tab === 'EVENTS') {
     const t = s_(vals.event_type), m = /^(e\d)_/.exec(c.key);
+    if (c.key === 'e2_rucam_score') return false;
+    const ri = RUCAM.filter((it) => it[0] === c.key && it[3])[0];
+    if (ri) return t === 'E2' && s_(vals.e2_rucam_type).toUpperCase() === ri[3];
     if (m) return t === m[1].toUpperCase();
   }
+  if (tab === 'R_SCORES' && c.key === 'n_cavities') return s_(vals.cavity).toUpperCase() === 'Y';
   if (APP_SERIAL[tab] === c.key) return false;
   return true;
 }
 function readOnly(tab) {
+  if (isNurse()) return NURSE_SCOPE[tab] === undefined;
   if (role() === 'pi') return tab === 'R_SCORES';
   if (role() === 'data') return tab === 'QC_LOG' || tab === 'R_SCORES';
   if (role() === 'qc') return tab !== 'QC_LOG';
@@ -625,6 +904,8 @@ function formScreen(p) {
   const main = el('main', { id: 'formmain' });
   const pend = F.existing && F.existing._pending ? S.outbox.filter((c) => c.cid === F.existing._cid)[0] : null;
   if (pend && pend.status !== 'pending') main.append(el('div', { class: 'card alert' }, el('b', null, 'The workbook did not accept this entry:'), el('ul', { class: 'small' }, Object.keys(pend.errors || {}).map((k) => el('li', null, (k === '_' ? '' : k + ': ') + pend.errors[k])))));
+  if (p.query) main.append(el('div', { class: 'card qbanner' }, el('b', null, 'Query: '), p.query,
+    p.focus ? el('button', { type: 'button', class: 'btn qgo', onclick: () => focusField(p.focus) }, 'Show the field') : null));
   if (F.ro) main.append(el('div', { class: 'card small muted' }, 'View only: your role does not enter data here.'));
   if (serial && F.existing) main.append(el('div', { class: 'card small' }, serial.replace('_', ' ') + ': ', el('b', null, F.existing[serial] || 'assigned by the workbook when sent')));
   const fieldsBox = el('div');
@@ -649,6 +930,7 @@ function formScreen(p) {
   fill();
   setTimeout(paintCalc, 0);
   const bar = F.ro ? null : el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => confirmLeave(back) }, 'Cancel'), el('button', { class: 'btn primary', id: 'savebtn', onclick: saveForm }, 'Save'));
+  if (p.focus && !p._focused) { p._focused = true; setTimeout(() => focusField(p.focus), 120); }
   return topBar(title).concat([main, bar]);
 }
 function ctx() { return { enrolled: enrolledMap(), today: dayNo_(todayIso()) }; }
@@ -664,17 +946,18 @@ function fieldEl(c) {
   const msg = el('div', { class: 'msg', role: 'alert' });
   const set = (v, rerender) => {
     F.vals[c.key] = v; F.dirty = true;
+    if (F.tab === 'R_SCORES' && c.key === 'cavity') F.vals.n_cavities = v === 'N' ? '0' : (v === 'Y' && F.vals.n_cavities === '0' ? '' : F.vals.n_cavities);
     const m = fieldMsg(c); msg.textContent = m ? c.label.split(',')[0] + ' ' + m : ''; box.classList.toggle('err', !!m);
     if (rerender) { const y = window.scrollY; T.refill(); window.scrollTo(0, y); }
     paintCalc();
   };
-  box.append(el('label', { class: 'lab', for: 'i-' + c.key }, c.label), el('div', { class: 'hint' }, helpText_(c)));
+  box.append(el('label', { class: 'lab', for: 'i-' + c.key }, c.label), ...[itemWording(c.key)].filter(Boolean), el('div', { class: 'hint' }, helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
   const val = s_(F.vals[c.key]);
   if (fixed && (APP_KEYS[F.tab].indexOf(c.key) >= 0 || F.ro)) {
     box.append(el('div', null, el('b', null, val || '–')));
     return box;
   }
-  const relayout = ['visit', 'declined', 'event_type', 'phq9', 'hba1c_unit', 'glucose_unit', 'lipid_unit', 'smear_result', 'eligible', 'enrolled'].indexOf(c.key) >= 0;
+  const relayout = ['visit', 'declined', 'event_type', 'phq9', 'hba1c_unit', 'glucose_unit', 'lipid_unit', 'smear_result', 'eligible', 'enrolled', 'e2_rucam_type'].indexOf(c.key) >= 0 || (F.tab === 'R_SCORES' && c.key === 'cavity');
   if (c.codes || c.type === 'pairlist') {
     const opts = c.codes || c.values.map((x) => [x, '']);
     if (opts.length <= 7) {
@@ -707,6 +990,14 @@ function fieldEl(c) {
       autocapitalize: ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 || BY_FIELDS.indexOf(c.key) >= 0 ? 'characters' : 'off',
       maxlength: c.type === 'text' ? String(c.max) : null, disabled: unitMissing, placeholder: unitMissing ? 'choose the unit first' : c.type === 'sidnew' || c.type === 'sid' ? 'TBDM-' : null,
       oninput: (ev) => set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? ev.target.value.toUpperCase() : ev.target.value), onchange: (ev) => set(ev.target.value) });
+    if (F.tab === 'R_SCORES' && (c.key === 'pct_lung' || c.key === 'n_cavities') && !F.ro) {      // tap choices; typing an exact value still works
+      const picks = c.key === 'pct_lung' ? Array.from({ length: 21 }, (_, i) => String(i * 5)) : Array.from({ length: 10 }, (_, i) => String(i + 1));
+      const row = el('div', { class: 'seg quick', role: 'group', 'aria-label': c.label + ', quick choices' });
+      const paint = () => row.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === s_(F.vals[c.key])));
+      picks.forEach((x) => row.append(el('button', { type: 'button', 'data-v': x, onclick: () => { inp.value = x; set(x); paint(); } }, x)));
+      inp.addEventListener('input', paint); paint();
+      box.append(row);
+    }
     if (type === 'date' || type === 'time') {
       box.append(el('div', { class: 'inline' }, inp, el('button', { type: 'button', class: 'now', onclick: () => { inp.value = type === 'date' ? todayIso() : nowHm(); set(inp.value); } }, type === 'date' ? 'Today' : 'Now')));
     } else box.append(inp);
@@ -728,16 +1019,30 @@ function liveCalc() {
     const h = F.tab === 'S2_BASELINE' ? v.height_cm : (find('S2_BASELINE', { study_id: sid }) || {}).height_cm;
     const b = bmi_(v.weight_kg, h);
     if (b !== '') out.push(['BMI', b]);
-    if (F.tab === 'S2_BASELINE' || vis === 'V3' || vis === 'V5') {
+    if (!isNurse() && (F.tab === 'S2_BASELINE' || vis === 'V3' || vis === 'V5')) {
       const t9 = tbscore_(v, b, CFG.PULSE_PRIMARY), t1 = tbscore_(v, b, CFG.PULSE_SENSITIVITY);
       out.push(['TBscore', t9 === '' ? 'needs every item' : t9 + ' (pulse >100: ' + t1 + ')']);
     }
     if (F.tab === 'VISITS' && hepAny_(v) === true) out.push(['Liver symptoms', 'YES: liver tests today', true]);
   }
+  if (F.tab === 'EVENTS' && s_(v.event_type) === 'E2') {
+    const rl = rucamLive(v); out.push(['RUCAM score', rl || 'choose the injury pattern and answer every item']);
+    if (sid) {
+      const cg = ctcaeFromLabs(sid);
+      out.push(['CTCAE 5.0, from the lab results', cg ? (cg.g > 0 ? 'grade ' + cg.g + ' (visit ' + cg.visit + ')' : 'below grade 1') + ' · you decide' : 'no lab row with ALT and its upper limit']);
+      const hv = hysFromLabs(sid);
+      out.push(["Hy's law lab criteria", hv ? hv.text : 'not met on the entered labs', !!hv]);
+      const rp = rFromLabs(sid);
+      out.push(['RUCAM injury pattern, from the labs', rp ? rp.text + ' · you decide' : 'needs ALT, ALP and both upper limits on one lab row', !!(rp && s_(v.e2_rucam_type) && s_(v.e2_rucam_type).toUpperCase() !== rp.type)]);
+    }
+  }
   if (F.tab === 'LABS') {
     const r = ratios_(v);
     ['nlr', 'plr', 'mlr', 'sii', 'siri'].forEach((k) => { if (r[k] !== '') out.push([k.toUpperCase(), r[k]]); });
     const x = ratio_(v.alt, v.alt_uln); if (x !== '') out.push(['ALT × ULN', x, x >= 3]);
+    const xs = ratio_(v.ast, v.ast_uln); if (xs !== '') out.push(['AST × ULN', xs, xs >= 3]);
+    const xp = ratio_(v.alp, v.alp_uln); if (xp !== '') out.push(['ALP × ULN', xp, xp >= 2]);
+    if (x !== '' && xp !== '' && xp > 0) out.push(['R ratio (ALT ÷ ALP, as × ULN)', Math.round((x / xp) * 10) / 10]);
     const dl = labDili(v); if (dl) out.push(['Liver injury', dl, true]);
     const a = hba1cPct_(v.hba1c, v.hba1c_unit); if (a !== '' && v.hba1c_unit === 'M') out.push(['HbA1c %', a]);
   }
@@ -771,6 +1076,7 @@ async function saveForm() {
     const m = fieldMsg(c); if (m) errs.push(c);
   });
   APP_KEYS[F.tab].forEach((k) => { if (APP_SERIAL[F.tab] !== k && !s_(F.vals[k])) errs.push(def.cols.filter((c) => c.key === k)[0]); });
+  if (F.tab === 'R_SCORES') { const gaps = readerGaps_(F.vals); Object.keys(gaps).forEach((k) => { const c = def.cols.filter((x) => x.key === k)[0]; if (c && errs.indexOf(c) < 0) { errs.push(c); const b = $('#f-' + k); if (b) { b.classList.add('err'); const mm = b.querySelector('.msg'); if (mm) mm.textContent = c.label.split(',')[0] + ' ' + gaps[k]; } } }); }
   if (errs.length) {
     const first = $('#f-' + errs[0].key);
     if (first) { first.classList.add('err'); first.scrollIntoView({ block: 'center' }); }
@@ -781,13 +1087,15 @@ async function saveForm() {
     const dup = APP_SERIAL[F.tab] ? null : find(F.tab, F.vals);
     if (dup) { toast('This record already exists. Opening it.'); T.form = null; T.nav[T.nav.length - 1].p.key = F.vals; render(); return; }
   }
+  if (F.tab === 'EVENTS' && s_(F.vals.event_type) === 'E2') { const rt = rucamTotal_(F.vals); F.vals.e2_rucam_score = rt === '' ? '' : String(rt); }
+  if (F.tab === 'R_SCORES' && s_(F.vals.cavity).toUpperCase() === 'N') F.vals.n_cavities = '0';
   const vals = {}; def.cols.forEach((c) => { if (APP_SERIAL[F.tab] !== c.key || s_(F.vals[c.key])) vals[c.key] = F.vals[c.key]; });
   const entry = queueSave(F.tab, F.existing, vals);
   await saveState();
   F.dirty = false;
   const after = () => { back(); if (navigator.onLine) sync(); };
   if (!entry) { toast('No changes'); back(); return; }
-  const savedMsg = navigator.onLine ? 'Saved. Sending…' : 'Saved on this phone. It will be sent when online.';
+  const savedMsg = T.practice ? 'Saved in practice only. Nothing was sent.' : navigator.onLine ? 'Saved. Sending…' : 'Saved on this phone. It will be sent when online.';
   const willWarn = (F.tab === 'PHQ_GAD' && F.vals.declined !== 'Y' && num_(F.vals.phq9) > 0) || (F.tab === 'LABS' && /^(MET|CHECK)/.test(labDili(F.vals))) ||
     (F.tab === 'VISITS' && hepAny_(F.vals) === true) || (F.tab === 'S0_SCREEN' && F.vals.enrolled === 'Y' && F.vals.study_id && !enrolledMap()[s_(F.vals.study_id).toUpperCase()]);
   if (!willWarn) toast(savedMsg);
@@ -809,20 +1117,96 @@ async function saveForm() {
   after();
 }
 
+
+// ------------------------------------------------------------------ practice mode (training)
+// A sandbox for new collaborators. It has its own made-up participants, lives only in memory, is thrown away on exit or lock,
+// and is blocked at three points from ever touching the study: api() refuses to run, sync() does nothing, saveState() writes nothing.
+const PRAC_A = idOf_(CFG.ID_MAX), PRAC_B = idOf_(CFG.ID_MAX - 1);   // the top of the number range, which a real study never reaches
+function practiceTabs() {
+  const today = dayNo_(todayIso()), role_ = S.cfg.role, first = dayNo_(CFG.EARLIEST);
+  const at = (n) => isoOf_(Math.min(today, Math.max(first, today - n)));          // a date n days ago, never before the study could start
+  const attA = Math.min(today, Math.max(first, today - 42)), v2 = attA + 24, iso = (n) => at(n);
+  const row = (tab, o) => { const d = defOf(tab), k = d.cols.map((c) => c.key); return k.map((x) => (o[x] === undefined ? '' : String(o[x]))); };
+  const keep = (tab) => (role_ === 'nurse' ? defOf(tab).cols.map((c) => c.key).filter((k) => nurseCol_(tab, k)) : defOf(tab).cols.map((c) => c.key));
+  const data = {
+    S0_SCREEN: [
+      { screen_no: 1, screen_date: iso(42), age: 46, sex: 'M', smear_grade: '2', eligible: 'Y', enrolled: 'Y', study_id: PRAC_A, screened_by: 'PRAC' },
+      { screen_no: 2, screen_date: iso(6), age: 39, sex: 'F', smear_grade: '1', eligible: 'Y', enrolled: 'Y', study_id: PRAC_B, screened_by: 'PRAC' },
+      { screen_no: 3, screen_date: iso(5), age: 52, sex: 'M', smear_grade: '3', eligible: 'N', excl_code: EXCL[0][0], enrolled: 'N', screened_by: 'PRAC' }],
+    S1_ENROL: [
+      { study_id: PRAC_A, enrol_date: iso(40), att_start_date: iso(42), age_years: 46, sex: 'M', residence: 'U', education: '2', smoking: '0', alcohol: '0', dm_status: 'K', dm_years: 3, dm_drugs: 'M', htn: 'N', regimen: 'HRZE', smear_grade: '2', genexpert: 'D', rif_res: 'N', optout_questionnaires: 'N', optout_spirometry: 'N', entered_by: 'PRAC' },
+      { study_id: PRAC_B, enrol_date: iso(4), att_start_date: iso(5), age_years: 39, sex: 'F', residence: 'R', education: '1', smoking: '0', alcohol: '0', dm_status: '0', htn: 'N', regimen: 'HRZE', smear_grade: '1', genexpert: 'D', rif_res: 'N', optout_questionnaires: 'N', optout_spirometry: 'N', entered_by: 'PRAC' }],
+    S2_BASELINE: [{ study_id: PRAC_A, exam_date: iso(41), height_cm: 168, weight_kg: 52, waist_cm: 80, muac_mm: 230, examined_by: 'PRAC' }],
+    VISITS: today >= attA + 21 ? [{ study_id: PRAC_A, visit: 'V2', attended: 'Y', visit_date: isoOf_(Math.min(today, v2)), treatment: 'C', adherence: 'G', entered_by: 'PRAC' }] : []
+  };
+  const tabs = {};
+  SCHEMA.forEach((t) => { if (role_ === 'nurse' && NURSE_SCOPE[t.tab] === undefined) return; const cols = keep(t.tab); tabs[t.tab] = { cols, rows: (data[t.tab] || []).map((o) => { const full = row(t.tab, o), all = t.cols.map((c) => c.key); return cols.map((k) => full[all.indexOf(k)]); }) }; });
+  if (role_ === 'reader1' || role_ === 'reader2') { tabs.R_SCORES = { cols: READER.cols.map((c) => c.key), rows: [] }; }
+  return tabs;
+}
+function practiceStart() {
+  if (T.practice) return;
+  if (T.syncing) { toast('The phone is sending entries. Try again in a moment.'); return; }
+  T.real = S;
+  S = { cfg: Object.assign({}, S.cfg, { token: '', api: '', email: 'practice' }), outbox: [], lastSync: Date.now(), server: null };
+  S.server = { tabs: practiceTabs(), at: Date.now(), films: /^reader/.test(T.real.cfg.role) ? [{ study_id: PRAC_A, cxr_date: isoOf_(dayNo_(todayIso()) - 41), repeat: false }, { study_id: PRAC_B, cxr_date: isoOf_(dayNo_(todayIso()) - 4), repeat: false }] : [] };
+  T.practice = true; T.nav = []; T.form = null; render();
+}
+function practiceStop() { if (!T.practice) return; S = T.real; T.real = null; T.practice = false; T.nav = []; T.form = null; render(); }
+function practiceCommit() {                       // "sending" in practice: apply the queued entries to the sandbox copy only
+  S.outbox.filter((c) => c.status === 'pending').forEach((c) => {
+    const t = S.server.tabs[c.tab], d = defOf(c.tab), keys = APP_KEYS[c.tab], serial = APP_SERIAL[c.tab];
+    if (!t || !d) return;
+    const o = {}; t.cols.forEach((k, i) => { o[k] = ''; });
+    let at = -1;
+    t.rows.forEach((r, i) => { const x = {}; t.cols.forEach((k, j) => { x[k] = r[j]; }); if (at < 0 && keys.every((k) => s_(x[k]) !== '' && s_(x[k]).toUpperCase() === s_(c.values[k]).toUpperCase())) at = i; });
+    if (at < 0) { t.rows.push(t.cols.map(() => '')); at = t.rows.length - 1; }
+    Object.keys(c.values).forEach((k) => { const j = t.cols.indexOf(k); if (j >= 0) t.rows[at][j] = s_(c.values[k]); });
+    if (serial && t.cols.indexOf(serial) >= 0 && !s_(t.rows[at][t.cols.indexOf(serial)])) t.rows[at][t.cols.indexOf(serial)] = String(t.rows.reduce((m, r) => Math.max(m, num_(r[t.cols.indexOf(serial)]) || 0), 0) + 1);
+  });
+  S.outbox = [];
+}
+function practiceCard() {
+  return el('div', { class: 'card practice-card' }, el('b', null, 'Practice mode'), el('div', { class: 'small' }, 'Made-up participants (' + idOf_(CFG.ID_MAX) + ' and ' + idOf_(CFG.ID_MAX - 1) + '). Use it to learn the screens. Nothing you enter is saved or sent anywhere, and it is cleared when you leave or the phone locks.'),
+    el('button', { class: 'btn primary block', onclick: practiceStop }, 'Leave practice and return to the study'));
+}
+
 // ------------------------------------------------------------------ start
-function readJoin() {
-  const h = location.hash;
+function readJoin(given) {
+  const h = given || location.hash;
   if (h.indexOf('#join=') !== 0) return false;
+  let ok = false;
   const raw = h.slice(6), i = raw.lastIndexOf('~');
   const apiUrl = decodeURIComponent(raw.slice(0, i)), code = raw.slice(i + 1);
-  if (/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(apiUrl) && /^[0-9a-f]{32}$/.test(code)) T.join = { api: apiUrl, code };
-  history.replaceState(null, '', location.pathname + location.search);
-  return true;
+  if (/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(apiUrl) && /^[0-9a-f]{32}$/.test(code)) { T.join = { api: apiUrl, code }; ok = true; }
+  if (!given) history.replaceState(null, '', location.pathname + location.search);
+  return given ? ok : true;
 }
 window.addEventListener('hashchange', () => { if (readJoin() && !KEY) render(); });
 (async function start() {
   readJoin();
   try { T.hasVault = !!(await kvGet('vault')); } catch (e) { T.hasVault = false; }
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) setupAutoUpdate();
   render();
 })();
+
+// ---- automatic updates: nothing is asked of the user. A new version is fetched in the background and
+// switched in the next time the app is on its lock screen (after locking, the idle lock, or when reopened),
+// so it never interrupts an entry and never needs the PIN to be typed because of the update.
+let updateReady = false;
+function applyUpdateIfSafe() {
+  if (!updateReady || KEY || T.pin || T.join) return;                       // only when locked, no PIN half typed, not mid-setup
+  location.reload();
+}
+function setupAutoUpdate() {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+    const check = () => { if (navigator.onLine) reg.update().catch(() => {}); };
+    check();
+    window.addEventListener('online', check);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+    setInterval(check, 30 * 60 * 1000);
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) { updateReady = true; applyUpdateIfSafe(); } });
+  setInterval(applyUpdateIfSafe, 15000);
+}

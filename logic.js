@@ -1,7 +1,8 @@
 // GENERATED from TBDM_DataSystem.gs by build.js. Do not edit by hand.
 'use strict';
 const CFG = {
-  VERSION: '1.1',
+  VERSION: '1.2',
+  SCHEMA_VER: 2,                      // raised whenever a data tab gains, loses or reorders a column; phones compare it before sending
   ID_PREFIX: 'TBDM-',
   ID_MAX: 300,
   EARLIEST: '2026-10-01',          // no study date can be earlier than this
@@ -35,6 +36,49 @@ const DM_DRUGS = (function () {          // 0, or letters in the order M S I O w
 })();
 const HEP = ['hep_nausea', 'hep_vomiting', 'hep_anorexia', 'hep_abdo_pain', 'hep_dark_urine', 'hep_jaundice', 'hep_fatigue'];
 const TB_SYMPTOMS = ['tb_cough', 'tb_haemoptysis', 'tb_dyspnoea', 'tb_chest_pain', 'tb_night_sweats'];
+// RUCAM, updated version (Danan and Teschke 2016). Two scales chosen by the injury pattern in e2_rucam_type:
+// H hepatocellular (R 5 or more); C cholestatic or mixed (R below 5). R = (ALT / ALT ULN) / (ALP / ALP ULN).
+// Each item: key, label, [code, text, points, scale]; an option with a scale counts only for that scale.
+// An item with a 4th element 'C' applies to the cholestatic or mixed scale only.
+const RUCAM_TYPES = [['H', 'hepatocellular (R 5 or more)'], ['C', 'cholestatic or mixed (R below 5)']];
+const RUCAM = [
+  ['e2_rucam_onset', 'E2: RUCAM 1. Time to onset of the reaction', [
+    ['A', '5 to 90 days after starting ATT (after re-exposure: 1 to 15 days if hepatocellular, 1 to 90 days if cholestatic or mixed)', 2],
+    ['B', 'less than 5 or more than 90 days after starting ATT (after re-exposure: more than 15 days if hepatocellular, more than 90 days if cholestatic or mixed)', 1],
+    ['C', 'began after ATT was stopped: within 15 days if hepatocellular, within 30 days if cholestatic or mixed', 1]]],
+  ['e2_rucam_course', 'E2: RUCAM 2. Course after stopping the drug, against the peak: ALT if hepatocellular, ALP if cholestatic or mixed', [
+    ['A', 'hepatocellular: ALT fell by 50% or more within 8 days', 3, 'H'], ['B', 'hepatocellular: ALT fell by 50% or more within 30 days', 2, 'H'],
+    ['C', 'hepatocellular: no information, or the drug was continued', 0, 'H'], ['D', 'hepatocellular: ALT fell by 50% or more only after day 30', 0, 'H'],
+    ['E', 'hepatocellular: ALT fell by less than 50% after day 30, or rose again', -2, 'H'],
+    ['F', 'cholestatic or mixed: ALP fell by 50% or more within 180 days', 2, 'C'], ['G', 'cholestatic or mixed: ALP fell by less than 50% within 180 days', 1, 'C'],
+    ['H', 'cholestatic or mixed: no information, persisted, rose, or the drug was continued', 0, 'C']]],
+  ['e2_rucam_alcohol', 'E2: RUCAM 3a. Alcohol: more than 2 drinks a day (women) or 3 (men)', [['Y', 'yes', 1], ['N', 'no', 0]]],
+  ['e2_rucam_age55', 'E2: RUCAM 3b. Age 55 years or more', [['Y', 'yes', 1], ['N', 'no', 0]]],
+  ['e2_rucam_preg', 'E2: RUCAM 3c. Pregnancy (cholestatic or mixed scale only)', [['Y', 'yes', 1], ['N', 'no', 0]], 'C'],
+  ['e2_rucam_conmed', 'E2: RUCAM 4. Other drugs or herbs taken (not the ATT regimen, which is the suspect)', [['A', 'none, or no information', 0], ['B', 'taken, but the timing is incompatible', 0], ['C', 'taken, timing compatible or suggestive', -1], ['D', 'known liver-toxic drug, timing compatible or suggestive', -2], ['E', 'evidence of its role (positive re-exposure or a validated test)', -3]]],
+  ['e2_rucam_altcause', 'E2: RUCAM 5. Search for other causes', [['A', 'all group I and group II causes reasonably ruled out', 2], ['B', 'all 7 group I causes ruled out', 1], ['C', '6 or 5 group I causes ruled out', 0], ['D', 'fewer than 5 group I causes ruled out', -2], ['E', 'another cause is highly probable', -3]]],
+  ['e2_rucam_prev', 'E2: RUCAM 6. Is the liver reaction already known for this drug?', [['A', 'labelled in the product information', 2], ['B', 'published but not labelled', 1], ['C', 'unknown', 0]]],
+  ['e2_rucam_reexp', 'E2: RUCAM 7. Response to unintentional re-exposure (ALT if hepatocellular, ALP if cholestatic or mixed)', [
+    ['A', 'doubled on the drug alone (before re-exposure: ALT below 5 times the upper limit, or ALP below 2 times)', 3],
+    ['B', 'doubled with the drugs already given at the first reaction', 1],
+    ['C', 'rose but stayed below the upper limit, same conditions as the first reaction', -2],
+    ['D', 'not re-exposed, or another situation', 0]]]
+];
+function rucamTotal_(r) {                                   // '' until the pattern and every item for that scale are answered
+  const v = function (k) { return String(r[k] === undefined || r[k] === null ? '' : r[k]).trim().toUpperCase(); };
+  const type = v('e2_rucam_type');
+  if (type !== 'H' && type !== 'C') return '';
+  let t = 0;
+  for (let i = 0; i < RUCAM.length; i++) {
+    if (RUCAM[i][3] && RUCAM[i][3] !== type) continue;
+    const code = v(RUCAM[i][0]);
+    const o = RUCAM[i][2].filter(function (x) { return x[0] === code && (!x[3] || x[3] === type); })[0];
+    if (!o) return '';
+    t += o[2];
+  }
+  return t;
+}
+function rucamBand_(n) { return n === '' ? '' : n <= 0 ? 'excluded' : n <= 2 ? 'unlikely' : n <= 5 ? 'possible' : n <= 8 ? 'probable' : 'highly probable'; }
 const INACTIVE = ['W', 'L', 'X', 'D'];
 const ALERT_COLS = {                     // edits in these columns trigger an immediate alert check
   PHQ_GAD: ['study_id', 'visit', 'declined', 'phq9'],
@@ -134,13 +178,10 @@ const SCHEMA = [
     col('study_id', 'Study number', 'sidl', { pair: 'visit' }),
     col('visit', 'Visit: V1 to V5, or U1 to U5 for an unscheduled test', 'pairlist', { values: ['V1', 'V2', 'V3', 'V4', 'V5', 'U1', 'U2', 'U3', 'U4', 'U5'], pair: 'study_id', hint: 'Type V1, V2, V3, V4 or V5; U1 to U5 for unscheduled tests. One row per study number and visit' }),
     col('sample_date', 'Sample date', 'date'),
-    col('time_drawn', 'Time drawn, hh:mm', 'time'),
     col('time_analysed', 'Time analysed, hh:mm', 'time'),
     col('fasting', 'Fasting at the time of the sample (Visit 1)', 'list', { codes: YN }),
     col('symptomatic', 'Hepatotoxicity symptoms when this test was taken (U visits only)', 'list', { codes: YN }),
     col('lab_status', 'Status of this laboratory visit', 'list', { codes: [['1', 'done'], ['2', 'not done'], ['3', 'declined'], ['4', 'sample rejected']] }),
-    col('analyser_id', 'Haematology analyser ID', 'text', { max: 20 }),
-    col('source_report_no', 'Laboratory report number (source document)', 'text', { max: 30 }),
     col('hb', 'Haemoglobin, g/dL', 'num', { min: 3, max: 25 }),
     col('tlc', 'Total leucocyte count, x10^9/L', 'num', { min: 0.5, max: 100 }),
     col('neut_abs', 'Neutrophils, absolute, x10^9/L', 'num', { min: 0, max: 90 }),
@@ -168,6 +209,8 @@ const SCHEMA = [
     col('albumin', 'Albumin, g/dL', 'num', { min: 0.5, max: 7 }),
     col('tprotein', 'Total protein, g/dL', 'num', { min: 2, max: 12 }),
     col('alt_uln', 'ALT upper limit of normal printed by this laboratory, U/L', 'num', { min: 10, max: 100 }),
+    col('ast_uln', 'AST upper limit of normal printed by this laboratory, U/L', 'num', { min: 10, max: 100 }),
+    col('alp_uln', 'ALP upper limit of normal printed by this laboratory, U/L', 'num', { min: 30, max: 500 }),
     col('bili_uln', 'Bilirubin upper limit of normal printed by this laboratory, mg/dL', 'num', { min: 0.5, max: 3 }),
     col('hbsag', 'HBsAg (Visit 1)', 'list', { codes: SEROLOGY }),
     col('anti_hcv', 'Anti-HCV (Visit 1)', 'list', { codes: SEROLOGY }),
@@ -238,16 +281,16 @@ const SCHEMA = [
     col('serious', 'Serious adverse event', 'list', { codes: YN }),
     col('e1_risk_assessed', 'E1: same-day risk assessment done', 'list', { codes: YN }),
     col('e1_psych_referral', 'E1: psychiatry referral made', 'list', { codes: YN }),
-    col('e2_rucam_a1', 'E2: RUCAM score, assessor 1', 'int', { min: -10, max: 14 }),
-    col('e2_rucam_a2', 'E2: RUCAM score, assessor 2', 'int', { min: -10, max: 14 }),
-    col('e2_rucam_final', 'E2: RUCAM score, agreed', 'int', { min: -10, max: 14 }),
+    col('e2_rucam_type', 'E2: RUCAM injury pattern (R ratio at the event)', 'list', { codes: RUCAM_TYPES }),
+    ].concat(RUCAM.map(function (it) { return col(it[0], it[1], 'list', { codes: it[2].map(function (o) { return [o[0], o[1]]; }) }); })).concat([
+    col('e2_rucam_score', 'E2: RUCAM total score (one score, added up by the app from the items of the chosen scale)', 'int', { min: -9, max: 14 }),
     col('e2_ctcae', 'E2: CTCAE version 5.0 grade', 'list', { codes: [['1', 'grade 1'], ['2', 'grade 2'], ['3', 'grade 3'], ['4', 'grade 4'], ['5', 'grade 5']] }),
     col('e2_hys_law', 'E2: meets Hy\'s law', 'list', { codes: YN }),
     col('e3_procedure', 'E3: procedure', 'list', { codes: [['SP', 'spirometry'], ['QU', 'questionnaire'], ['AN', 'anthropometry']] }),
     col('e4_choice', 'E4: participant\'s choice about data', 'list', { codes: [['R', 'keep data collected so far'], ['D', 'destroy all data']] }),
     col('outcome', 'Event outcome', 'list', { codes: [['R', 'resolved'], ['O', 'ongoing'], ['S', 'resolved with sequelae'], ['D', 'died']] }),
     col('irb_reported_date', 'Date reported to the IRB (serious events, within 7 days)', 'date'),
-    col('entered_by', 'Entered by (initials)', 'text', { max: 10 })] },
+    col('entered_by', 'Entered by (initials)', 'text', { max: 10 })]) },
 
   { tab: 'END_STUDY', kind: 'one', rows: 400, title: 'End of study: one row per participant', cols: [
     col('study_id', 'Study number', 'sid'),
@@ -315,7 +358,8 @@ const DERIVED = {
     ['status', 'overdue (window closed, not recorded); due now (window open); upcoming (opens within 14 days)', 't']],
   QUERIES: [
     ['study_id', 'Study number', 't'], ['tab', 'Tab to check', 't'], ['row', 'Row number in that tab', 'n'],
-    ['visit', 'Visit', 't'], ['check', 'What needs checking', 't'], ['detail', 'Detail', 't']],
+    ['visit', 'Visit', 't'], ['check', 'What needs checking', 't'], ['detail', 'Detail', 't'],
+    ['field', 'Column to check', 't'], ['go', 'Link: opens the tab at the exact cell', 'f']],
   SUMMARY: [['item', 'Item', 't'], ['value', 'Value', 't']]
 };
 const ALERT_SPEC = [['alert_key', 't'], ['type', 't'], ['study_id', 't'], ['visit', 't'], ['rule', 't'], ['detected_at', 'x'],
@@ -332,7 +376,7 @@ const README_TEXT = [
   '1. The custodian assigns the next study number in the paper linking log. Enter it in S1_ENROL first: every other tab accepts only study numbers already in S1_ENROL.',
   '2. Every column header has a note giving its meaning and allowed codes (hover on a computer; tap the header on a phone). The CODEBOOK tab lists them all. Wrong entries are rejected.',
   '3. Enter raw values exactly as measured or as printed on the report. Never calculate: BMI, TBscore, ratios, totals, visit days and flags are calculated by the system.',
-  '4. Laboratory values: choose the unit first, then type the value, the laboratory upper limit of normal and the report number.',
+  '4. Laboratory values: choose the unit first, then type the value, and the laboratory upper limit of normal.',
   '5. LABS, VISITS and PHQ_GAD have one row per participant per visit. Type the visit code exactly: V1 to V5, or U1 to U5 for unscheduled tests in LABS.',
   '6. To correct a value, type over it. The old value, the new value and the time are logged automatically. Never delete rows or columns: tell the PI.',
   '7. To paste, use Paste special > Values only (Ctrl+Shift+V, or Cmd+Shift+V on a Mac). A plain paste removes the checks from those cells.',
@@ -366,7 +410,7 @@ const READER_TEXT = [
   'Score only the routine baseline chest radiograph of each study number the PI gives you.',
   'Do not look at clinical, laboratory or diabetes information, or at the other reader\'s scores. Nobody except you and the PI can open this file.',
   'One row per film in R_SCORES: study number; read number (1 for the first read, 2 only for films the PI marks for a repeat read); date read;',
-  'percentage of the total lung field affected (0 to 100); any cavity (Y or N); number of cavities; your initials.',
+  'percentage of the total lung field affected (0 to 100); any cavity (Y or N); number of cavities (0 when there is no cavity, 1 or more when there is one); your initials.',
   'Do not calculate the Timika score: the system adds 40 when there is a cavity.',
   'To correct a value, type over it. Every change is logged.'
 ];
@@ -452,6 +496,11 @@ function validateValue_(c, v, row, ctx) {                   // '' when acceptabl
   const s = str_(v);
   if (s === '') return '';
   if (c.codes) return c.codes.some(function (p) { return p[0] === s.toUpperCase(); }) ? '' : 'is not an allowed code';
+  if (c.key === 'n_cavities' && row && num_(s) !== null) {      // the cavity count must agree with the cavity answer
+    const cv = code_(row.cavity), nx = num_(s);
+    if (cv === 'N' && nx !== 0) return 'must be 0 when there is no cavity';
+    if (cv === 'Y' && nx < 1) return 'must be 1 or more when there is a cavity';
+  }
   switch (c.type) {
     case 'num': case 'int': case 'uniqueint': {
       const x = num_(s);
@@ -484,7 +533,51 @@ function validateValue_(c, v, row, ctx) {                   // '' when acceptabl
   return '';
 }
 
+// A radiograph score is usable only when it is complete: date, lung percentage, cavity answer, and the count when there is a cavity.
+function readerGaps_(v) {
+  const g = {};
+  if (str_(v.read_date) === '') g.read_date = 'is required';
+  if (str_(v.pct_lung) === '') g.pct_lung = 'is required';
+  if (code_(v.cavity) === '') g.cavity = 'is required';
+  else if (code_(v.cavity) === 'Y' && str_(v.n_cavities) === '') g.n_cavities = 'is required when there is a cavity';
+  return g;
+}
+
 // data: { TAB: [row objects with string values and _row] }; today: 'yyyy-mm-dd'
+// Which column a query points at: the first rule whose pattern matches the check and whose column exists in that tab.
+// Checks that list column names in their detail (missing items, invalid entries) point at the first one named.
+const QUERY_FIELD = [
+  [/^Reader 1 cavity count/, 'r1_ncav'], [/^Reader 2 cavity count/, 'r2_ncav'],
+  [/^Row without a study number|^Enrolled but no study number|^No screening line|^Study number/, 'study_id'], [/^Enrolled although/, 'eligible'], [/exclusion code/, 'excl_code'],
+  [/not enrolled, but no reason/, 'not_enrolled_reason'], [/^Age differs/, 'age_years'], [/^Sex differs/, 'sex'], [/^Smear grade differs/, 'smear_grade'],
+  [/Date ATT started missing/, 'att_start_date'], [/Enrolled more than 7 days/, 'enrol_date'], [/Diabetes status|New diabetes|Not diabetic but baseline|fasting glucose in the diabetic/, 'dm_status'],
+  [/duration or drugs missing/, 'dm_years'], [/diabetes drugs recorded/, 'dm_drugs'], [/pack-years recorded/, 'pack_years'],
+  [/HIV reactive/, 'hiv'], [/Hepatitis B or C/, 'hbsag'], [/Raised liver tests|ALT or AST above 3/, 'alt'], [/examination outside/, 'exam_date'], [/^BMI outside|Weight changed|Weight missing/, 'weight_kg'],
+  [/Waist changed/, 'waist_cm'], [/MUAC changed/, 'muac_mm'], [/Attendance not recorded|not attended/, 'attended'],
+  [/Visit date missing|Visit outside its window|dated before the previous|Visit date before ATT|No laboratory row for this visit|visit not recorded/, 'visit_date'],
+  [/Hepatotoxicity symptom enquiry|Liver symptoms recorded/, 'hep_nausea'], [/conversion|Conversion/, 'conversion'], [/Smear result without/, 'smear_date'], [/Smear date without/, 'smear_result'],
+  [/V5 smear positive|Outcome cured|Outcome failed|Treatment completed, but|Treatment outcome|outcome died|still ongoing/, 'outcome'],
+  [/laboratory status|Laboratory status/, 'lab_status'], [/Symptom status missing/, 'symptomatic'], [/Sample outside/, 'sample_date'],
+  [/Neutrophil and lymphocyte percentages|Neutrophil percentage/, 'neut_pct'], [/Lymphocyte percentage/, 'lymph_pct'], [/Absolute counts exceed/, 'tlc'], [/Absolute neutrophil/, 'neut_abs'],
+  [/ALT upper limit/, 'alt_uln'], [/AST upper limit/, 'ast_uln'], [/ALP upper limit/, 'alp_uln'], [/Bilirubin upper limit/, 'bili_uln'], [/HDL or LDL/, 'hdl'],
+  [/Fasting status/, 'fasting'], [/Baseline HbA1c/, 'hba1c'], [/Baseline serology/, 'hbsag'],
+  [/Declined|Questionnaire entered but/, 'declined'], [/Questionnaire incomplete/, 'phq1'], [/Item 9 above 0 but no E1 event/, 'phq9'], [/E1 form number/, 'e1_form_no'], [/Interview outside/, 'interview_date'],
+  [/Spirometry test date|Spirometry outside/, 'test_date'], [/Spirometry status|Visit 5 smear is not|opted out/, 'spiro_status'], [/FEV1 or FVC|FEV1 greater/, 'fev1_l'], [/FEV1\/FVC/, 'fev1_fvc_pct'], [/Fewer than 3/, 'n_acceptable'],
+  [/need resolution|no final Timika/, 'resolution'], [/Final Timika/, 'final_override'], [/cavity/, 'cavity_final'], [/not yet scored/, 'r1_pct'],
+  [/Event type missing|E1 recorded but|E2 recorded but/, 'event_type'], [/IRB/, 'irb_reported_date'], [/Same-day risk/, 'e1_risk_assessed'], [/Treating team not recorded/, 'team_informed'],
+  [/informed before|informed missing/, 'team_informed_date'], [/Detected before/, 'detected_date'], [/RUCAM/, 'e2_rucam_type'], [/Hy's law/, 'e2_hys_law'],
+  [/Withdrawal data choice/, 'e4_choice'], [/Withdrawal data choice/, 'retention'], [/End-of-study date|after the end-of-study date/, 'status_date'],
+  [/recorded by blank/, 'recorded_by'], [/Completed, but|Withdrawn but|Died:|other open quer|does not match the end-of-study|no end-of-study row/, 'status']
+];
+function queryField_(tab, check, detail) {
+  const def = SCHEMA.filter(function (t) { return t.tab === tab; })[0]; if (!def) return '';
+  const keys = def.cols.map(function (c) { return c.key; });
+  const first = str_(detail).split(/[ ,]/)[0];                 // "regimen, htn" or "sample_date is before ..." name the column first
+  if (/fields blank|items missing|Tests expected|Invalid entry|Duplicate/.test(check) && keys.indexOf(first) >= 0) return first;
+  for (let i = 0; i < QUERY_FIELD.length; i++) if (QUERY_FIELD[i][0].test(check) && keys.indexOf(QUERY_FIELD[i][1]) >= 0) return QUERY_FIELD[i][1];
+  return keys.indexOf(first) >= 0 ? first : '';
+}
+
 function computeDerived_(data, today) {
   const T = function (n) { return data[n] || []; };
   const tday = dayNo_(today);
@@ -653,12 +746,12 @@ function computeDerived_(data, today) {
     const tlc = num_(r.tlc), abs = [r.neut_abs, r.lymph_abs, r.mono_abs].map(num_);
     if (tlc !== null && abs.every(function (x) { return x !== null; }) && abs[0] + abs[1] + abs[2] > tlc * 1.05) tag('Absolute counts exceed the total leucocyte count', '');
     if (num_(r.alt) !== null && num_(r.alt_uln) === null) tag('ALT upper limit of normal missing', 'needed for the liver injury definition');
+    if (num_(r.ast) !== null && num_(r.ast_uln) === null) tag('AST upper limit of normal missing', 'needed to check AST against 3 times the upper limit');
+    if (num_(r.alp) !== null && num_(r.alp_uln) === null) tag('ALP upper limit of normal missing', 'needed for the RUCAM injury pattern, CTCAE and Hy\'s law');
     if (num_(r.tbili) !== null && num_(r.bili_uln) === null) tag('Bilirubin upper limit of normal missing', 'needed for the liver injury definition');
-    const a = minutes_(r.time_drawn), b = minutes_(r.time_analysed);
-    if (a !== null && b !== null) {
-      if (b < a) tag('Time analysed is before time drawn', '');
-      else if (b - a > 360) tag('Analysed more than 6 hours after drawing', (b - a) + ' minutes');
-    }
+    const aX = num_(r.alt) !== null && num_(r.alt_uln) > 0 ? num_(r.alt) / num_(r.alt_uln) : null, sX = num_(r.ast) !== null && num_(r.ast_uln) > 0 ? num_(r.ast) / num_(r.ast_uln) : null;
+    if (r.visit !== 'V1' && ((aX !== null && aX > 3) || (sX !== null && sX > 3)) && !diliMet[r.study_id] && !hasEvent(r.study_id, 'E2'))
+      tag('ALT or AST above 3 times the upper limit but no DILI event (E2) recorded', (aX !== null ? 'ALT ' + round_(aX, 1) + ' x ULN' : '') + (aX !== null && sX !== null ? ', ' : '') + (sX !== null ? 'AST ' + round_(sX, 1) + ' x ULN' : '') + ': decide whether this is a DILI event and record E2 if so');
     if (r.visit === 'V1') {
       if (!r.fasting) tag('Fasting status missing', '');
       if (num_(r.neut_abs) === null || num_(r.lymph_abs) === null) tag('Absolute neutrophil or lymphocyte count missing', 'primary outcome of Study 1');
@@ -700,6 +793,11 @@ function computeDerived_(data, today) {
     if (!r.study_id) return;
     const both = timika_(r.r1_pct, r.r1_cavity) !== '' && timika_(r.r2_pct, r.r2_cavity) !== '';
     if (both && !r.resolution) Q(r.study_id, 'S3_CXR', r._row, '', 'Reader scores need resolution (PI)', '');
+    [1, 2].forEach(function (n) {                              // catches a reader who typed in their file directly, past the phone's checks
+      const cv = code_(r['r' + n + '_cavity']), nc = num_(r['r' + n + '_ncav']);
+      if ((cv === 'N' && nc !== null && nc !== 0) || (cv === 'Y' && (nc === null || nc < 1)))
+        Q(r.study_id, 'S3_CXR', r._row, '', 'Reader ' + n + ' cavity count does not match the cavity answer', 'cavity ' + cv + ', count ' + (nc === null ? 'blank' : nc) + ': ask reader ' + n + ' to correct their file');
+    });
     if ((r.resolution === 'T' || r.resolution === 'D') && num_(r.final_override) === null) Q(r.study_id, 'S3_CXR', r._row, '', 'Final Timika score missing (PI)', '');
     if (both && r.r1_cavity !== r.r2_cavity && !r.cavity_final) Q(r.study_id, 'S3_CXR', r._row, '', 'Readers disagree on cavity: final cavity needed (PI)', '');
   });
@@ -713,11 +811,261 @@ function computeDerived_(data, today) {
     }
     if (r.event_type === 'E1' && r.e1_risk_assessed !== 'Y') tag('Same-day risk assessment not recorded', '');
     if (r.event_type === 'E2' && r.team_informed !== 'Y') tag('Treating team not recorded as informed', '');
-    if (r.event_type === 'E2' && (num_(r.e2_rucam_a1) === null || num_(r.e2_rucam_a2) === null)) tag('RUCAM scores from both assessors needed', '');
+    if (r.event_type === 'E2' && rucamTotal_(r) === '') tag('RUCAM: choose the injury pattern and answer every item', 'one RUCAM score per event');
     if (r.event_type === 'E4' && !r.e4_choice) tag('Withdrawal data choice missing', '');
   });
   T('END_STUDY').forEach(function (r) {
     if (r.study_id && r.status === 'W' && !r.retention) Q(r.study_id, 'END_STUDY', r._row, '', 'Withdrawal data choice missing', '');
+  });
+  // ---- queries 3: cross-form, protocol and plausibility checks (SCDM edit-check categories; WHO 2013 TB outcome definitions;
+  // ADA diagnostic thresholds; manual Parts 3 and 4). Wording is neutral: each asks for a check, never for a particular answer.
+  const gone = function (sid) { return destroyed[sid]; };
+  const labsOf = {}; T('LABS').forEach(function (r) { if (r.study_id) (labsOf[r.study_id] = labsOf[r.study_id] || []).push(r); });
+  const has = function (v) { return str_(v) !== ''; };
+  const winTxt = function (v) { const w = CFG.WINDOWS[v]; return w ? 'day ' + w[1] + ' to ' + w[2] : ''; };
+  const outWin = function (sid, v, date) {                       // true when a scheduled visit date falls outside its window
+    const d = diff_((enrol[sid] || {}).att_start_date, date), w = CFG.WINDOWS[v];
+    return d !== null && w ? (d < w[1] || d > w[2] ? d : null) : null;
+  };
+  // screening against enrolment
+  screen.forEach(function (r) {
+    const e = enrol[r.study_id]; if (!e || gone(r.study_id)) return;
+    const tag = function (c, d) { Q(r.study_id, 'S1_ENROL', e._row, '', c, d); };
+    if (num_(r.age) !== null && num_(e.age_years) !== null && Math.abs(num_(r.age) - num_(e.age_years)) > 1) tag('Age differs between screening and enrolment', 'screening ' + r.age + ', enrolment ' + e.age_years);
+    if (has(r.sex) && has(e.sex) && r.sex !== e.sex) tag('Sex differs between screening and enrolment', 'screening ' + r.sex + ', enrolment ' + e.sex);
+    if (has(r.smear_grade) && has(e.smear_grade) && r.smear_grade !== e.smear_grade) tag('Smear grade differs between screening and enrolment', 'screening ' + r.smear_grade + ', enrolment ' + e.smear_grade);
+  });
+  ids.forEach(function (sid) {
+    if (gone(sid)) return;
+    const e = enrol[sid], tag = function (c, d) { Q(sid, 'S1_ENROL', e._row, '', c, d); };
+    const miss = ['age_years', 'sex', 'smear_grade', 'regimen', 'smoking', 'alcohol', 'htn'].filter(function (k) { return !has(e[k]); });
+    if (miss.length) tag('Enrolment items missing', miss.join(', '));
+    if (e.dm_status === 'K' && (!has(e.dm_drugs) || !has(e.dm_years))) tag('Known diabetes: duration or drugs missing', '');
+    if (e.dm_status === '0' && has(e.dm_drugs) && e.dm_drugs !== '0') tag('Not diabetic but diabetes drugs recorded', 'drugs ' + e.dm_drugs);
+    if (e.smoking === '0' && num_(e.pack_years) !== null && num_(e.pack_years) > 0) tag('Never smoker but pack-years recorded', e.pack_years + ' pack-years');
+    const l1 = labs[sid + '|V1'];
+    if (l1 && e.dm_status === '0') {
+      const g = num_(l1.fpg), u = code_(l1.glucose_unit);
+      if (g !== null && ((u === 'M' && g >= 126) || (u === 'L' && g >= 7.0))) tag('Not diabetic but baseline fasting glucose in the diabetic range', 'FPG ' + g + (u === 'M' ? ' mg/dL' : ' mmol/L') + (l1.fasting === 'N' ? ' (sample not fasting)' : '') + '; ADA threshold 126 mg/dL (7.0 mmol/L)');
+    }
+    if (l1) {
+      const lt = function (c, d) { Q(sid, 'LABS', l1._row, 'V1', c, d); };
+      if (l1.hiv === 'R') lt('HIV reactive at baseline', 'confirm it was not known before enrolment (exclusion 2) and inform the treating team');
+      if (l1.hbsag === 'P' || l1.anti_hcv === 'P') lt('Hepatitis B or C marker positive at baseline', 'confirm there is no chronic liver disease (exclusion 5); RUCAM item 5 needs this');
+      const a = ratio_(l1.alt, l1.alt_uln), s2 = ratio_(l1.ast, l1.ast_uln), b = ratio_(l1.tbili, l1.bili_uln);
+      if ((a !== '' && a > 3) || (s2 !== '' && s2 > 3) || (b !== '' && b > 2)) lt('Raised liver tests before ATT', (a !== '' ? 'ALT ' + a + ' x ULN ' : '') + (s2 !== '' ? 'AST ' + s2 + ' x ULN ' : '') + (b !== '' ? 'bilirubin ' + b + ' x ULN' : '') + ': confirm there is no chronic liver disease (exclusion 5); this is the CTCAE baseline');
+    }
+    // baseline examination
+    const b0 = base[sid];
+    if (b0) {
+      const bt = function (c, d) { Q(sid, 'S2_BASELINE', b0._row, 'V1', c, d); };
+      const ow = outWin(sid, 'V1', b0.exam_date); if (ow !== null) bt('Baseline examination outside the Visit 1 window', 'day ' + ow + '; window ' + winTxt('V1'));
+      const bm = bmi_(b0.weight_kg, b0.height_cm); if (bm !== '' && (bm < 12 || bm > 60)) bt('BMI outside 12 to 60', 'BMI ' + bm + ': check height and weight');
+    }
+    // visits: order, windows, plausibility of change, labs and questionnaires that should exist
+    const order = ['V2', 'V3', 'V4', 'V5'];
+    let prevDate = b0 ? b0.exam_date : '', prevV = 'V1', prev = b0 ? { weight_kg: b0.weight_kg, waist_cm: b0.waist_cm, muac_mm: b0.muac_mm } : null;
+    order.forEach(function (v) {
+      const r = visits[sid + '|' + v]; if (!r || r.attended !== 'Y') return;
+      const vt = function (c, d) { Q(sid, 'VISITS', r._row, v, c, d); };
+      const ow = outWin(sid, v, r.visit_date); if (ow !== null && ow >= 0) vt('Visit outside its window', 'day ' + ow + '; window ' + winTxt(v));
+      const gap = diff_(prevDate, r.visit_date); if (gap !== null && gap < 0) vt('Visit dated before the previous visit', prevV + ' ' + prevDate + ', ' + v + ' ' + r.visit_date);
+      if (has(r.visit_date)) { prevDate = r.visit_date; prevV = v; }
+      if (prev && has(r.weight_kg)) {
+        const w0 = num_(prev.weight_kg), w1 = num_(r.weight_kg), c0 = num_(prev.waist_cm), c1 = num_(r.waist_cm), m0 = num_(prev.muac_mm), m1 = num_(r.muac_mm);
+        if (w0 && w1 && Math.abs(w1 - w0) / w0 > 0.2) vt('Weight changed by more than 20% since the last measurement', w0 + ' to ' + w1 + ' kg: check the value');
+        if (c0 !== null && c1 !== null && Math.abs(c1 - c0) > 20) vt('Waist changed by more than 20 cm since the last measurement', c0 + ' to ' + c1 + ' cm: check the value');
+        if (m0 !== null && m1 !== null && Math.abs(m1 - m0) > 50) vt('MUAC changed by more than 50 mm since the last measurement', m0 + ' to ' + m1 + ' mm: check the value');
+      }
+      if (has(r.weight_kg)) prev = { weight_kg: r.weight_kg, waist_cm: r.waist_cm, muac_mm: r.muac_mm };
+      if ((v === 'V3' || v === 'V5') && has(r.smear_result) && r.smear_result !== 'X' && !has(r.smear_date)) vt('Smear result without a smear date', '');
+      if (has(r.smear_date) && !has(r.smear_result)) vt('Smear date without a result', '');
+      // liver symptoms need liver tests the same day (manual 4.3); the next day is accepted
+      if (hepAny_(r) === true) {
+        const ok = (labsOf[sid] || []).some(function (l) { const g2 = diff_(r.visit_date, l.sample_date); return l.lab_status === '1' && num_(l.alt) !== null && g2 !== null && g2 >= 0 && g2 <= 1; });
+        if (!ok) vt('Liver symptoms recorded but no liver test result on the same or the next day', 'manual 4.3: draw liver tests the same day; enter them as this visit or as an unscheduled test');
+      }
+      const dv = diff_(r.visit_date, today);
+      if (!labs[sid + '|' + v] && dv !== null && dv > 7) vt('No laboratory row for this visit', 'visit was ' + dv + ' days ago; enter the results, or the row with lab status not done');
+      if (v === 'V5' && !phq[sid + '|V5'] && e.optout_questionnaires !== 'Y' && dv !== null && dv > 7) Q(sid, 'PHQ_GAD', '', 'V5', 'Visit 5 questionnaires missing', '');
+      // treatment outcome against the smear results (WHO 2013 definitions)
+      if (v === 'V5' && has(r.outcome)) {
+        const v3 = visits[sid + '|V3'] || {};
+        if (r.outcome === 'C' && (r.smear_result !== 'N' || v3.smear_result !== 'N')) vt('Outcome cured but the smears do not show it', 'WHO: cured needs a negative smear in the last month and on at least one earlier occasion; V3 ' + (v3.smear_result || 'blank') + ', V5 ' + (r.smear_result || 'blank'));
+        if (r.outcome === 'T' && r.smear_result === 'N' && v3.smear_result === 'N') vt('Treatment completed, but V3 and V5 smears are negative', 'WHO: this meets cured; check the outcome');
+        if (r.outcome === 'F' && ['S', '1', '2', '3'].indexOf(r.smear_result) < 0) vt('Outcome failed but the V5 smear is not positive', 'WHO: failed means smear or culture positive at month 5 or later; record the culture or check the outcome');
+        if (['S', '1', '2', '3'].indexOf(r.smear_result) >= 0 && (r.outcome === 'C' || r.outcome === 'T')) vt('V5 smear positive but outcome is cured or completed', 'WHO: a positive smear at month 5 or later is treatment failure');
+        const want = { D: 'D', L: 'L', X: 'X', C: 'C', T: 'C' }[r.outcome], st = (end[sid] || {}).status;
+        if (want && st && st !== want) vt('Treatment outcome does not match the end-of-study status', 'outcome ' + r.outcome + ', end status ' + st);
+      }
+    });
+    // end of study
+    const en = end[sid];
+    if (en && en.status) {
+      const et = function (c, d) { Q(sid, 'END_STUDY', en._row, '', c, d); };
+      if (!has(en.status_date)) et('End-of-study date missing', '');
+      if (en.status === 'C') { const v5 = visits[sid + '|V5']; if (!v5 || v5.attended !== 'Y') et('Completed, but Visit 5 is not recorded as attended', ''); }
+      if (en.status !== 'C' && has(en.status_date)) {
+        const later = order.map(function (v) { return visits[sid + '|' + v]; }).filter(function (r) { return r && diff_(en.status_date, r.visit_date) > 0; });
+        if (later.length) et('Visits recorded after the end-of-study date', later.map(function (r) { return r.visit + ' ' + r.visit_date; }).join(', '));
+      }
+      if (en.status === 'W' && !hasEvent(sid, 'E4')) et('Withdrawn but no E4 event recorded', '');
+      if (en.status === 'D' && !events.some(function (x) { return x.study_id === sid && x.outcome === 'D'; }) && !(visits[sid + '|V5'] || {}).outcome) et('Died: record the event or the V5 outcome', '');
+    } else if (hasEvent(sid, 'E4')) Q(sid, 'END_STUDY', '', '', 'E4 withdrawal recorded but no end-of-study row', 'add status W with the data choice');
+  });
+  // laboratory rows
+  const REQ = { V1: ['tlc', 'plt', 'alt', 'ast', 'tbili', 'tg', 'hdl'], V2: ['alt', 'ast', 'tbili'],
+    V3: ['tlc', 'neut_abs', 'lymph_abs', 'plt', 'alt', 'ast', 'tbili'], V4: ['hba1c', 'tlc', 'neut_abs', 'lymph_abs', 'alt', 'ast', 'tbili'], V5: ['tlc', 'neut_abs', 'lymph_abs', 'plt', 'alt', 'ast', 'tbili'] };
+  const RESULTS = ['hb', 'tlc', 'neut_abs', 'lymph_abs', 'mono_abs', 'plt', 'hba1c', 'fpg', 'tg', 'hdl', 'tc', 'ldl', 'alt', 'ast', 'alp', 'tbili', 'albumin', 'tprotein'];
+  T('LABS').forEach(function (r) {
+    if (!r.study_id || gone(r.study_id)) return;
+    const tag = function (c, d) { Q(r.study_id, 'LABS', r._row, r.visit, c, d); };
+    const n = RESULTS.filter(function (k) { return num_(r[k]) !== null; }).length;
+    if (r.lab_status && r.lab_status !== '1' && n) tag('Results entered although the laboratory status is not done, declined or rejected', n + ' value(s); correct the status or clear the values');
+    if (r.lab_status === '1' && !n) tag('Laboratory status done but no results entered', '');
+    if (r.lab_status !== '1') return;
+    const ow = /^U/.test(r.visit) ? null : outWin(r.study_id, r.visit, r.sample_date);
+    if (ow !== null) tag('Sample outside the visit window', 'day ' + ow + '; window ' + winTxt(r.visit));
+    const miss = (REQ[r.visit] || []).filter(function (k) { return num_(r[k]) === null; });
+    if (miss.length && n) tag('Tests expected at this visit are missing', miss.join(', ') + ' (visit checklist)');
+    const tlc = num_(r.tlc), sumAbs = ['neut_abs', 'lymph_abs', 'mono_abs'].reduce(function (m, k) { return m + (num_(r[k]) || 0); }, 0);
+    if (tlc && sumAbs <= tlc * 1.05) [['neut', 'Neutrophil'], ['lymph', 'Lymphocyte']].forEach(function (x) {   // not repeated when the counts already exceed the total
+      const ab = num_(r[x[0] + '_abs']), pc = num_(r[x[0] + '_pct']);
+      if (tlc && ab !== null && pc !== null && Math.abs(100 * ab / tlc - pc) > 10) tag(x[1] + ' percentage does not match the count', 'count gives ' + round_(100 * ab / tlc, 0) + '%, entered ' + pc + '%');
+    });
+    const tc = num_(r.tc), hd = num_(r.hdl), ld = num_(r.ldl);
+    if (tc !== null && ((hd !== null && hd >= tc) || (ld !== null && ld >= tc))) tag('HDL or LDL not below total cholesterol', 'check the lipid values and unit');
+  });
+  // questionnaires
+  T('PHQ_GAD').forEach(function (r) {
+    if (!r.study_id || gone(r.study_id)) return;
+    const tag = function (c, d) { Q(r.study_id, 'PHQ_GAD', r._row, r.visit, c, d); };
+    const i9 = num_(r.phq9);
+    if (has(r.e1_form_no) && i9 !== null && i9 === 0) tag('E1 form number entered but item 9 is 0', 'the E1 form belongs to the visit where item 9 was above 0');
+    if (r.declined !== 'Y' && i9 !== null && i9 > 0 && !has(r.e1_form_no)) tag('Item 9 above 0 but no E1 form number', '');
+    const ow = outWin(r.study_id, r.visit, r.interview_date); if (ow !== null) tag('Interview outside the visit window', 'day ' + ow + '; window ' + winTxt(r.visit));
+  });
+  // spirometry (pattern is taken as printed: ATS/ERS 2022 use the lower limit of normal, so no fixed-ratio check is made)
+  T('SPIRO').forEach(function (r) {
+    if (!r.study_id || gone(r.study_id) || r.spiro_status !== 'Y') return;
+    const tag = function (c, d) { Q(r.study_id, 'SPIRO', r._row, 'V5', c, d); };
+    if (!has(r.test_date)) tag('Spirometry test date missing', '');
+    else { const ow = outWin(r.study_id, 'V5', r.test_date); if (ow !== null) tag('Spirometry outside the Visit 5 window', 'day ' + ow + '; window ' + winTxt('V5')); }
+  });
+  // radiograph reads still pending two weeks after the film
+  T('S3_CXR').forEach(function (r) {
+    if (!r.study_id || gone(r.study_id)) return;
+    const two = timika_(r.r1_pct, r.r1_cavity) !== '' && timika_(r.r2_pct, r.r2_cavity) !== '', age = diff_(r.cxr_date, today);
+    if (!two && age !== null && age > 14) Q(r.study_id, 'S3_CXR', r._row, '', 'Radiograph not yet scored by both readers', 'film taken ' + age + ' days ago');
+  });
+  // events
+  events.forEach(function (r) {
+    if (!r.study_id || gone(r.study_id)) return;
+    const tag = function (c, d) { Q(r.study_id, 'EVENTS', r._row, '', c, d); };
+    if (diff_(r.onset_date, r.detected_date) < 0) tag('Detected before the onset date', '');
+    if (diff_(r.detected_date, r.team_informed_date) < 0) tag('Treating team informed before the event was detected', '');
+    if (diff_(r.detected_date, r.irb_reported_date) < 0) tag('IRB report dated before the event was detected', '');
+    if (r.team_informed === 'Y' && !has(r.team_informed_date)) tag('Date the treating team was informed missing', '');
+    if (r.event_type === 'E1' && !T('PHQ_GAD').some(function (p) { return p.study_id === r.study_id && p.declined !== 'Y' && num_(p.phq9) > 0; })) tag('E1 recorded but no questionnaire has item 9 above 0', '');
+    if (r.event_type === 'E2') {
+      const ls = labsOf[r.study_id] || [], x3 = ls.some(function (l) { const a = ratio_(l.alt, l.alt_uln), s2 = ratio_(l.ast, l.ast_uln); return l.visit !== 'V1' && ((a !== '' && a >= 3) || (s2 !== '' && s2 >= 3)); });
+      if (!x3) tag('E2 recorded but no on-treatment ALT or AST reaches 3 times the upper limit', 'enter the liver test that triggered the event, or check it against the definition in manual 4.2');
+      if (r.e2_hys_law === 'Y' && !ls.some(function (l) { const a = ratio_(l.alt, l.alt_uln), s2 = ratio_(l.ast, l.ast_uln), b = ratio_(l.tbili, l.bili_uln); return ((a !== '' && a > 3) || (s2 !== '' && s2 > 3)) && b !== '' && b > 2; }))
+        tag("Hy's law Y but no single sample has ALT or AST above 3 and bilirubin above 2 times the upper limit", '');
+    }
+    if (r.outcome === 'D' && (end[r.study_id] || {}).status !== 'D') tag('Event outcome died but end-of-study status is not died', '');
+  });
+  // ---- queries 4: end-of-study review. Once an end-of-study status is entered, every form, visit and field the participant
+  // should have by that point is checked, and the open queries are counted, so the record can be closed clean.
+  // A visit is expected when its window closed on or before the end-of-study date (all five for status C).
+  const already = function (sid, tab, visit, re) { return out.queries.some(function (q) { return q[0] === sid && q[1] === tab && (visit === null || q[3] === visit) && re.test(q[4]); }); };
+  const blanks = function (r, keys) { return keys.filter(function (k) { return !has(r[k]); }); };
+  const S2_KEYS = SCHEMA.filter(function (t) { return t.tab === 'S2_BASELINE'; })[0].cols.map(function (c) { return c.key; }).filter(function (k) { return k !== 'study_id'; });
+  const reviewed = [];
+  ids.forEach(function (sid) {
+    const en = end[sid];
+    if (!en || !en.status || gone(sid)) return;
+    reviewed.push(sid);
+    const e = enrol[sid], RV = 'End-of-study review: ';
+    const R = function (tab, row, visit, c, d) { Q(sid, tab, row, visit, RV + c, d); };
+    const d0 = dayNo_(e.att_start_date), dEnd = en.status === 'C' ? null : dayNo_(en.status_date);
+    const expected = ['V1', 'V2', 'V3', 'V4', 'V5'].filter(function (v) { return en.status === 'C' || (d0 !== null && dEnd !== null && d0 + CFG.WINDOWS[v][2] <= dEnd); });
+    // enrolment: every item, with the conditional ones only where they apply
+    let k1 = ['enrol_date', 'att_start_date', 'age_years', 'sex', 'residence', 'education', 'smoking', 'alcohol', 'dm_status', 'htn', 'regimen', 'smear_grade', 'genexpert', 'optout_questionnaires', 'optout_spirometry', 'entered_by'];
+    if (e.smoking === '1' || e.smoking === '2') k1.push('pack_years');
+    if (e.dm_status === 'K') k1 = k1.concat(['dm_years', 'dm_drugs']);
+    if (e.genexpert === 'D') k1.push('rif_res');
+    const COVERED = ['age_years', 'sex', 'smear_grade', 'regimen', 'smoking', 'alcohol', 'htn', 'att_start_date', 'dm_status', 'dm_years', 'dm_drugs'];   // already named by the queries above
+    const m1 = blanks(e, k1).filter(function (k) { return COVERED.indexOf(k) < 0; });
+    if (m1.length) R('S1_ENROL', e._row, '', 'enrolment fields blank', m1.join(', '));
+    // baseline examination and radiograph
+    const b0 = base[sid];
+    if (!b0) { if (!already(sid, 'S2_BASELINE', 'V1', /missing/)) R('S2_BASELINE', '', 'V1', 'baseline examination missing', ''); }
+    else { const m2 = blanks(b0, S2_KEYS); if (m2.length) R('S2_BASELINE', b0._row, 'V1', 'baseline fields blank', m2.join(', ')); }
+    const c = cxr[sid];
+    if (!c) { if (!already(sid, 'S3_CXR', null, /missing/)) R('S3_CXR', '', '', 'radiograph record missing', ''); }
+    else {
+      const t1 = timika_(c.r1_pct, c.r1_cavity), t2 = timika_(c.r2_pct, c.r2_cavity);
+      const final = (c.resolution === 'M' && t1 !== '' && t2 !== '') || ((c.resolution === 'T' || c.resolution === 'D') && num_(c.final_override) !== null);
+      if (!final && !already(sid, 'S3_CXR', null, /resolution|Final Timika|not yet scored/)) R('S3_CXR', c._row, '', 'no final Timika score', 'both reads and the resolution are needed');
+      if (!c.cavity_final && !(c.r1_cavity && c.r1_cavity === c.r2_cavity) && !already(sid, 'S3_CXR', null, /cavity/)) R('S3_CXR', c._row, '', 'no final cavity result', '');
+    }
+    // visits and their laboratory rows
+    expected.forEach(function (v) {
+      const l = labs[sid + '|' + v];
+      if (!l) { if (!already(sid, 'LABS', v, /missing|No laboratory row/) && !already(sid, 'VISITS', v, /No laboratory row/)) R('LABS', '', v, 'laboratory row missing', 'enter the results, or the row with lab status not done'); }
+      if (v === 'V1') return;
+      const r = visits[sid + '|' + v];
+      if (!r) { R('VISITS', '', v, 'visit not recorded', 'record it, with attended N if it was missed'); return; }
+      if (r.attended === 'N') { if (en.status === 'C') R('VISITS', r._row, v, 'status completed but this visit was not attended', 'check the end-of-study status'); return; }
+      if (r.attended !== 'Y') return;
+      let kv = ['treatment', 'adherence', 'entered_by'];
+      if (v === 'V3' || v === 'V5') kv = kv.concat(['waist_cm', 'muac_mm', 'temp_c', 'pulse_min', 'pallor', 'auscultation', 'tb_cough', 'tb_haemoptysis', 'tb_dyspnoea', 'tb_chest_pain', 'tb_night_sweats', 'smear_result']);
+      if ((v === 'V3' || v === 'V5') && r.smear_result !== 'X') kv.push('smear_date');
+      if (v === 'V4') kv.push('dm_referred');
+      const mv = blanks(r, kv).filter(function (k) { return !(k === 'smear_date' && already(sid, 'VISITS', v, /Smear result without/)); });
+      if (mv.length) R('VISITS', r._row, v, 'visit fields blank', mv.join(', '));
+    });
+    // questionnaires at V1 and V5
+    if (e.optout_questionnaires !== 'Y') ['V1', 'V5'].forEach(function (v) {
+      if (expected.indexOf(v) < 0) return;
+      const p = phq[sid + '|' + v];
+      if (!p) { if (!already(sid, 'PHQ_GAD', v, /questionnaires missing/)) R('PHQ_GAD', '', v, 'questionnaire row missing', 'enter it, or the row with declined Y'); return; }
+      const mp = blanks(p, ['interview_date', 'interviewer', 'declined']);
+      if (mp.length) R('PHQ_GAD', p._row, v, 'questionnaire fields blank', mp.join(', '));
+    });
+    // spirometry at V5: expected when completed, not opted out and the V5 smear is negative
+    if (en.status === 'C' && e.optout_spirometry !== 'Y' && (visits[sid + '|V5'] || {}).smear_result === 'N') {
+      const sp = T('SPIRO').filter(function (x) { return x.study_id === sid; })[0];
+      if (!sp) R('SPIRO', '', 'V5', 'spirometry row missing', 'enter the result, or status not done, declined or contraindicated');
+      else if (sp.spiro_status === 'Y') {
+        const ms = blanks(sp, ['operator', 'calibrated_today', 'n_acceptable', 'fev1_fvc_pct', 'fev1_pct_pred', 'fvc_pct_pred', 'pattern', 'referred', 'entered_by']);
+        if (ms.length) R('SPIRO', sp._row, 'V5', 'spirometry fields blank', ms.join(', '));
+      }
+    }
+    // events: every event closed with its own fields complete
+    events.filter(function (x) { return x.study_id === sid; }).forEach(function (x) {
+      let ke = ['event_type', 'onset_date', 'detected_date', 'team_informed', 'serious', 'outcome', 'entered_by'];
+      if (x.event_type === 'E1') ke = ke.concat(['e1_risk_assessed', 'e1_psych_referral']);
+      if (x.event_type === 'E2') ke = ke.concat(['e2_ctcae', 'e2_hys_law']);
+      if (x.event_type === 'E3') ke.push('e3_procedure');
+      const me = blanks(x, ke);
+      if (me.length) R('EVENTS', x._row, '', 'event ' + (x.event_no || '') + ' fields blank', me.join(', '));
+      if (x.outcome === 'O') R('EVENTS', x._row, '', 'event ' + (x.event_no || '') + ' still ongoing', 'record the outcome at the end of follow-up: resolved, resolved with sequelae, or died');
+    });
+    if (!has(en.recorded_by)) R('END_STUDY', en._row, '', 'recorded by blank', '');
+  });
+  // the closing line: how many other queries are still open for each reviewed participant
+  reviewed.forEach(function (sid) {
+    const open = out.queries.filter(function (q) { return q[0] === sid && q[4].indexOf('End-of-study review') !== 0; });
+    if (open.length) Q(sid, 'END_STUDY', end[sid]._row, '', 'End-of-study review: ' + open.length + ' other open quer' + (open.length === 1 ? 'y' : 'ies'), 'resolve before the record is closed: ' + open.map(function (q) { return q[1] + (q[3] ? ' ' + q[3] : ''); }).filter(function (t, i, a) { return a.indexOf(t) === i; }).join(', '));
+  });
+  const byRow = {};
+  SCHEMA.forEach(function (t) { const m = byRow[t.tab] = {}; T(t.tab).forEach(function (r) { if (r._row) m[r._row] = r; }); });
+  out.queries.forEach(function (q) {
+    q[6] = queryField_(q[1], q[4], q[5]);
+    const rec = q[2] ? (byRow[q[1]] || {})[q[2]] : null;
+    q[7] = rec ? str_(rec.event_no || rec.screen_no || '') : '';
   });
   out.queries.sort(function (a, b) {
     const x = a[0] + '|' + a[1] + '|' + ('00000' + a[2]).slice(-5), y = b[0] + '|' + b[1] + '|' + ('00000' + b[2]).slice(-5);
@@ -857,4 +1205,15 @@ const APP_KEYS = {                     // how a row is identified for each tab
   LABS: ['study_id', 'visit'], VISITS: ['study_id', 'visit'], SPIRO: ['study_id'], PHQ_GAD: ['study_id', 'visit'],
   EVENTS: ['event_no'], END_STUDY: ['study_id'], QC_LOG: ['qc_no'], R_SCORES: ['study_id', 'read_no']
 };
+// The measurement nurse (role 'nurse') can see and write ONLY these tabs and ONLY these columns. null means every column.
+// The server enforces it on every pull and push; the phone merely hides what the server would refuse anyway.
+// To widen or narrow the role, change this list and publish; nothing else needs to change.
+const NURSE_SCOPE = {
+  S0_SCREEN: null,
+  S1_ENROL: ['study_id', 'enrol_date', 'att_start_date', 'age_years', 'sex', 'residence', 'education', 'smoking', 'alcohol', 'pack_years', 'htn', 'optout_questionnaires', 'optout_spirometry', 'entered_by'],
+  S2_BASELINE: ['study_id', 'exam_date', 'height_cm', 'weight_kg', 'waist_cm', 'muac_mm', 'examined_by'],
+  VISITS: ['study_id', 'visit', 'visit_date', 'weight_kg', 'waist_cm', 'muac_mm', 'entered_by']
+};
+const NURSE_VISITS = ['V3', 'V5'];                    // follow-up visits at which the nurse measures
+function nurseCol_(tab, key) { const s = NURSE_SCOPE[tab]; return s !== undefined && (s === null || s.indexOf(key) >= 0); }
 const APP_SERIAL = { S0_SCREEN: 'screen_no', EVENTS: 'event_no', QC_LOG: 'qc_no' };   // numbered by the server
