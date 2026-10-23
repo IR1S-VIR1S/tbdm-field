@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'a0f04cc2594d';                 // replaced by build.js with the build's hash
+const BUILD_ID = '56b36336601a';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -335,8 +335,9 @@ function nextId(tab) {
   const re = new RegExp('^' + CFG.ID_PREFIX + '(\\d+)$', 'i'), num = (v) => { const m = re.exec(s_(v)); return m && +m[1] >= 1 && +m[1] <= CFG.ID_MAX ? +m[1] : 0; };
   const enrolled = {}, used = {}, waiting = []; let top = 0;
   view('S1_ENROL').forEach((r) => { const n = num(r.study_id); if (n) { enrolled[n] = used[n] = true; top = Math.max(top, n); } });
-  view('S0_SCREEN').forEach((r) => { const n = num(r.study_id); if (n) { used[n] = true; top = Math.max(top, n); if (!enrolled[n] && r.enrolled === 'Y') waiting.push(n); } });
-  ((S.server && S.server.regnums) || []).forEach((p) => { const n = num(p[0]); if (n) { used[n] = true; top = Math.max(top, n); if (p[1] === 'E' && !enrolled[n] && waiting.indexOf(n) < 0) waiting.push(n); } });   // numbers the register has given out
+  const out = {};   // numbers whose screening line says not eligible or not enrolled: used up, never offered for enrolment
+  view('S0_SCREEN').forEach((r) => { const n = num(r.study_id); if (n) { used[n] = true; top = Math.max(top, n); if (r.eligible === 'N' || r.enrolled === 'N') out[n] = true; else if (!enrolled[n] && r.enrolled === 'Y') waiting.push(n); } });
+  ((S.server && S.server.regnums) || []).forEach((p) => { const n = num(p[0]); if (n) { used[n] = true; top = Math.max(top, n); if (p[1] === 'E' && !enrolled[n] && !out[n] && waiting.indexOf(n) < 0) waiting.push(n); } });   // numbers the register has given out
   if (tab === 'S1_ENROL' && waiting.length) return idOf_(Math.min.apply(null, waiting));
   if (T.practice) { for (let n = CFG.ID_MAX - 2; n >= 1; n--) if (!used[n]) return idOf_(n); return ''; }   // practice numbers count down from the top of the range
   return top >= CFG.ID_MAX ? '' : idOf_(top + 1);
