@@ -354,15 +354,15 @@ function home() {
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, 'Add a screening line')) : null,
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrol'), el('span', null, nextNo())) : null,
       isNurse() ? el('button', { class: 'tile primary', onclick: () => go('measure') }, el('b', null, 'Measurements'), el('span', null, 'Height, weight, waist, arm')) : null,
-      isNurse() ? null : el('button', { class: 'tile yellow', onclick: () => go('visits') }, el('b', null, 'Visit checklist'), el('span', null, 'What to order and do')),
-      isNurse() ? null : el('button', { class: 'tile', onclick: () => go('participants') }, el('b', null, 'Participants'), el('span', null, Object.keys(enrolledMap()).length + ' enrolled')),
-      role() === 'pi' && !T.practice ? el('button', { class: 'tile purple', onclick: () => go('linkpick') }, el('b', null, 'Link'), el('span', null, 'Phone, call, WhatsApp')) : null,
-      isNurse() ? null : el('button', { class: 'tile orange', onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
-      isNurse() ? null : el('button', { class: 'tile red', onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
+      isNurse() ? null : el('button', { class: 'tile guide', onclick: () => go('visits') }, el('b', null, 'Visit checklist'), el('span', null, 'What to order and do')),
+      isNurse() ? null : el('button', { class: 'tile people', onclick: () => go('participants') }, el('b', null, 'Participants'), el('span', null, Object.keys(enrolledMap()).length + ' enrolled')),
+      role() === 'pi' && !T.practice ? el('button', { class: 'tile conf', onclick: () => go('linkpick') }, el('b', null, 'Link'), el('span', null, 'Confidential · call, WhatsApp')) : null,
+      role() === 'pi' && !T.practice && navigator.onLine ? el('button', { class: 'tile conf', onclick: () => go('register') }, el('b', null, 'Link register'), el('span', null, 'Confidential · online only')) : null,
+      isNurse() ? null : el('button', { class: 'tile due ' + (dueN ? 'hot' : 'calm'), onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
+      isNurse() ? null : el('button', { class: 'tile queries ' + (out.queries.length ? 'hot' : 'calm'), onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
       el('button', { class: 'tile', onclick: () => go('screening') }, el('b', null, 'Screening log'), el('span', null, view('S0_SCREEN').length + ' screened')),
       role() === 'qc' || role() === 'pi' ? el('button', { class: 'tile', onclick: () => go('qclog') }, el('b', null, 'Verification log'), el('span', null, view('QC_LOG').length + ' checks')) : null,
-      role() === 'pi' && !T.practice && navigator.onLine ? el('button', { class: 'tile', onclick: () => go('register') }, el('b', null, 'Link register'), el('span', null, 'Assign or look up · online')) : null,
-      T.practice ? null : el('button', { class: 'tile yellow', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, el('b', null, 'Practice'), el('span', null, 'Learn with made-up patients')),
+      T.practice ? null : el('button', { class: 'tile guide', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, el('b', null, 'Practice'), el('span', null, 'Learn with made-up patients')),
       el('button', { class: 'tile', onclick: () => go('settings') }, el('b', null, 'Settings'), el('span', null, S.cfg.email || ''))),
     isNurse() ? null : el('h2', null, 'Safety'),
     isNurse() ? null : el('div', { class: 'card small' }, 'PHQ-9 item 9 above 0, or a liver result meeting the definition: act the same day (manual Part 4). The app and the e-mail alerts are only a backup.'));
@@ -400,11 +400,20 @@ async function regAssign() {
   st.busy = false;
   await regLoad();
 }
+function regList(L) {
+  const st = regState(), q = st.q.trim().toUpperCase(), rows = L ? L.rows : [];
+  const shown = q ? rows.filter((r) => [r.study_id, r.name, r.mrn, r.phone].some((v) => s_(v).toUpperCase().indexOf(q) >= 0)) : rows;
+  return el('div', { class: 'list', id: 'reglist' }, shown.length ? shown.map((r) => el('div', { class: 'row' }, el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r.study_id }) },
+    el('div', null, r.study_id),
+    el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.age && r.sex ? r.age + ' y, ' + r.sex : '', r.assigned_date].filter(Boolean).join(' · ')),
+    r.name || r.mrn ? el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : ''].filter(Boolean).join(' · ')) : null),
+    r.phone ? el('a', { class: 'tel', href: 'tel:' + r.phone.replace(/[^\d+]/g, '') }, r.phone) : null, el('span', { class: 'chev' })))
+    : el('div', { class: 'empty' }, L ? 'No numbers match.' : (st.loading ? 'Loading…' : '')));
+}
 function registerScreen() {
   const st = regState();
   if (st.list === null && !st.loading && !st.err && navigator.onLine) { st.loading = true; setTimeout(() => regLoad(), 0); }   // never load inside a render
-  const L = st.list, rows = L ? L.rows : [], q = st.q.trim().toUpperCase();
-  const shown = q ? rows.filter((r) => r.study_id.indexOf(q) >= 0) : rows;
+  const L = st.list;
   const seg = (opts, cur, set) => el('div', { class: 'seg' }, opts.map((o) => el('button', { type: 'button', class: cur === o[0] ? 'on' : '', onclick: () => { set(o[0]); render(); } }, o[1])));
   const spoiled = st.status === 'S';
   const off = !navigator.onLine;
@@ -433,15 +442,10 @@ function registerScreen() {
       el('input', { type: 'text', maxlength: '80', value: st.reason, oninput: (ev) => { st.reason = ev.target.value; } })) : null,
     el('button', { class: 'btn primary block', type: 'button', disabled: off || st.busy || !L, onclick: () => regAssign() }, st.busy ? 'Assigning…' : 'Assign number'),
     el('h2', null, 'Look up a number'),
-    el('input', { class: 'search', type: 'search', placeholder: 'Type a number, e.g. TBDM-012', autocomplete: 'off', value: st.q,
-      oninput: (ev) => { st.q = ev.target.value; render(); } }),
-    el('div', { class: 'list' }, shown.length ? shown.map((r) => el('div', { class: 'row' }, el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r.study_id }) },
-      el('div', null, r.study_id),
-      el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.age && r.sex ? r.age + ' y, ' + r.sex : '', r.assigned_date].filter(Boolean).join(' · ')),
-      r.name || r.mrn ? el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : ''].filter(Boolean).join(' · ')) : null),
-      r.phone ? el('a', { class: 'tel', href: 'tel:' + r.phone.replace(/[^\d+]/g, '') }, r.phone) : null, el('span', { class: 'chev' })))
-      : el('div', { class: 'empty' }, L ? 'No numbers match.' : (st.loading ? 'Loading…' : ''))))
-  ]);
+    el('input', { class: 'search', type: 'search', placeholder: 'Number, name, MRN or telephone', autocomplete: 'off', value: st.q,
+      oninput: (ev) => { st.q = ev.target.value; const old = $('#reglist'); if (old) old.replaceWith(regList(st.list)); } }),   // redraw only the list, so the keyboard stays open
+    regList(L)
+  )]);
 }
 
 // ---- confidential link: record number, telephone, address for ONE study number. Online only, never stored on the phone.
@@ -752,7 +756,7 @@ function participant(p) {
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
-    role() === 'pi' && !T.practice ? el('div', { class: 'list purple' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Link'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : null,
+    role() === 'pi' && !T.practice ? el('div', { class: 'list conf' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Link'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : null,
     visits,
     el('h2', null, 'Unscheduled and events'),
     el('div', { class: 'list' },
@@ -780,7 +784,7 @@ function measureList() {
 function linkPick() {
   if (role() !== 'pi' || T.practice) return topBar('Link').concat([el('main', null, el('div', { class: 'card' }, 'Link is for the PI only, and is not available in practice mode.'))]);
   const q = el('input', { class: 'search', type: 'search', placeholder: 'Search study number', autocomplete: 'off' });
-  const list = el('div', { class: 'list purple' });
+  const list = el('div', { class: 'list conf' });
   const fill = () => {
     const f = s_(q.value).toUpperCase();
     const rows = view('S1_ENROL').filter((r) => r.study_id && s_(r.study_id).toUpperCase().includes(f)).sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
