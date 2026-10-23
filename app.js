@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '05a49cda7241';                 // replaced by build.js with the build's hash
+const BUILD_ID = '40374178ecd5';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -356,8 +356,14 @@ function enrolTile() {
     el('span', null, w.length ? 'Waiting: ' + w[0] + (w.length > 1 ? ' and ' + (w.length - 1) + ' more' : '') : 'Number from the patient card'));
 }
 // Every patient carries a card with the study number. Typing it here opens whatever that person needs next, whatever the role.
+// One rule for every box that takes the number on the patient's card: "7", "07", "007", "TBDM7" and "tbdm 7" all become TBDM-007.
+// Anything else is returned tidied but unchanged, so the usual "not a valid study number" check still catches it.
+function normId(v) {
+  const t = s_(v).trim().toUpperCase().replace(/\s+/g, ''), m = new RegExp('^(?:' + CFG.ID_PREFIX.replace(/-$/, '') + '-?)?(\\d{1,3})$').exec(t);
+  return m ? idOf_(+m[1]) : t;
+}
 function findPatient(raw) {
-  const t = s_(raw).trim().toUpperCase().replace(/\s+/g, ''), sid = /^\d{1,3}$/.test(t) ? idOf_(+t) : t;     // "7" and "007" both mean TBDM-007
+  const sid = normId(raw);
   if (!idOk_(sid)) { toast('Not a study number. Type it as on the card, for example ' + idOf_(7)); return; }
   const e = find('S1_ENROL', { study_id: sid }), sc = view('S0_SCREEN').filter((r) => code_(r.study_id) === sid)[0];
   if (e) { go(isNurse() ? 'measurefor' : 'participant', { sid }); return; }
@@ -426,7 +432,7 @@ async function regAssign() {
   if (!navigator.onLine) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
   if (st.list && st.list.link && st.status !== 'S' && (!s_(st.name).trim() || !s_(st.mrn).trim() || !s_(st.phone).trim())) { st.err = 'Not assigned. The participant name, the record number and the telephone number are all required.'; render(); return; }
   st.pendingRid = st.pendingRid || rid();              // the same id on a retry, so a number is never assigned twice
-  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, study_id: /^\d{1,3}$/.test(s_(st.sid).trim()) ? idOf_(+s_(st.sid).trim()) : s_(st.sid).trim() };   // "7" means TBDM-007
+  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, study_id: normId(st.sid) };
   st.busy = true; st.err = ''; st.done = ''; render();
   try {
     const res = await api(body);
@@ -472,7 +478,7 @@ function registerScreen() {
     L && L.link ? el('p', { class: 'small muted' }, 'Only for a patient who has agreed and is not enrolled yet. Someone already enrolled is in the list above: do not give them a new number.') : null,
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Outcome'), seg(REG_STATUS_OPTS, st.status, (v) => { st.status = v; })),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, "Number on the patient's card"), el('div', { class: 'hint' }, 'Leave blank only if the patient has no card yet: the number shown above is then used.'),
-      el('input', { id: 'reg-sid', type: 'text', maxlength: '8', autocapitalize: 'characters', placeholder: idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); } })),
+      el('input', { id: 'reg-sid', type: 'text', maxlength: '8', autocapitalize: 'characters', placeholder: 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onchange: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, required'),
       el('input', { id: 'reg-name', type: 'text', maxlength: '60', value: st.name, oninput: (ev) => { st.name = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Record number (MRN), required'),
@@ -866,8 +872,11 @@ function due() {
 }
 // ---- query navigation: open the exact form, scroll to the field and flash it, with the query shown on top
 function fieldName(tab, k) { const d = defOf(tab), c = d && d.cols.filter((x) => x.key === k)[0]; return c ? c.label.split(' (')[0] : k; }
+// The enrolment has no screening line carrying its number: the fix is on the screening line, not on the enrolment.
+const NO_SCREEN_Q = /^No screening line/;
 function openQuery(q) {
   const tab = q[1], keys = APP_KEYS[tab], query = q[4] + (q[5] ? ': ' + q[5] : '');
+  if (NO_SCREEN_Q.test(q[4])) { go('screening'); toast('Open ' + (q[0] || 'the patient') + "'s screening line and enter " + (q[0] || 'the study number') + ' as its study number'); return; }
   if (!keys || !defOf(tab)) return q[0] ? go('participant', { sid: q[0] }) : go('screening');
   let key = null;
   if (tab === 'S0_SCREEN' || tab === 'EVENTS') key = q[7] ? { [APP_SERIAL[tab]]: q[7] } : null;
@@ -891,7 +900,8 @@ function queries() {
   order.sort();
   const qrow = (q) => el('button', { class: 'row qrow', onclick: () => openQuery(q) },
     el('div', { class: 'main' }, el('div', null, (NAMES[q[1]] || q[1]) + (q[3] ? ' · ' + q[3] : '')), el('div', { class: 'sub' }, q[4] + (q[5] ? ': ' + q[5] : '')),
-      q[6] ? el('div', { class: 'sub qfield' }, 'Opens at: ' + fieldName(q[1], q[6])) : null), el('span', { class: 'chev' }));
+      NO_SCREEN_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, "Opens at: Screening log, to add the number to the patient's line")
+        : q[6] ? el('div', { class: 'sub qfield' }, 'Opens at: ' + fieldName(q[1], q[6])) : null), el('span', { class: 'chev' }));
   const block = (g) => {
     const open = !!T.qopen[g], list = groups[g].slice().sort((a, b) => String(a[1] + a[3]).localeCompare(String(b[1] + b[3])));
     const forms = []; list.forEach((q) => { const f = NAMES[q[1]] || q[1]; if (forms.indexOf(f) < 0) forms.push(f); });
@@ -967,6 +977,7 @@ function notApplicable(tab, c, vals) {
   if (tab === 'S0_SCREEN') return c.key === 'not_enrolled_reason' && s_(vals.eligible) === 'N';   // no reason is needed for someone who is not eligible
   if (tab !== 'S1_ENROL') return false;
   if (c.key === 'dm_years') return s_(vals.dm_status) !== 'K';
+  if (c.key === 'dm_drugs') return s_(vals.dm_status) === '0';           // not diabetic: no diabetes drugs, so the choice is closed (saved as 0, none)
   if (c.key === 'pack_years') return s_(vals.smoking) === '0';
   return false;
 }
@@ -1082,6 +1093,10 @@ function fieldEl(c) {
   const set = (v, rerender) => {
     F.vals[c.key] = v; F.dirty = true;
     if (F.tab === 'R_SCORES' && c.key === 'cavity') F.vals.n_cavities = v === 'N' ? '0' : (v === 'Y' && F.vals.n_cavities === '0' ? '' : F.vals.n_cavities);
+    if (F.tab === 'S1_ENROL' && c.key === 'dm_status') {          // not diabetic: the drugs answer is 0 (none) and closed; it opens again if the status changes
+      if (v === '0') { F.vals.dm_drugs = '0'; F.autoDrugs = true; }
+      else if (F.autoDrugs) { F.vals.dm_drugs = ''; F.autoDrugs = false; }
+    }
     if (F.tab === 'S0_SCREEN') {                                  // smear negative fills the exclusion; any exclusion makes the candidate not eligible
       if (c.key === 'smear_grade') {
         if (v === 'N' && !s_(F.vals.excl_code)) { F.vals.excl_code = '8'; F.autoExcl = true; }
@@ -1122,7 +1137,7 @@ function fieldEl(c) {
     const seg = el('div', { class: 'seg' });
     const cur = () => s_(F.vals[c.key]);
     const paint = () => seg.querySelectorAll('button').forEach((b) => { const k = b.dataset.k, v = cur(); b.classList.toggle('on', k === '0' ? v === '0' : v.indexOf(k) >= 0); });
-    letters.concat([['0', 'none']]).forEach((l) => seg.append(el('button', { type: 'button', 'data-k': l[0], onclick: () => {
+    letters.concat([['0', 'none']]).forEach((l) => seg.append(el('button', { type: 'button', 'data-k': l[0], disabled: na, onclick: () => {
       let v = cur(); if (l[0] === '0') v = v === '0' ? '' : '0';
       else { v = v.replace('0', ''); v = v.indexOf(l[0]) >= 0 ? v.replace(l[0], '') : v + l[0]; v = letters.map((x) => x[0]).filter((x) => v.indexOf(x) >= 0).join(''); }
       set(v); paint(); } }, l[0], el('small', null, l[1]))));
@@ -1133,8 +1148,9 @@ function fieldEl(c) {
     const unitMissing = c.type === 'unitnum' && !s_(F.vals[c.unit]);
     const inp = el('input', { id: 'i-' + c.key, type, value: val, autocomplete: 'off', inputmode: isNum ? (c.type === 'int' || c.type === 'uniqueint' ? 'numeric' : 'decimal') : null,
       autocapitalize: ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 || BY_FIELDS.indexOf(c.key) >= 0 ? 'characters' : 'off',
-      maxlength: c.type === 'text' ? String(c.max) : null, disabled: unitMissing || na, placeholder: unitMissing ? 'choose the unit first' : na ? 'does not apply' : c.type === 'sidnew' || c.type === 'sid' ? 'TBDM-' : null,
-      oninput: (ev) => set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? ev.target.value.toUpperCase() : ev.target.value), onchange: (ev) => set(ev.target.value) });
+      maxlength: c.type === 'text' ? String(c.max) : null, disabled: unitMissing || na, placeholder: unitMissing ? 'choose the unit first' : na ? 'does not apply' : ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? 'e.g. 7 or ' + idOf_(7) : null,
+      oninput: (ev) => set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? ev.target.value.toUpperCase() : ev.target.value),
+      onchange: (ev) => { const v = ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? normId(ev.target.value) : ev.target.value; ev.target.value = v; set(v); } });
     if (F.tab === 'S1_ENROL' && c.key === 'regimen' && !F.ro) {      // one tap for the regimens the PI named; typing any other regimen still works
       const row = el('div', { class: 'seg quick', role: 'group', 'aria-label': c.label + ', quick choices' });
       const paint = () => row.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === s_(F.vals[c.key])));
@@ -1229,8 +1245,11 @@ function paintCalc() {
 async function saveForm() {
   const F = T.form, def = F.def, errs = [];
   def.cols.forEach((c) => {
+    if (['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 && s_(F.vals[c.key])) {        // a study number typed as 7 is saved as TBDM-007, even if the box was never left
+      F.vals[c.key] = normId(F.vals[c.key]); const box = $('#i-' + c.key); if (box) box.value = F.vals[c.key];
+    }
     const na = notApplicable(F.tab, c, F.vals);
-    if (na) { F.vals[c.key] = ''; return; }                 // faded fields that do not apply are always blank when saved
+    if (na) { F.vals[c.key] = c.key === 'dm_drugs' ? '0' : ''; return; }                 // faded fields that do not apply are blank when saved; the drugs of someone not diabetic are 0 (none)
     if (!visible(F.tab, c, null, F.vals)) { if (!(APP_KEYS[F.tab].indexOf(c.key) >= 0) && !F.existing) F.vals[c.key] = ''; return; }
     const m = fieldMsg(c); if (m) errs.push(c);
   });

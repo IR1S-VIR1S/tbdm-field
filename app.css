@@ -136,3 +136,4 @@ a.tel.big { color: var(--brand); font-weight: 700; text-decoration: none; margin
 
 .qgroup .qhead { font-size: 16px; } .qcount { background: #b3261e; color: #fff; border-radius: 999px; min-width: 26px; padding: 2px 8px; text-align: center; font-size: 13px; font-weight: 700; }
 .qgroup.open .qhead .chev::after { display: inline-block; transform: rotate(90deg); } .qbody { background: #faf6f5; border-top: 1px solid var(--line); } .qbody .qrow { padding-left: 26px; }
+.field.na .seg button { pointer-events: none; }

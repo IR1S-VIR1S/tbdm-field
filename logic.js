@@ -695,7 +695,7 @@ function computeDerived_(data, today) {
     if (r.enrolled === 'Y' && r.eligible === 'N') Q(r.study_id, 'S0_SCREEN', r._row, '', 'Enrolled although marked not eligible', '');
     if (r.eligible === 'N' && !r.excl_code) Q(r.study_id, 'S0_SCREEN', r._row, '', 'Not eligible but no exclusion code', '');
     if (r.eligible === 'Y' && r.enrolled === 'N' && !r.not_enrolled_reason) Q('', 'S0_SCREEN', r._row, '', 'Eligible and not enrolled, but no reason', '');
-    if (r.study_id && !enrol[r.study_id]) Q(r.study_id, 'S0_SCREEN', r._row, '', 'Study number not yet in S1_ENROL', '');
+    if (r.study_id && !enrol[r.study_id] && r.eligible !== 'N' && r.enrolled !== 'N') Q(r.study_id, 'S0_SCREEN', r._row, '', 'Study number not yet in S1_ENROL', '');   // not for someone correctly screened out or who declined: they are not meant to be enrolled
   });
   const destroyed = {};
   T('END_STUDY').forEach(function (r) { if (r.retention === 'D' && r.study_id) destroyed[r.study_id] = true; });
