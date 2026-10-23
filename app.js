@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '1a1d6dc8af63';                 // replaced by build.js with the build's hash
+const BUILD_ID = '430226396811';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -372,7 +372,7 @@ function home() {
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
 const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']];
-function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', name: '', mrn: '', phone: '', reason: '', pendingRid: null, q: '' }); }
+function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', name: '', mrn: '', phone: '', reason: '', guardian: '', address: '', pendingRid: null, q: '' }); }
 async function regLoad() {
   const st = regState();
   st.err = '';
@@ -391,13 +391,13 @@ async function regAssign() {
   if (!navigator.onLine) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
   if (st.list && st.list.link && st.status !== 'S' && (!s_(st.name).trim() || !s_(st.mrn).trim() || !s_(st.phone).trim())) { st.err = 'Not assigned. The participant name, the record number and the telephone number are all required.'; render(); return; }
   st.pendingRid = st.pendingRid || rid();              // the same id on a retry, so a number is never assigned twice
-  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone };
+  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address };
   st.busy = true; st.err = ''; st.done = ''; render();
   try {
     const res = await api(body);
     if (!res.ok) throw new Error(res.error || 'not assigned');
     st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id;
-    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.reason = ''; st.status = 'E';
+    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.reason = ''; st.status = 'E';
   } catch (e) { st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.'; }
   st.busy = false;
   await regLoad();
@@ -438,6 +438,10 @@ function registerScreen() {
       el('input', { id: 'reg-mrn', type: 'text', maxlength: '30', value: st.mrn, oninput: (ev) => { st.mrn = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Telephone, required, e.g. 03001234567'),
       el('input', { id: 'reg-phone', type: 'text', inputmode: 'tel', maxlength: '16', value: st.phone, oninput: (ev) => { st.phone = ev.target.value; } })),
+    spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Father or husband name'),
+      el('input', { id: 'reg-guardian', type: 'text', maxlength: '60', value: st.guardian, oninput: (ev) => { st.guardian = ev.target.value; } })),
+    spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Address'),
+      el('input', { id: 'reg-address', type: 'text', maxlength: '200', value: st.address, oninput: (ev) => { st.address = ev.target.value; } })),
     spoiled ? el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Reason the number is spoiled'),
       el('input', { type: 'text', maxlength: '80', value: st.reason, oninput: (ev) => { st.reason = ev.target.value; } })) : null,
     el('button', { class: 'btn primary block', type: 'button', disabled: off || st.busy || !L, onclick: () => regAssign() }, st.busy ? 'Assigning…' : 'Assign number'),

@@ -1,6 +1,6 @@
 // Offline cache for the app shell. Study data never pass through this file: requests to the
 // study server go straight to the network and are never cached.
-const CACHE = 'tbdm-1a1d6dc8af63';
+const CACHE = 'tbdm-430226396811';
 const FILES = ["./","index.html","app.js","app.css","logic.js","manifest.webmanifest","icon-192.png","icon-512.png","apple-touch-icon.png"];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
