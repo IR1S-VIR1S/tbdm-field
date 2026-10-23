@@ -179,7 +179,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) T.idle = setTimeout(lock, IDLE_LOCK_MS); }
-function lock() { KEY = null; S = null; T.form = null; T.reg = null; T.nav = []; T.pin = ''; clearTimeout(T.idle); render(); }
+function lock() { KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.nav = []; T.pin = ''; clearTimeout(T.idle); render(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -205,7 +205,7 @@ function render() {
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
   const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
-    queries: queries, attention: attention, films: films, settings: settings, screening: screening, qclog: qclog, register: registerScreen };
+    queries: queries, attention: attention, films: films, settings: settings, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
 }
@@ -384,11 +384,68 @@ function registerScreen() {
     el('h2', null, 'Look up a number'),
     el('input', { class: 'search', type: 'search', placeholder: 'Type a number, e.g. TBDM-012', autocomplete: 'off', value: st.q,
       oninput: (ev) => { st.q = ev.target.value; render(); } }),
-    el('div', { class: 'list' }, shown.length ? shown.map((r) => el('div', { class: 'row' }, el('div', { class: 'main' },
+    el('div', { class: 'list' }, shown.length ? shown.map((r) => el('button', { class: 'row', onclick: () => go('link', { sid: r.study_id }) }, el('div', { class: 'main' },
       el('div', null, r.study_id),
-      el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.age && r.sex ? r.age + ' y, ' + r.sex : '', r.assigned_date].filter(Boolean).join(' · ')) )))
+      el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.age && r.sex ? r.age + ' y, ' + r.sex : '', r.assigned_date].filter(Boolean).join(' · '))), el('span', { class: 'chev' })))
       : el('div', { class: 'empty' }, L ? 'No numbers match.' : (st.loading ? 'Loading…' : ''))))
   ]);
+}
+
+// ---- confidential link: record number, telephone, address for ONE study number. Online only, never stored on the phone.
+async function linkLoad(sid) {
+  const st = T.link = { sid: sid, data: null, err: '', msg: '', busy: true, edit: false };
+  render();
+  if (!navigator.onLine) { st.err = 'No internet connection. The confidential link works only online.'; st.busy = false; render(); return; }
+  try {
+    const res = await api({ op: 'link_get', token: S.cfg.token, study_id: sid });
+    if (!res.ok) throw new Error(res.error || 'could not load');
+    st.data = res; st.form = { mrn: res.mrn, phone: res.phone, address: res.address, note: res.note };
+    st.edit = !(res.mrn || res.phone || res.address || res.note);
+  } catch (e) { st.err = e.message; }
+  st.busy = false; render();
+}
+async function linkSave() {
+  const st = T.link;
+  if (!navigator.onLine) { st.err = 'No internet connection. Nothing was saved.'; render(); return; }
+  st.busy = true; st.err = ''; st.msg = ''; render();
+  try {
+    const res = await api(Object.assign({ op: 'link_set', token: S.cfg.token, study_id: st.sid }, st.form));
+    if (!res.ok) throw new Error(res.error || 'not saved');
+    st.msg = 'Saved.'; st.busy = false; st.edit = false;
+    st.data = Object.assign({}, st.data, st.form); render(); return;
+  } catch (e) { st.err = 'Not saved. ' + e.message; }
+  st.busy = false; render();
+}
+function waDigits(ph) {                                   // 0300... becomes 92300..., for WhatsApp
+  let d = s_(ph).replace(/\D/g, '');
+  if (d.indexOf('00') === 0) d = d.slice(2); else if (d.charAt(0) === '0') d = '92' + d.slice(1);
+  return d;
+}
+function linkScreen(p) {
+  const sid = p.sid;
+  if (!T.link || T.link.sid !== sid) { linkLoad(sid); }
+  const st = T.link || { busy: true }, off = !navigator.onLine, d = st.data, f = st.form || {};
+  const field = (k, lab, ml) => el('div', { class: 'field' }, el('label', { class: 'lab' }, lab),
+    el('input', { type: 'text', maxlength: String(ml), value: f[k] || '', inputmode: k === 'phone' ? 'tel' : 'text', oninput: (ev) => { f[k] = ev.target.value; } }));
+  const show = (lab, v) => el('div', { class: 'card' }, el('div', { class: 'muted small' }, lab), el('div', null, v || '–'));
+  const ph = d && d.phone;
+  return topBar(sid + ' · Link').concat([el('main', null,
+    el('div', { class: 'card small muted' }, 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged. No participant names are kept.'),
+    off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
+    st.err ? el('div', { class: 'card alert' }, st.err) : null,
+    st.msg ? el('div', { class: 'card' }, el('b', null, st.msg)) : null,
+    st.busy && !d ? el('div', { class: 'empty' }, 'Loading…') : null,
+    d && !st.edit ? [
+      ph ? el('div', { class: 'card' }, el('div', { class: 'muted small' }, 'Telephone'), el('b', null, ph),
+        el('div', { class: 'row2' },
+          el('a', { class: 'btn block', href: 'tel:' + ph.replace(/[^\d+]/g, '') }, 'Call'),
+          el('a', { class: 'btn block', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp'))) : show('Telephone', ''),
+      show('Record number (MRN)', d.mrn), show('Address', d.address), show('Note', d.note),
+      d.updated ? el('div', { class: 'small muted' }, 'Last changed ' + d.updated) : null,
+      el('button', { class: 'btn block', type: 'button', disabled: off, onclick: () => { st.edit = true; st.msg = ''; render(); } }, 'Edit')] : null,
+    d && st.edit ? [field('mrn', 'Record number (MRN)', 30), field('phone', 'Telephone, e.g. 03001234567', 16), field('address', 'Address', 200), field('note', 'Note', 200),
+      el('button', { class: 'btn primary block', type: 'button', disabled: off || st.busy, onclick: () => linkSave() }, st.busy ? 'Saving…' : 'Save')] : null
+  )]);
 }
 
 function participants() {
@@ -446,6 +503,7 @@ function participant(p) {
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
+    role() === 'pi' ? el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Link'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : null,
     visits,
     el('h2', null, 'Unscheduled and events'),
     el('div', { class: 'list' },
