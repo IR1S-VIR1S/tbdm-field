@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '430226396811';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'f6e152dfac6f';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -920,6 +920,28 @@ function resetPhone() {
 }
 
 // ------------------------------------------------------------------ the generic form
+// Fields that do not apply to this participant stay on the form, faded and not typeable:
+// years since diabetes diagnosis only when the diagnosis is known (K); pack-years never for a never-smoker.
+function notApplicable(tab, c, vals) {
+  if (tab === 'S0_SCREEN') return c.key === 'not_enrolled_reason' && s_(vals.eligible) === 'N';   // no reason is needed for someone who is not eligible
+  if (tab !== 'S1_ENROL') return false;
+  if (c.key === 'dm_years') return s_(vals.dm_status) !== 'K';
+  if (c.key === 'pack_years') return s_(vals.smoking) === '0';
+  return false;
+}
+// The screening outcome follows the answers. The workbook applies the same rule (TBDM_DataSystem.gs screenDerive_).
+function screenDerive(v) {
+  if (s_(v.smear_grade) === 'N' && !s_(v.excl_code)) v.excl_code = '8';   // sputum smear negative = exclusion 8
+  if (s_(v.excl_code)) { v.eligible = 'N'; v.enrolled = 'N'; v.not_enrolled_reason = ''; }
+}
+// Screening answers the rules decide: shown as text, not chosen. Age and sex copied from screening into enrolment are shown the same way.
+function screenLocked(F, c) {
+  if (F.tab !== 'S0_SCREEN') return false;
+  if (c.key === 'eligible') return s_(F.vals.excl_code) !== '';
+  if (c.key === 'enrolled') return s_(F.vals.eligible) === 'N';
+  if (c.key === 'excl_code') return !!F.autoExcl;
+  return false;
+}
 function visible(tab, c, v, vals) {
   if (c.pi && role() !== 'pi') return false;
   if (isNurse() && !nurseCol_(tab, c.key)) return false;
@@ -962,7 +984,8 @@ function formScreen(p) {
       Object.keys(p.preset || {}).forEach((k) => { vals[k] = p.preset[k]; });
       def.cols.forEach((c) => { if (BY_FIELDS.indexOf(c.key) >= 0) vals[c.key] = S.cfg.initials; });
     }
-    T.form = { tab, def, existing, vals, dirty: false, errs: {}, ro: readOnly(tab), fixedKeys: existing ? keys : keys.filter((k) => s_(p.key[k])) };
+    T.form = { tab, def, existing, vals, dirty: false, errs: {}, ro: readOnly(tab), fixedKeys: existing ? keys : keys.filter((k) => s_(p.key[k])),
+      carried: existing ? [] : (p.carried || []), autoExcl: tab === 'S0_SCREEN' && s_(vals.smear_grade) === 'N' && s_(vals.excl_code) === '8', autoNo: tab === 'S0_SCREEN' && s_(vals.excl_code) !== '' };
   }
   const F = T.form, ctxVisit = s_(F.vals.visit);
   const title = NAMES[tab] + (F.vals.study_id && tab !== 'S0_SCREEN' ? ' · ' + F.vals.study_id : '') + (ctxVisit ? ' ' + ctxVisit : '');
@@ -1007,22 +1030,33 @@ function fieldMsg(c) {
 }
 function fieldEl(c) {
   const F = T.form, fixed = F.fixedKeys.indexOf(c.key) >= 0 || F.ro;
-  const box = el('div', { class: 'field', id: 'f-' + c.key });
+  const na = notApplicable(F.tab, c, F.vals);
+  const box = el('div', { class: 'field' + (na ? ' na' : ''), id: 'f-' + c.key, 'aria-disabled': na ? 'true' : null });
   const msg = el('div', { class: 'msg', role: 'alert' });
   const set = (v, rerender) => {
     F.vals[c.key] = v; F.dirty = true;
     if (F.tab === 'R_SCORES' && c.key === 'cavity') F.vals.n_cavities = v === 'N' ? '0' : (v === 'Y' && F.vals.n_cavities === '0' ? '' : F.vals.n_cavities);
+    if (F.tab === 'S0_SCREEN') {                                  // smear negative fills the exclusion; any exclusion makes the candidate not eligible
+      if (c.key === 'smear_grade') {
+        if (v === 'N' && !s_(F.vals.excl_code)) { F.vals.excl_code = '8'; F.autoExcl = true; }
+        else if (v !== 'N' && F.autoExcl) { F.vals.excl_code = ''; F.autoExcl = false; }
+      }
+      screenDerive(F.vals);
+      if (s_(F.vals.excl_code)) F.autoNo = true;
+      else if (F.autoNo) { F.vals.eligible = ''; F.vals.enrolled = ''; F.autoNo = false; }   // the exclusion was removed: the outcome is open again
+    }
     const m = fieldMsg(c); msg.textContent = m ? c.label.split(',')[0] + ' ' + m : ''; box.classList.toggle('err', !!m);
     if (rerender) { const y = window.scrollY; T.refill(); window.scrollTo(0, y); }
     paintCalc();
   };
   box.append(el('label', { class: 'lab', for: 'i-' + c.key }, c.label), ...[itemWording(c.key)].filter(Boolean), el('div', { class: 'hint' }, helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
   const val = s_(F.vals[c.key]);
-  if (fixed && (APP_KEYS[F.tab].indexOf(c.key) >= 0 || F.ro)) {
-    box.append(el('div', null, el('b', null, val || '–')));
+  const carried = (F.carried || []).indexOf(c.key) >= 0, locked = carried || screenLocked(F, c);
+  if (locked || (fixed && (APP_KEYS[F.tab].indexOf(c.key) >= 0 || F.ro))) {
+    box.append(el('div', null, el('b', null, val || '–')), ...(locked ? [el('div', { class: 'hint' }, carried ? 'copied from the screening line' : 'decided by the screening answers')] : []));
     return box;
   }
-  const relayout = ['visit', 'declined', 'event_type', 'phq9', 'hba1c_unit', 'glucose_unit', 'lipid_unit', 'smear_result', 'eligible', 'enrolled', 'e2_rucam_type'].indexOf(c.key) >= 0 || (F.tab === 'R_SCORES' && c.key === 'cavity');
+  const relayout = ['visit', 'declined', 'event_type', 'phq9', 'hba1c_unit', 'glucose_unit', 'lipid_unit', 'smear_result', 'eligible', 'enrolled', 'e2_rucam_type', 'dm_status', 'smoking', 'smear_grade', 'excl_code'].indexOf(c.key) >= 0 || (F.tab === 'R_SCORES' && c.key === 'cavity');
   if (c.codes || c.type === 'pairlist') {
     const opts = c.codes || c.values.map((x) => [x, '']);
     if (opts.length <= 7) {
@@ -1053,7 +1087,7 @@ function fieldEl(c) {
     const unitMissing = c.type === 'unitnum' && !s_(F.vals[c.unit]);
     const inp = el('input', { id: 'i-' + c.key, type, value: val, autocomplete: 'off', inputmode: isNum ? (c.type === 'int' || c.type === 'uniqueint' ? 'numeric' : 'decimal') : null,
       autocapitalize: ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 || BY_FIELDS.indexOf(c.key) >= 0 ? 'characters' : 'off',
-      maxlength: c.type === 'text' ? String(c.max) : null, disabled: unitMissing, placeholder: unitMissing ? 'choose the unit first' : c.type === 'sidnew' || c.type === 'sid' ? 'TBDM-' : null,
+      maxlength: c.type === 'text' ? String(c.max) : null, disabled: unitMissing || na, placeholder: unitMissing ? 'choose the unit first' : na ? 'does not apply' : c.type === 'sidnew' || c.type === 'sid' ? 'TBDM-' : null,
       oninput: (ev) => set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? ev.target.value.toUpperCase() : ev.target.value), onchange: (ev) => set(ev.target.value) });
     if (F.tab === 'S1_ENROL' && c.key === 'regimen' && !F.ro) {      // one tap for the regimens the PI named; typing any other regimen still works
       const row = el('div', { class: 'seg quick', role: 'group', 'aria-label': c.label + ', quick choices' });
@@ -1149,6 +1183,8 @@ function paintCalc() {
 async function saveForm() {
   const F = T.form, def = F.def, errs = [];
   def.cols.forEach((c) => {
+    const na = notApplicable(F.tab, c, F.vals);
+    if (na) { F.vals[c.key] = ''; return; }                 // faded fields that do not apply are always blank when saved
     if (!visible(F.tab, c, null, F.vals)) { if (!(APP_KEYS[F.tab].indexOf(c.key) >= 0) && !F.existing) F.vals[c.key] = ''; return; }
     const m = fieldMsg(c); if (m) errs.push(c);
   });
@@ -1189,7 +1225,7 @@ async function saveForm() {
   }
   if (F.tab === 'VISITS' && hepAny_(F.vals) === true) return modal('Liver symptoms reported', [el('p', null, 'Make sure liver tests are drawn today, whether or not they were due.')], [['Understood', after]], false);
   if (F.tab === 'S0_SCREEN' && F.vals.enrolled === 'Y' && F.vals.study_id && !enrolledMap()[s_(F.vals.study_id).toUpperCase()]) {
-    return modal('Enrol now?', [el('p', null, F.vals.study_id + ' is not enrolled yet. Enter the enrolment record next.')], [['Later', after], ['Enrol', () => { T.nav.pop(); go('form', { tab: 'S1_ENROL', key: {}, preset: { study_id: F.vals.study_id } }); if (navigator.onLine) sync(); }, 'primary']]);
+    return modal('Enrol now?', [el('p', null, F.vals.study_id + ' is not enrolled yet. Enter the enrolment record next.')], [['Later', after], ['Enrol', () => { T.nav.pop(); go('form', { tab: 'S1_ENROL', key: {}, preset: { study_id: F.vals.study_id, age_years: F.vals.age, sex: F.vals.sex }, carried: ['age_years', 'sex'] }); if (navigator.onLine) sync(); }, 'primary']]);
   }
   after();
 }
