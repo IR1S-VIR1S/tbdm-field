@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '6df872496a3c';                 // replaced by build.js with the build's hash
+const BUILD_ID = '05a49cda7241';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1026,7 +1026,7 @@ function formScreen(p) {
       def.cols.forEach((c) => { if (BY_FIELDS.indexOf(c.key) >= 0) vals[c.key] = S.cfg.initials; });
     }
     T.form = { tab, def, existing, vals, dirty: false, errs: {}, ro: readOnly(tab), fixedKeys: existing ? keys : keys.filter((k) => s_(p.key[k])),
-      carried: existing ? [] : (p.carried || []), autoExcl: tab === 'S0_SCREEN' && s_(vals.smear_grade) === 'N' && s_(vals.excl_code) === '8', autoNo: tab === 'S0_SCREEN' && s_(vals.excl_code) !== '' };
+      carried: existing ? [] : (p.carried || []), numberGiven: !existing && !!(p.preset && s_(p.preset.study_id)), autoExcl: tab === 'S0_SCREEN' && s_(vals.smear_grade) === 'N' && s_(vals.excl_code) === '8', autoNo: tab === 'S0_SCREEN' && s_(vals.excl_code) !== '' };
   }
   const F = T.form, ctxVisit = s_(F.vals.visit);
   const title = NAMES[tab] + (F.vals.study_id && tab !== 'S0_SCREEN' ? ' · ' + F.vals.study_id : '') + (ctxVisit ? ' ' + ctxVisit : '');
@@ -1067,6 +1067,11 @@ function fieldMsg(c) {
   const F = T.form, v = F.vals[c.key];
   let m = validateValue_(c, v, F.vals, ctx());
   if (!m && c.type === 'sidnew' && F.tab === 'S1_ENROL' && !F.existing && s_(v) && enrolledMap()[s_(v).toUpperCase()]) m = 'is already enrolled';
+  if (!m && c.type === 'sidnew' && F.tab === 'S1_ENROL' && !F.existing && s_(v)) {         // screened out or not enrolled: stop here, so nothing is queued for the workbook to refuse
+    const sc = view('S0_SCREEN').filter((r) => code_(r.study_id) === code_(v))[0];
+    if (sc && sc.eligible === 'N') { const x = EXCL.filter((e) => e[0] === s_(sc.excl_code))[0]; m = 'was screened as not eligible' + (x ? ' (' + x[1] + ')' : '') + ', so it cannot be enrolled'; }
+    else if (sc && sc.enrolled === 'N') m = 'was screened but not enrolled, so it cannot be enrolled';
+  }
   return m;
 }
 function fieldEl(c) {
@@ -1148,7 +1153,7 @@ function fieldEl(c) {
     if (type === 'date' || type === 'time') {
       box.append(el('div', { class: 'inline' }, inp, el('button', { type: 'button', class: 'now', onclick: () => { inp.value = type === 'date' ? todayIso() : nowHm(); set(inp.value); } }, type === 'date' ? 'Today' : 'Now')));
     } else box.append(inp);
-    if (c.type === 'sidnew' && !F.ro && !fixed && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN')) {      // pick the next number instead of typing it
+    if (c.type === 'sidnew' && !F.ro && !fixed && !F.numberGiven && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN')) {      // no suggestion once the number has come from the card
       const nid = nextId(F.tab);
       inp.readOnly = false; inp.placeholder = "type the number on the patient's card";      // the card is the source of the number; the suggestion below is only for a patient with no card yet
       box.append(el('button', { type: 'button', id: 'nextid', class: 'btn block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'No card yet? Next unused number: ' + nid : 'No numbers left'));
