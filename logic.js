@@ -140,8 +140,8 @@ const SCHEMA = [
     col('smear_grade', 'Sputum smear grade at diagnosis', 'list', { codes: SMEAR.slice(1) }),
     col('genexpert', 'GeneXpert', 'list', { codes: [['D', 'detected'], ['N', 'not detected'], ['X', 'not done']] }),
     col('rif_res', 'Rifampicin resistance', 'list', { codes: [['D', 'detected'], ['N', 'not detected'], ['I', 'indeterminate'], ['X', 'not done']] }),
-    col('optout_questionnaires', 'Questionnaires on the consent form (Study 4)', 'list', { codes: CONSENT }),
-    col('optout_spirometry', 'Spirometry on the consent form (Study 5)', 'list', { codes: CONSENT }),
+    col('optout_questionnaires', 'Depression and anxiety questionnaires on the consent form', 'list', { codes: CONSENT }),
+    col('optout_spirometry', 'Lung function (spirometry) on the consent form', 'list', { codes: CONSENT }),
     col('entered_by', 'Entered by (initials)', 'text', { max: 10 })] },
 
   { tab: 'S2_BASELINE', kind: 'one', rows: 400, title: 'Visit 1: baseline examination, anthropometry and TBscore items', cols: [
