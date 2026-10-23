@@ -39,8 +39,8 @@ h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: v
 /* urgency: calm tint at zero, solid when something needs doing */
 .tile.queries.calm { background: #fdecea; border-color: #f1b7b1; color: #8c1d18; } .tile.queries.calm span { color: #a8504a; }
 .tile.queries.hot { background: #b3261e; border-color: #b3261e; color: #fff; box-shadow: 0 2px 8px rgba(179,38,30,.35); } .tile.queries.hot span { color: #fbd9d6; }
-.tile.due.calm { background: #fdf0e3; border-color: #f0c79b; color: #8a4a0b; } .tile.due.calm span { color: #a8703a; }
-.tile.due.hot { background: #c2570c; border-color: #c2570c; color: #fff; box-shadow: 0 2px 8px rgba(194,87,12,.35); } .tile.due.hot span { color: #fde3cc; }
+.tile.due.calm { background: #fdf0e3; border-color: #f0c79b; color: #8a4a0b; } .tile.due.calm span { color: #8a5a24; }
+.tile.due.hot { background: #ad4c0a; border-color: #ad4c0a; color: #fff; box-shadow: 0 2px 8px rgba(173,76,10,.35); } .tile.due.hot span { color: #fff0e2; }
 /* confidential: deep indigo, PI only */
 .tile.conf { background: #3b2a6b; border-color: #3b2a6b; color: #fff; box-shadow: 0 2px 8px rgba(59,42,107,.35); } .tile.conf span { color: #d8cff0; }
 .list.conf { background: #3b2a6b; border-color: #3b2a6b; } .list.conf .row { color: #fff; border-top-color: #54428a; } .list.conf .row .sub { color: #d8cff0; } .list.conf .chev::after { color: #fff; }
