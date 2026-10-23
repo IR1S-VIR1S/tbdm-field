@@ -403,7 +403,7 @@ async function regAssign() {
 }
 function regList(L) {
   const st = regState(), q = st.q.trim().toUpperCase(), rows = L ? L.rows : [];
-  const dig = (v) => s_(v).replace(/\D/g, '').replace(/^(92|0)/, ''), qd = dig(q);      // 0300 123, +92 300 123 and 300123 all find the same telephone
+  const dig = (v) => s_(v).replace(/\D/g, '').replace(/^(92|0)/, ''), qd = /^[\d\s+\-()]+$/.test(q) ? dig(q) : '';      // only a search made of digits is compared with telephones, so TBDM-001 does not match every number containing 01      // 0300 123, +92 300 123 and 300123 all find the same telephone
   const shown = q ? rows.filter((r) => [r.study_id, r.name, r.mrn].some((v) => s_(v).toUpperCase().indexOf(q) >= 0) || (qd.length >= 3 && dig(r.phone).indexOf(qd) >= 0) || s_(r.phone).replace(/\s/g, '').indexOf(q.replace(/\s/g, '')) >= 0) : rows;
   return el('div', { class: 'list', id: 'reglist' }, shown.length ? shown.map((r) => el('div', { class: 'row' }, el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r.study_id }) },
     el('div', null, r.study_id),
