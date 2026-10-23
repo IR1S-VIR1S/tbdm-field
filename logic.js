@@ -720,7 +720,8 @@ function computeDerived_(data, today) {
     const top = Math.max.apply(null, used);
     for (let k = 1; k < top; k++) {
       const sid = idOf_(k);
-      if (!enrol[sid] && !destroyed[sid]) Q(sid, 'S1_ENROL', '', '', 'Study number skipped', 'explain the gap in the paper linking log');
+      if (!enrol[sid] && !destroyed[sid] && !screenIds[sid])   // a number used on a screening line (even screened out) is accounted for
+        Q(sid, 'S1_ENROL', '', '', 'Study number skipped', 'explain the gap in the paper linking log');
     }
   }
   T('VISITS').forEach(function (r) {
