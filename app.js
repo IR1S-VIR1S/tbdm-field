@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '40374178ecd5';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'a2020bfdff73';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -379,7 +379,7 @@ function findPatient(raw) {
 function findBox() {
   return el('div', { class: 'card find' }, el('label', { class: 'lab', for: 'find' }, 'Patient card number'),
     el('div', { class: 'inline' },
-      el('input', { id: 'find', type: 'text', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7', onkeydown: (ev) => { if (ev.key === 'Enter') findPatient(ev.target.value); } }),
+      el('input', { id: 'find', type: 'text', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7', onblur: (ev) => { ev.target.value = normId(ev.target.value); }, onkeydown: (ev) => { if (ev.key === 'Enter') findPatient(ev.target.value); } }),
       el('button', { class: 'btn primary', type: 'button', id: 'findgo', onclick: () => findPatient($('#find').value) }, 'Open')));
 }
 function home() {
@@ -478,7 +478,7 @@ function registerScreen() {
     L && L.link ? el('p', { class: 'small muted' }, 'Only for a patient who has agreed and is not enrolled yet. Someone already enrolled is in the list above: do not give them a new number.') : null,
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Outcome'), seg(REG_STATUS_OPTS, st.status, (v) => { st.status = v; })),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, "Number on the patient's card"), el('div', { class: 'hint' }, 'Leave blank only if the patient has no card yet: the number shown above is then used.'),
-      el('input', { id: 'reg-sid', type: 'text', maxlength: '8', autocapitalize: 'characters', placeholder: 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onchange: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
+      el('input', { id: 'reg-sid', type: 'text', maxlength: '8', autocapitalize: 'characters', placeholder: 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onblur: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; }, onchange: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, required'),
       el('input', { id: 'reg-name', type: 'text', maxlength: '60', value: st.name, oninput: (ev) => { st.name = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Record number (MRN), required'),
@@ -873,10 +873,11 @@ function due() {
 // ---- query navigation: open the exact form, scroll to the field and flash it, with the query shown on top
 function fieldName(tab, k) { const d = defOf(tab), c = d && d.cols.filter((x) => x.key === k)[0]; return c ? c.label.split(' (')[0] : k; }
 // The enrolment has no screening line carrying its number: the fix is on the screening line, not on the enrolment.
-const NO_SCREEN_Q = /^No screening line/;
+const NO_SCREEN_Q = /^No screening line/, WAIT_ENROL_Q = /not yet enrolled|not yet in S1_ENROL/;   // the second wording is the older one, still on the workbook until its script is updated
 function openQuery(q) {
   const tab = q[1], keys = APP_KEYS[tab], query = q[4] + (q[5] ? ': ' + q[5] : '');
   if (NO_SCREEN_Q.test(q[4])) { go('screening'); toast('Open ' + (q[0] || 'the patient') + "'s screening line and enter " + (q[0] || 'the study number') + ' as its study number'); return; }
+  if (WAIT_ENROL_Q.test(q[4]) && q[0]) { findPatient(q[0]); return; }   // screened and waiting: straight to the enrolment prompt
   if (!keys || !defOf(tab)) return q[0] ? go('participant', { sid: q[0] }) : go('screening');
   let key = null;
   if (tab === 'S0_SCREEN' || tab === 'EVENTS') key = q[7] ? { [APP_SERIAL[tab]]: q[7] } : null;
@@ -900,7 +901,8 @@ function queries() {
   order.sort();
   const qrow = (q) => el('button', { class: 'row qrow', onclick: () => openQuery(q) },
     el('div', { class: 'main' }, el('div', null, (NAMES[q[1]] || q[1]) + (q[3] ? ' · ' + q[3] : '')), el('div', { class: 'sub' }, q[4] + (q[5] ? ': ' + q[5] : '')),
-      NO_SCREEN_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, "Opens at: Screening log, to add the number to the patient's line")
+      WAIT_ENROL_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, 'Opens at: Enrolment')
+        : NO_SCREEN_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, "Opens at: Screening log, to add the number to the patient's line")
         : q[6] ? el('div', { class: 'sub qfield' }, 'Opens at: ' + fieldName(q[1], q[6])) : null), el('span', { class: 'chev' }));
   const block = (g) => {
     const open = !!T.qopen[g], list = groups[g].slice().sort((a, b) => String(a[1] + a[3]).localeCompare(String(b[1] + b[3])));
@@ -1090,6 +1092,13 @@ function fieldEl(c) {
   const na = notApplicable(F.tab, c, F.vals);
   const box = el('div', { class: 'field' + (na ? ' na' : ''), id: 'f-' + c.key, 'aria-disabled': na ? 'true' : null });
   const msg = el('div', { class: 'msg', role: 'alert' });
+  const carryFromScreening = () => { // number settled in the box: age and sex come from the screening line, however the form was opened
+    if (F.tab !== 'S1_ENROL' || c.key !== 'study_id' || F.existing) return;
+    const v = s_(F.vals.study_id), sc = idOk_(v) ? view('S0_SCREEN').filter((r) => code_(r.study_id) === v)[0] : null;
+    F.carried = F.carried || [];
+    if (sc) { F.vals.age_years = sc.age; F.vals.sex = sc.sex; ['age_years', 'sex'].forEach((k) => { if (F.carried.indexOf(k) < 0) F.carried.push(k); }); T.refill(); }
+    else if (F.carried.length) { F.carried = []; F.vals.age_years = ''; F.vals.sex = ''; T.refill(); }
+  };
   const set = (v, rerender) => {
     F.vals[c.key] = v; F.dirty = true;
     if (F.tab === 'R_SCORES' && c.key === 'cavity') F.vals.n_cavities = v === 'N' ? '0' : (v === 'Y' && F.vals.n_cavities === '0' ? '' : F.vals.n_cavities);
@@ -1149,8 +1158,9 @@ function fieldEl(c) {
     const inp = el('input', { id: 'i-' + c.key, type, value: val, autocomplete: 'off', inputmode: isNum ? (c.type === 'int' || c.type === 'uniqueint' ? 'numeric' : 'decimal') : null,
       autocapitalize: ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 || BY_FIELDS.indexOf(c.key) >= 0 ? 'characters' : 'off',
       maxlength: c.type === 'text' ? String(c.max) : null, disabled: unitMissing || na, placeholder: unitMissing ? 'choose the unit first' : na ? 'does not apply' : ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? 'e.g. 7 or ' + idOf_(7) : null,
-      oninput: (ev) => set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? ev.target.value.toUpperCase() : ev.target.value),
-      onchange: (ev) => { const v = ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? normId(ev.target.value) : ev.target.value; ev.target.value = v; set(v); } });
+      oninput: (ev) => set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? normId(ev.target.value) : ev.target.value),   // checked as the full number while typing; the box itself is tidied when you leave it
+      onchange: (ev) => { const v = ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? normId(ev.target.value) : ev.target.value; ev.target.value = v; set(v); carryFromScreening(); },
+      onblur: (ev) => { if (['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0) { const v = normId(ev.target.value); if (v !== ev.target.value) { ev.target.value = v; set(v); } carryFromScreening(); } } });
     if (F.tab === 'S1_ENROL' && c.key === 'regimen' && !F.ro) {      // one tap for the regimens the PI named; typing any other regimen still works
       const row = el('div', { class: 'seg quick', role: 'group', 'aria-label': c.label + ', quick choices' });
       const paint = () => row.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === s_(F.vals[c.key])));

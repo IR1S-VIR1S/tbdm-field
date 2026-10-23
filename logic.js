@@ -552,7 +552,7 @@ const QUERY_FIELD = [
   [/Visit 5 is not recorded as attended/, 'attended'], [/^Died: record/, 'outcome'], [/Withdrawn but no E4/, 'event_type'],
   [/Liver symptoms recorded but no liver test/, 'alt'], [/No laboratory row for this visit/, 'sample_date'],
   [/^Reader 1 cavity count/, 'r1_ncav'], [/^Reader 2 cavity count/, 'r2_ncav'],
-  [/^Row without a study number|^Enrolled but no study number|^No screening line|^Study number/, 'study_id'], [/^Enrolled although/, 'eligible'], [/exclusion code/, 'excl_code'],
+  [/^Row without a study number|^Enrolled but no study number|^No screening line|^Study number|^Screened eligible/, 'study_id'], [/^Enrolled although/, 'eligible'], [/exclusion code/, 'excl_code'],
   [/not enrolled, but no reason/, 'not_enrolled_reason'], [/^Age differs/, 'age_years'], [/^Sex differs/, 'sex'], [/^Smear grade differs/, 'smear_grade'],
   [/Date ATT started missing/, 'att_start_date'], [/Enrolled more than 7 days/, 'enrol_date'], [/Diabetes status|New diabetes|Not diabetic but baseline|fasting glucose in the diabetic/, 'dm_status'],
   [/duration or drugs missing/, 'dm_years'], [/diabetes drugs recorded/, 'dm_drugs'], [/pack-years recorded/, 'pack_years'],
@@ -695,7 +695,7 @@ function computeDerived_(data, today) {
     if (r.enrolled === 'Y' && r.eligible === 'N') Q(r.study_id, 'S0_SCREEN', r._row, '', 'Enrolled although marked not eligible', '');
     if (r.eligible === 'N' && !r.excl_code) Q(r.study_id, 'S0_SCREEN', r._row, '', 'Not eligible but no exclusion code', '');
     if (r.eligible === 'Y' && r.enrolled === 'N' && !r.not_enrolled_reason) Q('', 'S0_SCREEN', r._row, '', 'Eligible and not enrolled, but no reason', '');
-    if (r.study_id && !enrol[r.study_id] && r.eligible !== 'N' && r.enrolled !== 'N') Q(r.study_id, 'S0_SCREEN', r._row, '', 'Study number not yet in S1_ENROL', '');   // not for someone correctly screened out or who declined: they are not meant to be enrolled
+    if (r.study_id && !enrol[r.study_id] && r.eligible !== 'N' && r.enrolled !== 'N') Q(r.study_id, 'S0_SCREEN', r._row, '', 'Screened eligible and agreed, not yet enrolled', '');   // not for someone correctly screened out or who declined: they are not meant to be enrolled
   });
   const destroyed = {};
   T('END_STUDY').forEach(function (r) { if (r.retention === 'D' && r.study_id) destroyed[r.study_id] = true; });
