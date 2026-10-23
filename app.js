@@ -4,6 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
+const BUILD_ID = '1a1d6dc8af63';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -899,7 +900,7 @@ function settings() {
   const pending = S.outbox.length;
   return topBar('Settings').concat([el('main', null,
     el('div', { class: 'list' }, [['Account', S.cfg.email], ['Role', S.cfg.role], ['Initials', S.cfg.initials], ['Server', (S.cfg.api || '').replace(/^https:\/\/([^/]+).*$/, '$1')],
-      ['App version', APP_VERSION + ' (rules v' + CFG.VERSION + ')'], ['Last update', S.lastSync ? new Date(S.lastSync).toLocaleString('en-GB') : 'never'], ['Entries on this phone not yet in the workbook', String(pending)]]
+      ['App version', APP_VERSION + ' · build ' + (BUILD_ID.indexOf('__') === 0 ? 'dev' : BUILD_ID) + ' (rules v' + CFG.VERSION + ')'], ['Last update', S.lastSync ? new Date(S.lastSync).toLocaleString('en-GB') : 'never'], ['Entries on this phone not yet in the workbook', String(pending)]]
       .map((r) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', { class: 'sub' }, r[0]), el('div', null, r[1] || '–'))))),
     el('button', { class: 'btn primary block', onclick: () => sync() }, 'Sync now'), el('p'),
     role() !== 'dots' ? el('button', { class: 'btn block', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, 'Practice mode (training)') : null, el('p'),
