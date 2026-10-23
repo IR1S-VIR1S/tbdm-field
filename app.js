@@ -203,6 +203,7 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('online', () => { paintSync(); sync(); });
 window.addEventListener('offline', paintSync);
+['online', 'offline'].forEach((ev) => window.addEventListener(ev, () => { if (KEY && cur().name === 'home') render(); }));   // online-only tiles appear and disappear
 setInterval(() => { if (KEY && navigator.onLine && !T.syncing && S.outbox.some((c) => c.status === 'pending')) sync(); }, 120000);
 
 // ------------------------------------------------------------------ navigation
@@ -221,7 +222,7 @@ function render() {
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
   const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
-    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, visits: visitsScreen, visitguide: visitGuideScreen };
+    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
 }
@@ -327,6 +328,18 @@ function lockScreen() {
 function role() { return S.cfg.role || 'data'; }
 const canData = () => role() === 'data' || role() === 'pi' || role() === 'nurse';
 const isNurse = () => role() === 'nurse';
+// The next study number, from this phone's enrolments and screening lines (including ones not yet sent).
+// Enrolment first offers a number already given on a screening line (enrolled = Y) that has no enrolment record yet.
+function nextId(tab) {
+  const re = new RegExp('^' + CFG.ID_PREFIX + '(\\d+)$', 'i'), num = (v) => { const m = re.exec(s_(v)); return m && +m[1] >= 1 && +m[1] <= CFG.ID_MAX ? +m[1] : 0; };
+  const enrolled = {}, used = {}, waiting = []; let top = 0;
+  view('S1_ENROL').forEach((r) => { const n = num(r.study_id); if (n) { enrolled[n] = used[n] = true; top = Math.max(top, n); } });
+  view('S0_SCREEN').forEach((r) => { const n = num(r.study_id); if (n) { used[n] = true; top = Math.max(top, n); if (!enrolled[n] && r.enrolled === 'Y') waiting.push(n); } });
+  if (tab === 'S1_ENROL' && waiting.length) return idOf_(Math.min.apply(null, waiting));
+  if (T.practice) { for (let n = CFG.ID_MAX - 2; n >= 1; n--) if (!used[n]) return idOf_(n); return ''; }   // practice numbers count down from the top of the range
+  return top >= CFG.ID_MAX ? '' : idOf_(top + 1);
+}
+function nextNo() { const n = nextId('S1_ENROL'); return n ? 'Next: ' + n : 'No numbers left'; }
 function home() {
   if (role() === 'dots') return registerScreen();
   if (!S.server) return topBar('TBDM Field').concat([el('main', null, el('div', { class: 'card' }, navigator.onLine ? 'Fetching the study data…' : 'Connect to the internet once to fetch the study data.'))]);
@@ -339,16 +352,17 @@ function home() {
     waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null,
     el('div', { class: 'tiles' },
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, 'Add a screening line')) : null,
-      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrol'), el('span', null, 'New study number')) : null,
+      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrol'), el('span', null, nextNo())) : null,
       isNurse() ? el('button', { class: 'tile primary', onclick: () => go('measure') }, el('b', null, 'Measurements'), el('span', null, 'Height, weight, waist, arm')) : null,
-      isNurse() ? null : el('button', { class: 'tile primary', onclick: () => go('visits') }, el('b', null, 'Visit checklist'), el('span', null, 'What to order and do')),
+      isNurse() ? null : el('button', { class: 'tile yellow', onclick: () => go('visits') }, el('b', null, 'Visit checklist'), el('span', null, 'What to order and do')),
       isNurse() ? null : el('button', { class: 'tile', onclick: () => go('participants') }, el('b', null, 'Participants'), el('span', null, Object.keys(enrolledMap()).length + ' enrolled')),
-      isNurse() ? null : el('button', { class: 'tile', onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
-      isNurse() ? null : el('button', { class: 'tile', onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
+      role() === 'pi' && !T.practice ? el('button', { class: 'tile purple', onclick: () => go('linkpick') }, el('b', null, 'Link'), el('span', null, 'Phone, call, WhatsApp')) : null,
+      isNurse() ? null : el('button', { class: 'tile orange', onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
+      isNurse() ? null : el('button', { class: 'tile red', onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
       el('button', { class: 'tile', onclick: () => go('screening') }, el('b', null, 'Screening log'), el('span', null, view('S0_SCREEN').length + ' screened')),
       role() === 'qc' || role() === 'pi' ? el('button', { class: 'tile', onclick: () => go('qclog') }, el('b', null, 'Verification log'), el('span', null, view('QC_LOG').length + ' checks')) : null,
-      role() === 'pi' && !T.practice ? el('button', { class: 'tile', onclick: () => go('register') }, el('b', null, 'Study numbers'), el('span', null, 'Assign or look up')) : null,
-      T.practice ? null : el('button', { class: 'tile', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, el('b', null, 'Practice'), el('span', null, 'Learn with made-up patients')),
+      role() === 'pi' && !T.practice && navigator.onLine ? el('button', { class: 'tile', onclick: () => go('register') }, el('b', null, 'Link register'), el('span', null, 'Assign or look up · online')) : null,
+      T.practice ? null : el('button', { class: 'tile yellow', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, el('b', null, 'Practice'), el('span', null, 'Learn with made-up patients')),
       el('button', { class: 'tile', onclick: () => go('settings') }, el('b', null, 'Settings'), el('span', null, S.cfg.email || ''))),
     isNurse() ? null : el('h2', null, 'Safety'),
     isNurse() ? null : el('div', { class: 'card small' }, 'PHQ-9 item 9 above 0, or a liver result meeting the definition: act the same day (manual Part 4). The app and the e-mail alerts are only a backup.'));
@@ -356,7 +370,7 @@ function home() {
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
 const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']];
-function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', age: '', sex: '', reason: '', pendingRid: null, q: '' }); }
+function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', age: '', sex: '', name: '', mrn: '', phone: '', reason: '', pendingRid: null, q: '' }); }
 async function regLoad() {
   const st = regState();
   st.err = '';
@@ -373,29 +387,30 @@ async function regAssign() {
   const st = regState();
   if (st.busy) return;
   if (!navigator.onLine) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
+  if (st.list && st.list.link && st.status !== 'S' && (!s_(st.mrn).trim() || !s_(st.phone).trim())) { st.err = 'Not assigned. The record number and the telephone number are both required.'; render(); return; }
   st.pendingRid = st.pendingRid || rid();              // the same id on a retry, so a number is never assigned twice
-  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, age: st.age, sex: st.sex, reason: st.reason };
+  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, age: st.age, sex: st.sex, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone };
   st.busy = true; st.err = ''; st.done = ''; render();
   try {
     const res = await api(body);
     if (!res.ok) throw new Error(res.error || 'not assigned');
     st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id;
-    st.pendingRid = null; st.age = ''; st.sex = ''; st.reason = ''; st.status = 'E';
+    st.pendingRid = null; st.age = ''; st.sex = ''; st.name = ''; st.mrn = ''; st.phone = ''; st.reason = ''; st.status = 'E';
   } catch (e) { st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.'; }
   st.busy = false;
   await regLoad();
 }
 function registerScreen() {
   const st = regState();
-  if (st.list === null && !st.loading && !st.err && navigator.onLine) regLoad();
+  if (st.list === null && !st.loading && !st.err && navigator.onLine) { st.loading = true; setTimeout(() => regLoad(), 0); }   // never load inside a render
   const L = st.list, rows = L ? L.rows : [], q = st.q.trim().toUpperCase();
   const shown = q ? rows.filter((r) => r.study_id.indexOf(q) >= 0) : rows;
   const seg = (opts, cur, set) => el('div', { class: 'seg' }, opts.map((o) => el('button', { type: 'button', class: cur === o[0] ? 'on' : '', onclick: () => { set(o[0]); render(); } }, o[1])));
   const spoiled = st.status === 'S';
   const off = !navigator.onLine;
-  return topBar('Study numbers').concat([el('main', null,
+  return topBar('Link register').concat([el('main', null,
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('visits') }, el('div', { class: 'main' }, el('div', null, 'Visit checklist'), el('div', { class: 'sub' }, 'What to order and do at each visit')), el('span', { class: 'chev' }))),
-    el('div', { class: 'card small muted' }, 'Study numbers only. No names, addresses, telephone numbers or record numbers are entered or shown here. Those stay on paper in the locked cabinet.'),
+    L && L.link ? null : el('div', { class: 'card small muted' }, 'Study numbers only. No names, addresses, telephone numbers or record numbers are entered or shown here. Those stay on paper in the locked cabinet.'),
     off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'This works only online. Nothing is stored on this phone.')) : null,
     st.err ? el('div', { class: 'card alert' }, st.err) : null,
     st.done ? el('div', { class: 'card' }, el('b', null, st.done)) : null,
@@ -408,15 +423,23 @@ function registerScreen() {
     spoiled ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Age in years'),
       el('input', { type: 'text', inputmode: 'numeric', maxlength: '3', value: st.age, oninput: (ev) => { st.age = ev.target.value.replace(/\D/g, ''); } })),
     spoiled ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Sex'), seg([['M', 'Male'], ['F', 'Female']], st.sex, (v) => { st.sex = v; })),
+    spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, optional'),
+      el('input', { id: 'reg-name', type: 'text', maxlength: '60', value: st.name, oninput: (ev) => { st.name = ev.target.value; } })),
+    spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Record number (MRN), required'),
+      el('input', { id: 'reg-mrn', type: 'text', maxlength: '30', value: st.mrn, oninput: (ev) => { st.mrn = ev.target.value; } })),
+    spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Telephone, required, e.g. 03001234567'),
+      el('input', { id: 'reg-phone', type: 'text', inputmode: 'tel', maxlength: '16', value: st.phone, oninput: (ev) => { st.phone = ev.target.value; } })),
     spoiled ? el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Reason the number is spoiled'),
       el('input', { type: 'text', maxlength: '80', value: st.reason, oninput: (ev) => { st.reason = ev.target.value; } })) : null,
     el('button', { class: 'btn primary block', type: 'button', disabled: off || st.busy || !L, onclick: () => regAssign() }, st.busy ? 'Assigning…' : 'Assign number'),
     el('h2', null, 'Look up a number'),
     el('input', { class: 'search', type: 'search', placeholder: 'Type a number, e.g. TBDM-012', autocomplete: 'off', value: st.q,
       oninput: (ev) => { st.q = ev.target.value; render(); } }),
-    el('div', { class: 'list' }, shown.length ? shown.map((r) => el('button', { class: 'row', onclick: () => go('link', { sid: r.study_id }) }, el('div', { class: 'main' },
+    el('div', { class: 'list' }, shown.length ? shown.map((r) => el('div', { class: 'row' }, el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r.study_id }) },
       el('div', null, r.study_id),
-      el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.age && r.sex ? r.age + ' y, ' + r.sex : '', r.assigned_date].filter(Boolean).join(' · '))), el('span', { class: 'chev' })))
+      el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.age && r.sex ? r.age + ' y, ' + r.sex : '', r.assigned_date].filter(Boolean).join(' · ')),
+      r.name || r.mrn ? el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : ''].filter(Boolean).join(' · ')) : null),
+      r.phone ? el('a', { class: 'tel', href: 'tel:' + r.phone.replace(/[^\d+]/g, '') }, r.phone) : null, el('span', { class: 'chev' })))
       : el('div', { class: 'empty' }, L ? 'No numbers match.' : (st.loading ? 'Loading…' : ''))))
   ]);
 }
@@ -429,14 +452,15 @@ async function linkLoad(sid) {
   try {
     const res = await api({ op: 'link_get', token: S.cfg.token, study_id: sid });
     if (!res.ok) throw new Error(res.error || 'could not load');
-    st.data = res; st.form = { mrn: res.mrn, phone: res.phone, address: res.address, note: res.note };
-    st.edit = !(res.mrn || res.phone || res.address || res.note);
+    st.data = res; st.form = { name: res.name || '', mrn: res.mrn, phone: res.phone, guardian: res.guardian || '', address: res.address, note: res.note };
+    st.edit = !(res.name || res.mrn || res.phone || res.guardian || res.address || res.note);
   } catch (e) { st.err = e.message; }
   st.busy = false; render();
 }
 async function linkSave() {
   const st = T.link;
   if (!navigator.onLine) { st.err = 'No internet connection. Nothing was saved.'; render(); return; }
+  if (!s_((st.form || {}).mrn).trim() || !s_((st.form || {}).phone).trim()) { st.err = 'Not saved. The record number and the telephone number are both required.'; render(); return; }
   st.busy = true; st.err = ''; st.msg = ''; render();
   try {
     const res = await api(Object.assign({ op: 'link_set', token: S.cfg.token, study_id: st.sid }, st.form));
@@ -453,27 +477,27 @@ function waDigits(ph) {                                   // 0300... becomes 923
 }
 function linkScreen(p) {
   const sid = p.sid;
-  if (!T.link || T.link.sid !== sid) { linkLoad(sid); }
+  if (!T.link || T.link.sid !== sid) { T.link = { sid: sid, data: null, err: '', msg: '', busy: true, edit: false }; setTimeout(() => linkLoad(sid), 0); }   // never load inside a render: the nested render would draw the page twice
   const st = T.link || { busy: true }, off = !navigator.onLine, d = st.data, f = st.form || {};
   const field = (k, lab, ml) => el('div', { class: 'field' }, el('label', { class: 'lab' }, lab),
     el('input', { type: 'text', maxlength: String(ml), value: f[k] || '', inputmode: k === 'phone' ? 'tel' : 'text', oninput: (ev) => { f[k] = ev.target.value; } }));
   const show = (lab, v) => el('div', { class: 'card' }, el('div', { class: 'muted small' }, lab), el('div', null, v || '–'));
   const ph = d && d.phone;
   return topBar(sid + ' · Link').concat([el('main', null,
-    el('div', { class: 'card small muted' }, 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged. No participant names are kept.'),
+    el('div', { class: 'card small muted' }, 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged.'),
     off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
     st.err ? el('div', { class: 'card alert' }, st.err) : null,
     st.msg ? el('div', { class: 'card' }, el('b', null, st.msg)) : null,
     st.busy && !d ? el('div', { class: 'empty' }, 'Loading…') : null,
     d && !st.edit ? [
-      ph ? el('div', { class: 'card' }, el('div', { class: 'muted small' }, 'Telephone'), el('b', null, ph),
+      ph ? el('div', { class: 'card' }, el('div', { class: 'muted small' }, 'Telephone'), el('a', { class: 'tel big', href: 'tel:' + ph.replace(/[^\d+]/g, '') }, ph),
         el('div', { class: 'row2' },
           el('a', { class: 'btn block', href: 'tel:' + ph.replace(/[^\d+]/g, '') }, 'Call'),
           el('a', { class: 'btn block', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp'))) : show('Telephone', ''),
-      show('Record number (MRN)', d.mrn), show('Address', d.address), show('Note', d.note),
+      show('Name', d.name), show('Record number (MRN)', d.mrn), show('Father or husband name', d.guardian), show('Address', d.address), show('Note', d.note),
       d.updated ? el('div', { class: 'small muted' }, 'Last changed ' + d.updated) : null,
       el('button', { class: 'btn block', type: 'button', disabled: off, onclick: () => { st.edit = true; st.msg = ''; render(); } }, 'Edit')] : null,
-    d && st.edit ? [field('mrn', 'Record number (MRN)', 30), field('phone', 'Telephone, e.g. 03001234567', 16), field('address', 'Address', 200), field('note', 'Note', 200),
+    d && st.edit ? [field('name', 'Participant name', 60), field('mrn', 'Record number (MRN), required', 30), field('phone', 'Telephone, required, e.g. 03001234567', 16), field('guardian', 'Father or husband name', 60), field('address', 'Address', 200), field('note', 'Note', 200),
       el('button', { class: 'btn primary block', type: 'button', disabled: off || st.busy, onclick: () => linkSave() }, st.busy ? 'Saving…' : 'Save')] : null
   )]);
 }
@@ -728,7 +752,7 @@ function participant(p) {
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
-    role() === 'pi' && !T.practice ? el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Link'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : null,
+    role() === 'pi' && !T.practice ? el('div', { class: 'list purple' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Link'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : null,
     visits,
     el('h2', null, 'Unscheduled and events'),
     el('div', { class: 'list' },
@@ -751,6 +775,20 @@ function measureList() {
   };
   q.addEventListener('input', fill); fill();
   return topBar('Measurements').concat([el('main', null, q, list)]);
+}
+// ---- PI: pick an enrolled participant, then open the confidential Link screen (same screen as from the participant page)
+function linkPick() {
+  if (role() !== 'pi' || T.practice) return topBar('Link').concat([el('main', null, el('div', { class: 'card' }, 'Link is for the PI only, and is not available in practice mode.'))]);
+  const q = el('input', { class: 'search', type: 'search', placeholder: 'Search study number', autocomplete: 'off' });
+  const list = el('div', { class: 'list purple' });
+  const fill = () => {
+    const f = s_(q.value).toUpperCase();
+    const rows = view('S1_ENROL').filter((r) => r.study_id && s_(r.study_id).toUpperCase().includes(f)).sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
+    list.replaceChildren(...(rows.length ? rows.map((r) => el('button', { class: 'row', onclick: () => go('link', { sid: r.study_id }) },
+      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, 'No participants match.')]));
+  };
+  q.addEventListener('input', fill); fill();
+  return topBar('Link').concat([el('main', null, q, list)]);
 }
 function measureFor(p) {
   const sid = p.sid, row = (tab, key, name) => {
@@ -1001,6 +1039,12 @@ function fieldEl(c) {
     if (type === 'date' || type === 'time') {
       box.append(el('div', { class: 'inline' }, inp, el('button', { type: 'button', class: 'now', onclick: () => { inp.value = type === 'date' ? todayIso() : nowHm(); set(inp.value); } }, type === 'date' ? 'Today' : 'Now')));
     } else box.append(inp);
+    if (c.type === 'sidnew' && !F.ro && !fixed && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN')) {      // pick the next number instead of typing it
+      const nid = nextId(F.tab), typeBtn = el('button', { type: 'button', class: 'btn block' }, F.typeId ? 'Lock typing' : 'Type a number instead');
+      inp.readOnly = !F.typeId; inp.placeholder = F.typeId ? 'TBDM-' : 'tap Next available';
+      typeBtn.onclick = () => { F.typeId = !F.typeId; inp.readOnly = !F.typeId; inp.placeholder = F.typeId ? 'TBDM-' : 'tap Next available'; typeBtn.textContent = F.typeId ? 'Lock typing' : 'Type a number instead'; if (F.typeId) inp.focus(); };
+      box.append(el('div', { class: 'row2' }, el('button', { type: 'button', id: 'nextid', class: 'btn primary block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'Next available: ' + nid : 'No numbers left'), typeBtn));
+    }
   }
   box.append(msg);
   if (val) { const m = fieldMsg(c); if (m) { msg.textContent = c.label.split(',')[0] + ' ' + m; box.classList.add('err'); } }
