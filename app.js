@@ -179,7 +179,7 @@ async function sync() {
     }
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], at: Date.now() };
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], at: Date.now() };
     S.cfg.role = pull.role; S.cfg.email = pull.email;
     S.lastSync = Date.now(); T.syncError = ''; T.revoked = false;
     await saveState();
@@ -335,6 +335,7 @@ function nextId(tab) {
   const enrolled = {}, used = {}, waiting = []; let top = 0;
   view('S1_ENROL').forEach((r) => { const n = num(r.study_id); if (n) { enrolled[n] = used[n] = true; top = Math.max(top, n); } });
   view('S0_SCREEN').forEach((r) => { const n = num(r.study_id); if (n) { used[n] = true; top = Math.max(top, n); if (!enrolled[n] && r.enrolled === 'Y') waiting.push(n); } });
+  ((S.server && S.server.regnums) || []).forEach((p) => { const n = num(p[0]); if (n) { used[n] = true; top = Math.max(top, n); if (p[1] === 'E' && !enrolled[n] && waiting.indexOf(n) < 0) waiting.push(n); } });   // numbers the register has given out
   if (tab === 'S1_ENROL' && waiting.length) return idOf_(Math.min.apply(null, waiting));
   if (T.practice) { for (let n = CFG.ID_MAX - 2; n >= 1; n--) if (!used[n]) return idOf_(n); return ''; }   // practice numbers count down from the top of the range
   return top >= CFG.ID_MAX ? '' : idOf_(top + 1);
@@ -370,7 +371,7 @@ function home() {
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
 const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']];
-function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', age: '', sex: '', name: '', mrn: '', phone: '', reason: '', pendingRid: null, q: '' }); }
+function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', name: '', mrn: '', phone: '', reason: '', pendingRid: null, q: '' }); }
 async function regLoad() {
   const st = regState();
   st.err = '';
@@ -387,25 +388,26 @@ async function regAssign() {
   const st = regState();
   if (st.busy) return;
   if (!navigator.onLine) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
-  if (st.list && st.list.link && st.status !== 'S' && (!s_(st.mrn).trim() || !s_(st.phone).trim())) { st.err = 'Not assigned. The record number and the telephone number are both required.'; render(); return; }
+  if (st.list && st.list.link && st.status !== 'S' && (!s_(st.name).trim() || !s_(st.mrn).trim() || !s_(st.phone).trim())) { st.err = 'Not assigned. The participant name, the record number and the telephone number are all required.'; render(); return; }
   st.pendingRid = st.pendingRid || rid();              // the same id on a retry, so a number is never assigned twice
-  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, age: st.age, sex: st.sex, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone };
+  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone };
   st.busy = true; st.err = ''; st.done = ''; render();
   try {
     const res = await api(body);
     if (!res.ok) throw new Error(res.error || 'not assigned');
     st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id;
-    st.pendingRid = null; st.age = ''; st.sex = ''; st.name = ''; st.mrn = ''; st.phone = ''; st.reason = ''; st.status = 'E';
+    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.reason = ''; st.status = 'E';
   } catch (e) { st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.'; }
   st.busy = false;
   await regLoad();
 }
 function regList(L) {
   const st = regState(), q = st.q.trim().toUpperCase(), rows = L ? L.rows : [];
-  const shown = q ? rows.filter((r) => [r.study_id, r.name, r.mrn, r.phone].some((v) => s_(v).toUpperCase().indexOf(q) >= 0)) : rows;
+  const dig = (v) => s_(v).replace(/\D/g, '').replace(/^(92|0)/, ''), qd = dig(q);      // 0300 123, +92 300 123 and 300123 all find the same telephone
+  const shown = q ? rows.filter((r) => [r.study_id, r.name, r.mrn].some((v) => s_(v).toUpperCase().indexOf(q) >= 0) || (qd.length >= 3 && dig(r.phone).indexOf(qd) >= 0) || s_(r.phone).replace(/\s/g, '').indexOf(q.replace(/\s/g, '')) >= 0) : rows;
   return el('div', { class: 'list', id: 'reglist' }, shown.length ? shown.map((r) => el('div', { class: 'row' }, el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r.study_id }) },
     el('div', null, r.study_id),
-    el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.age && r.sex ? r.age + ' y, ' + r.sex : '', r.assigned_date].filter(Boolean).join(' · ')),
+    el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.assigned_date].filter(Boolean).join(' · ')),
     r.name || r.mrn ? el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : ''].filter(Boolean).join(' · ')) : null),
     r.phone ? el('a', { class: 'tel', href: 'tel:' + r.phone.replace(/[^\d+]/g, '') }, r.phone) : null, el('span', { class: 'chev' })))
     : el('div', { class: 'empty' }, L ? 'No numbers match.' : (st.loading ? 'Loading…' : '')));
@@ -429,10 +431,7 @@ function registerScreen() {
       el('button', { class: 'btn block', type: 'button', disabled: off || st.loading, onclick: () => regLoad() }, 'Refresh')),
     el('h2', null, 'Assign a number'),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Outcome'), seg(REG_STATUS_OPTS, st.status, (v) => { st.status = v; })),
-    spoiled ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Age in years'),
-      el('input', { type: 'text', inputmode: 'numeric', maxlength: '3', value: st.age, oninput: (ev) => { st.age = ev.target.value.replace(/\D/g, ''); } })),
-    spoiled ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Sex'), seg([['M', 'Male'], ['F', 'Female']], st.sex, (v) => { st.sex = v; })),
-    spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, optional'),
+    spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, required'),
       el('input', { id: 'reg-name', type: 'text', maxlength: '60', value: st.name, oninput: (ev) => { st.name = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Record number (MRN), required'),
       el('input', { id: 'reg-mrn', type: 'text', maxlength: '30', value: st.mrn, oninput: (ev) => { st.mrn = ev.target.value; } })),
@@ -527,12 +526,18 @@ const ITEM_TEXT = {
   gad6: ['Becoming easily annoyed or irritable', 'بہت آسانی سے ناراض یا غصہ ہو جانا۔'],
   gad7: ['Feeling afraid, as if something awful might happen', 'یہ ڈر محسوس کرنا کہ کچھ برا ہونے والا ہے']
 };
+// Interviewer notes: a plain gloss to give ONLY when the participant does not understand a word. The validated item wording above is read first, unchanged.
+const ITEM_NOTE = {
+  phq2: ['If the participant does not understand \u201cپژمردہ\u201d (pazhmurda, literally \u201cwithered\u201d), read the item as written first, then explain it with these words only:', 'اداس، بجھا بجھا سا']
+};
 function itemWording(key) {
   const t = ITEM_TEXT[key]; if (!t) return null;
+  const n = ITEM_NOTE[key];
   return el('div', { class: 'itemq' },
     /1$/.test(key) ? el('div', { class: 'small muted' }, ITEM_STEM[0]) : null,
     /1$/.test(key) ? el('div', { class: 'ur small muted', dir: 'rtl', lang: 'ur' }, ITEM_STEM[1]) : null,
     el('div', null, t[0]), el('div', { class: 'ur', dir: 'rtl', lang: 'ur' }, t[1]),
+    n ? el('div', { class: 'itemnote' }, el('div', null, el('b', null, 'Interviewer note. '), n[0]), el('div', { class: 'ur gloss', dir: 'rtl', lang: 'ur' }, n[1]), el('div', { class: 'small' }, 'udaas, bujha bujha sa: sad, low')) : null,
     el('div', { class: 'scaleur', dir: 'ltr' }, ITEM_SCALE_UR.map((t, i) => el('span', { dir: 'rtl', lang: 'ur' }, i + ' = ' + t))));
 }
 
@@ -834,10 +839,23 @@ function focusField(k) {
 }
 function queries() {
   const out = derived();
-  return topBar('Queries').concat([el('main', null, el('p', { class: 'small muted' }, 'Worked out on this phone from the latest data, including entries not yet sent.'),
-    el('div', { class: 'list' }, out.queries.length ? out.queries.map((q) => el('button', { class: 'row', onclick: () => openQuery(q) },
-      el('div', { class: 'main' }, el('div', null, (q[0] || 'Screening log') + (q[3] ? ' · ' + q[3] : '') + ' · ' + (NAMES[q[1]] || q[1])), el('div', { class: 'sub' }, q[4] + (q[5] ? ': ' + q[5] : '')),
-        q[6] ? el('div', { class: 'sub qfield' }, 'Opens at: ' + fieldName(q[1], q[6])) : null), el('span', { class: 'chev' }))) : el('div', { class: 'empty' }, 'No queries')))]);
+  T.qopen = T.qopen || {};
+  const groups = {}, order = [];
+  out.queries.forEach((q) => { const g = q[0] || 'Screening log'; if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(q); });
+  order.sort();
+  const qrow = (q) => el('button', { class: 'row qrow', onclick: () => openQuery(q) },
+    el('div', { class: 'main' }, el('div', null, (NAMES[q[1]] || q[1]) + (q[3] ? ' · ' + q[3] : '')), el('div', { class: 'sub' }, q[4] + (q[5] ? ': ' + q[5] : '')),
+      q[6] ? el('div', { class: 'sub qfield' }, 'Opens at: ' + fieldName(q[1], q[6])) : null), el('span', { class: 'chev' }));
+  const block = (g) => {
+    const open = !!T.qopen[g], list = groups[g].slice().sort((a, b) => String(a[1] + a[3]).localeCompare(String(b[1] + b[3])));
+    const forms = []; list.forEach((q) => { const f = NAMES[q[1]] || q[1]; if (forms.indexOf(f) < 0) forms.push(f); });
+    return el('div', { class: 'qgroup' + (open ? ' open' : '') },
+      el('button', { class: 'row qhead', onclick: () => { T.qopen[g] = !open; render(); } },
+        el('div', { class: 'main' }, el('div', null, g), el('div', { class: 'sub' }, forms.join(', '))), el('span', { class: 'qcount' }, String(list.length)), el('span', { class: 'chev' })),
+      open ? el('div', { class: 'qbody' }, list.map(qrow)) : null);
+  };
+  return topBar('Queries').concat([el('main', null, el('p', { class: 'small muted' }, 'Grouped by participant. Tap a study number to open its queries. Worked out on this phone from the latest data, including entries not yet sent.'),
+    out.queries.length ? el('div', { class: 'list' }, order.map(block)) : el('div', { class: 'list' }, el('div', { class: 'empty' }, 'No queries')))]);
 }
 function screening() {
   const rows = view('S0_SCREEN').slice().reverse();
@@ -1044,10 +1062,9 @@ function fieldEl(c) {
       box.append(el('div', { class: 'inline' }, inp, el('button', { type: 'button', class: 'now', onclick: () => { inp.value = type === 'date' ? todayIso() : nowHm(); set(inp.value); } }, type === 'date' ? 'Today' : 'Now')));
     } else box.append(inp);
     if (c.type === 'sidnew' && !F.ro && !fixed && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN')) {      // pick the next number instead of typing it
-      const nid = nextId(F.tab), typeBtn = el('button', { type: 'button', class: 'btn block' }, F.typeId ? 'Lock typing' : 'Type a number instead');
-      inp.readOnly = !F.typeId; inp.placeholder = F.typeId ? 'TBDM-' : 'tap Next available';
-      typeBtn.onclick = () => { F.typeId = !F.typeId; inp.readOnly = !F.typeId; inp.placeholder = F.typeId ? 'TBDM-' : 'tap Next available'; typeBtn.textContent = F.typeId ? 'Lock typing' : 'Type a number instead'; if (F.typeId) inp.focus(); };
-      box.append(el('div', { class: 'row2' }, el('button', { type: 'button', id: 'nextid', class: 'btn primary block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'Next available: ' + nid : 'No numbers left'), typeBtn));
+      const nid = nextId(F.tab);
+      inp.readOnly = false; inp.placeholder = 'type a number, or tap Next available';      // both ways stay open: the paper log may disagree with the suggestion
+      box.append(el('button', { type: 'button', id: 'nextid', class: 'btn primary block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'Next available: ' + nid : 'No numbers left'));
     }
   }
   box.append(msg);

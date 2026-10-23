@@ -547,6 +547,9 @@ function readerGaps_(v) {
 // Which column a query points at: the first rule whose pattern matches the check and whose column exists in that tab.
 // Checks that list column names in their detail (missing items, invalid entries) point at the first one named.
 const QUERY_FIELD = [
+  // queries about data missing in another record: the link opens the cell where the fix belongs
+  [/Visit 5 is not recorded as attended/, 'attended'], [/^Died: record/, 'outcome'], [/Withdrawn but no E4/, 'event_type'],
+  [/Liver symptoms recorded but no liver test/, 'alt'], [/No laboratory row for this visit/, 'sample_date'],
   [/^Reader 1 cavity count/, 'r1_ncav'], [/^Reader 2 cavity count/, 'r2_ncav'],
   [/^Row without a study number|^Enrolled but no study number|^No screening line|^Study number/, 'study_id'], [/^Enrolled although/, 'eligible'], [/exclusion code/, 'excl_code'],
   [/not enrolled, but no reason/, 'not_enrolled_reason'], [/^Age differs/, 'age_years'], [/^Sex differs/, 'sex'], [/^Smear grade differs/, 'smear_grade'],
@@ -883,10 +886,10 @@ function computeDerived_(data, today) {
       // liver symptoms need liver tests the same day (manual 4.3); the next day is accepted
       if (hepAny_(r) === true) {
         const ok = (labsOf[sid] || []).some(function (l) { const g2 = diff_(r.visit_date, l.sample_date); return l.lab_status === '1' && num_(l.alt) !== null && g2 !== null && g2 >= 0 && g2 <= 1; });
-        if (!ok) vt('Liver symptoms recorded but no liver test result on the same or the next day', 'manual 4.3: draw liver tests the same day; enter them as this visit or as an unscheduled test');
+        if (!ok) Q(sid, 'LABS', '', v, 'Liver symptoms recorded but no liver test result on the same or the next day', 'manual 4.3: draw liver tests the same day; enter them as this visit or as an unscheduled test');
       }
       const dv = diff_(r.visit_date, today);
-      if (!labs[sid + '|' + v] && dv !== null && dv > 7) vt('No laboratory row for this visit', 'visit was ' + dv + ' days ago; enter the results, or the row with lab status not done');
+      if (!labs[sid + '|' + v] && dv !== null && dv > 7) Q(sid, 'LABS', '', v, 'No laboratory row for this visit', 'visit was ' + dv + ' days ago; enter the results, or the row with lab status not done');
       if (v === 'V5' && !phq[sid + '|V5'] && e.optout_questionnaires !== 'Y' && dv !== null && dv > 7) Q(sid, 'PHQ_GAD', '', 'V5', 'Visit 5 questionnaires missing', '');
       // treatment outcome against the smear results (WHO 2013 definitions)
       if (v === 'V5' && has(r.outcome)) {
@@ -904,13 +907,13 @@ function computeDerived_(data, today) {
     if (en && en.status) {
       const et = function (c, d) { Q(sid, 'END_STUDY', en._row, '', c, d); };
       if (!has(en.status_date)) et('End-of-study date missing', '');
-      if (en.status === 'C') { const v5 = visits[sid + '|V5']; if (!v5 || v5.attended !== 'Y') et('Completed, but Visit 5 is not recorded as attended', ''); }
+      if (en.status === 'C') { const v5 = visits[sid + '|V5']; if (!v5 || v5.attended !== 'Y') Q(sid, 'VISITS', v5 ? v5._row : '', 'V5', 'Completed, but Visit 5 is not recorded as attended', 'the fix is in Visit 5 (attended), or change the end-of-study status'); }
       if (en.status !== 'C' && has(en.status_date)) {
         const later = order.map(function (v) { return visits[sid + '|' + v]; }).filter(function (r) { return r && diff_(en.status_date, r.visit_date) > 0; });
         if (later.length) et('Visits recorded after the end-of-study date', later.map(function (r) { return r.visit + ' ' + r.visit_date; }).join(', '));
       }
-      if (en.status === 'W' && !hasEvent(sid, 'E4')) et('Withdrawn but no E4 event recorded', '');
-      if (en.status === 'D' && !events.some(function (x) { return x.study_id === sid && x.outcome === 'D'; }) && !(visits[sid + '|V5'] || {}).outcome) et('Died: record the event or the V5 outcome', '');
+      if (en.status === 'W' && !hasEvent(sid, 'E4')) Q(sid, 'EVENTS', '', '', 'Withdrawn but no E4 event recorded', 'add the E4 event, or change the end-of-study status');
+      if (en.status === 'D' && !events.some(function (x) { return x.study_id === sid && x.outcome === 'D'; }) && !(visits[sid + '|V5'] || {}).outcome) { const v5d = visits[sid + '|V5']; Q(sid, 'VISITS', v5d ? v5d._row : '', 'V5', 'Died: record the event or the V5 outcome', 'enter outcome D at Visit 5, or record the event with outcome died'); }
     } else if (hasEvent(sid, 'E4')) Q(sid, 'END_STUDY', '', '', 'E4 withdrawal recorded but no end-of-study row', 'add status W with the data choice');
   });
   // laboratory rows
@@ -1016,8 +1019,8 @@ function computeDerived_(data, today) {
       if (!l) { if (!already(sid, 'LABS', v, /missing|No laboratory row/) && !already(sid, 'VISITS', v, /No laboratory row/)) R('LABS', '', v, 'laboratory row missing', 'enter the results, or the row with lab status not done'); }
       if (v === 'V1') return;
       const r = visits[sid + '|' + v];
-      if (!r) { R('VISITS', '', v, 'visit not recorded', 'record it, with attended N if it was missed'); return; }
-      if (r.attended === 'N') { if (en.status === 'C') R('VISITS', r._row, v, 'status completed but this visit was not attended', 'check the end-of-study status'); return; }
+      if (!r) { if (!already(sid, 'VISITS', v, /Visit 5 is not recorded/)) R('VISITS', '', v, 'visit not recorded', 'record it, with attended N if it was missed'); return; }
+      if (r.attended === 'N') { if (en.status === 'C' && !already(sid, 'VISITS', v, /Visit 5 is not recorded/)) R('VISITS', r._row, v, 'status completed but this visit was not attended', 'check the end-of-study status'); return; }
       if (r.attended !== 'Y') return;
       let kv = ['treatment', 'adherence', 'entered_by'];
       if (v === 'V3' || v === 'V5') kv = kv.concat(['waist_cm', 'muac_mm', 'temp_c', 'pulse_min', 'pallor', 'auscultation', 'tb_cough', 'tb_haemoptysis', 'tb_dyspnoea', 'tb_chest_pain', 'tb_night_sweats', 'smear_result']);

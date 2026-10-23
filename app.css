@@ -129,3 +129,8 @@ a.tel.big { display: inline-block; font-size: 20px; }
 a.tel.big { color: var(--brand); font-weight: 700; text-decoration: none; margin: 2px 0 4px; }
 /* participants: the most used button, clear ocean blue */
 .tile.people { background: #1e63a3; border-color: #1e63a3; color: #fff; box-shadow: 0 2px 8px rgba(30,99,163,.32); } .tile.people span { color: #d3e4f4; }
+.itemnote { margin: 8px 0 4px; padding: 8px 10px; border-left: 3px solid #e6c765; background: #fbf1d3; color: #4a3708; border-radius: 6px; font-size: 13px; line-height: 1.45; }
+.itemnote .gloss { font-size: 20px; font-weight: 700; margin: 6px 0 2px; white-space: nowrap; }
+
+.qgroup .qhead { font-size: 16px; } .qcount { background: #b3261e; color: #fff; border-radius: 999px; min-width: 26px; padding: 2px 8px; text-align: center; font-size: 13px; font-weight: 700; }
+.qgroup.open .qhead .chev::after { display: inline-block; transform: rotate(90deg); } .qbody { background: #faf6f5; border-top: 1px solid var(--line); } .qbody .qrow { padding-left: 26px; }
