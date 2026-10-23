@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'f6e152dfac6f';                 // replaced by build.js with the build's hash
+const BUILD_ID = '6df872496a3c';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -342,6 +342,40 @@ function nextId(tab) {
   return top >= CFG.ID_MAX ? '' : idOf_(top + 1);
 }
 function nextNo() { const n = nextId('S1_ENROL'); return n ? 'Next: ' + n : 'No numbers left'; }
+// Screened, eligible and agreed, with a study number, and not yet enrolled. Worked out from this phone's own data, so it needs no signal.
+function waitingEnrol() {
+  const done = enrolledMap(), out = [];
+  view('S0_SCREEN').forEach((r) => { const id = s_(r.study_id).toUpperCase(); if (id && r.eligible === 'Y' && r.enrolled === 'Y' && !done[id] && out.indexOf(id) < 0) out.push(id); });
+  return out.sort();
+}
+// Enrolled numbers whose name, record number and telephone are not yet recorded (known from the last register load; the register is online only)
+function identifiersPending(L) { return L && L.link ? L.rows.filter((r) => r.status === 'E' && !r.mrn && !r.phone) : []; }
+function enrolTile() {
+  const w = waitingEnrol();
+  return el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrol'),
+    el('span', null, w.length ? 'Waiting: ' + w[0] + (w.length > 1 ? ' and ' + (w.length - 1) + ' more' : '') : 'Number from the patient card'));
+}
+// Every patient carries a card with the study number. Typing it here opens whatever that person needs next, whatever the role.
+function findPatient(raw) {
+  const t = s_(raw).trim().toUpperCase().replace(/\s+/g, ''), sid = /^\d{1,3}$/.test(t) ? idOf_(+t) : t;     // "7" and "007" both mean TBDM-007
+  if (!idOk_(sid)) { toast('Not a study number. Type it as on the card, for example ' + idOf_(7)); return; }
+  const e = find('S1_ENROL', { study_id: sid }), sc = view('S0_SCREEN').filter((r) => code_(r.study_id) === sid)[0];
+  if (e) { go(isNurse() ? 'measurefor' : 'participant', { sid }); return; }
+  if (sc && sc.eligible === 'Y' && sc.enrolled === 'Y') {
+    modal(sid + ' is screened and waiting', [el('p', null, 'Eligible and agreed, not enrolled yet.')],
+      [['Close', null], ['Enrol', () => go('form', { tab: 'S1_ENROL', key: {}, preset: { study_id: sid, age_years: sc.age, sex: sc.sex }, carried: ['age_years', 'sex'] }), 'primary']]);
+    return;
+  }
+  if (sc) { modal(sid + ' was screened', [el('p', null, sc.eligible === 'N' ? 'Not eligible' + (sc.excl_code ? ' (exclusion ' + sc.excl_code + ')' : '') + ', so not enrolled.' : 'Screened, not enrolled.')], [['Close', null]]); return; }
+  modal(sid + ' is not in the study yet', [el('p', null, 'No screening line has this number on this phone. If the patient was screened on another phone, sync first.')],
+    [['Close', null], ['Screen this patient', () => go('form', { tab: 'S0_SCREEN', key: {}, preset: { study_id: sid } }), 'primary']]);
+}
+function findBox() {
+  return el('div', { class: 'card find' }, el('label', { class: 'lab', for: 'find' }, 'Patient card number'),
+    el('div', { class: 'inline' },
+      el('input', { id: 'find', type: 'text', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7', onkeydown: (ev) => { if (ev.key === 'Enter') findPatient(ev.target.value); } }),
+      el('button', { class: 'btn primary', type: 'button', id: 'findgo', onclick: () => findPatient($('#find').value) }, 'Open')));
+}
 function home() {
   if (role() === 'dots') return registerScreen();
   if (!S.server) return topBar('TBDM Field').concat([el('main', null, el('div', { class: 'card' }, navigator.onLine ? 'Fetching the study data…' : 'Connect to the internet once to fetch the study data.'))]);
@@ -352,14 +386,15 @@ function home() {
   const main = el('main', null,
     bad.length ? el('button', { class: 'card alert row', onclick: () => go('attention') }, el('div', { class: 'main' }, el('div', null, bad.length + ' entr' + (bad.length > 1 ? 'ies need' : 'y needs') + ' fixing'), el('div', { class: 'sub' }, 'The workbook did not accept them. Tap to see why.')), el('span', { class: 'chev' })) : null,
     waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null,
+    findBox(),
     el('div', { class: 'tiles' },
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, 'Add a screening line')) : null,
-      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrol'), el('span', null, nextNo())) : null,
+      canData() ? enrolTile() : null,
       isNurse() ? el('button', { class: 'tile primary', onclick: () => go('measure') }, el('b', null, 'Measurements'), el('span', null, 'Height, weight, waist, arm')) : null,
       isNurse() ? null : el('button', { class: 'tile guide', onclick: () => go('visits') }, el('b', null, 'Visit checklist'), el('span', null, 'What to order and do')),
       isNurse() ? null : el('button', { class: 'tile people', onclick: () => go('participants') }, el('b', null, 'Participants'), el('span', null, Object.keys(enrolledMap()).length + ' enrolled')),
       role() === 'pi' && !T.practice ? el('button', { class: 'tile conf', onclick: () => go('linkpick') }, el('b', null, 'Link'), el('span', null, 'Confidential · call, WhatsApp')) : null,
-      role() === 'pi' && !T.practice && navigator.onLine ? el('button', { class: 'tile conf', onclick: () => go('register') }, el('b', null, 'Link register'), el('span', null, 'Confidential · online only')) : null,
+      role() === 'pi' && !T.practice && navigator.onLine ? el('button', { class: 'tile conf', onclick: () => { if (T.reg) T.reg.list = null; go('register'); } }, el('b', null, 'Link register'), el('span', null, identifiersPending(T.reg && T.reg.list).length ? identifiersPending(T.reg.list).length + ' enrolled, identifiers pending' : 'Confidential · online only')) : null,
       isNurse() ? null : el('button', { class: 'tile due ' + (dueN ? 'hot' : 'calm'), onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
       isNurse() ? null : el('button', { class: 'tile queries ' + (out.queries.length ? 'hot' : 'calm'), onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
       el('button', { class: 'tile', onclick: () => go('screening') }, el('b', null, 'Screening log'), el('span', null, view('S0_SCREEN').length + ' screened')),
@@ -372,7 +407,7 @@ function home() {
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
 const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']];
-function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', name: '', mrn: '', phone: '', reason: '', guardian: '', address: '', pendingRid: null, q: '' }); }
+function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', name: '', mrn: '', phone: '', reason: '', guardian: '', address: '', sid: '', pendingRid: null, q: '' }); }
 async function regLoad() {
   const st = regState();
   st.err = '';
@@ -391,13 +426,13 @@ async function regAssign() {
   if (!navigator.onLine) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
   if (st.list && st.list.link && st.status !== 'S' && (!s_(st.name).trim() || !s_(st.mrn).trim() || !s_(st.phone).trim())) { st.err = 'Not assigned. The participant name, the record number and the telephone number are all required.'; render(); return; }
   st.pendingRid = st.pendingRid || rid();              // the same id on a retry, so a number is never assigned twice
-  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address };
+  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, study_id: /^\d{1,3}$/.test(s_(st.sid).trim()) ? idOf_(+s_(st.sid).trim()) : s_(st.sid).trim() };   // "7" means TBDM-007
   st.busy = true; st.err = ''; st.done = ''; render();
   try {
     const res = await api(body);
     if (!res.ok) throw new Error(res.error || 'not assigned');
     st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id;
-    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.reason = ''; st.status = 'E';
+    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.sid = ''; st.reason = ''; st.status = 'E';
   } catch (e) { st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.'; }
   st.busy = false;
   await regLoad();
@@ -418,7 +453,7 @@ function registerScreen() {
   if (st.list === null && !st.loading && !st.err && navigator.onLine) { st.loading = true; setTimeout(() => regLoad(), 0); }   // never load inside a render
   const L = st.list;
   const seg = (opts, cur, set) => el('div', { class: 'seg' }, opts.map((o) => el('button', { type: 'button', class: cur === o[0] ? 'on' : '', onclick: () => { set(o[0]); render(); } }, o[1])));
-  const spoiled = st.status === 'S';
+  const spoiled = st.status === 'S', pend = identifiersPending(L);
   const off = !navigator.onLine;
   return topBar('Link register').concat([el('main', null,
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('visits') }, el('div', { class: 'main' }, el('div', null, 'Visit checklist'), el('div', { class: 'sub' }, 'What to order and do at each visit')), el('span', { class: 'chev' }))),
@@ -430,8 +465,14 @@ function registerScreen() {
       el('div', { class: 'muted small' }, 'Next free number'),
       el('div', { style: 'font-size:28px;font-weight:700' }, L ? L.next : (st.loading ? 'loading…' : '–')),
       el('button', { class: 'btn block', type: 'button', disabled: off || st.loading, onclick: () => regLoad() }, 'Refresh')),
+    pend.length ? el('div', { class: 'card warn' }, el('b', null, 'Enrolled, identifiers still to record (' + pend.length + ')'),
+      el('div', { class: 'small' }, 'Tap a number to add the name, record number and telephone. Do this when you are back online.'),
+      el('div', { class: 'list' }, pend.map((r) => el('button', { class: 'row', type: 'button', onclick: () => go('link', { sid: r.study_id }) }, el('div', { class: 'main' }, el('div', null, r.study_id)), el('span', { class: 'chev' }))))) : null,
     el('h2', null, 'Assign a number'),
+    L && L.link ? el('p', { class: 'small muted' }, 'Only for a patient who has agreed and is not enrolled yet. Someone already enrolled is in the list above: do not give them a new number.') : null,
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Outcome'), seg(REG_STATUS_OPTS, st.status, (v) => { st.status = v; })),
+    el('div', { class: 'field' }, el('label', { class: 'lab' }, "Number on the patient's card"), el('div', { class: 'hint' }, 'Leave blank only if the patient has no card yet: the number shown above is then used.'),
+      el('input', { id: 'reg-sid', type: 'text', maxlength: '8', autocapitalize: 'characters', placeholder: idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, required'),
       el('input', { id: 'reg-name', type: 'text', maxlength: '60', value: st.name, oninput: (ev) => { st.name = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Record number (MRN), required'),
@@ -1109,8 +1150,8 @@ function fieldEl(c) {
     } else box.append(inp);
     if (c.type === 'sidnew' && !F.ro && !fixed && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN')) {      // pick the next number instead of typing it
       const nid = nextId(F.tab);
-      inp.readOnly = false; inp.placeholder = 'type a number, or tap Next available';      // both ways stay open: the paper log may disagree with the suggestion
-      box.append(el('button', { type: 'button', id: 'nextid', class: 'btn primary block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'Next available: ' + nid : 'No numbers left'));
+      inp.readOnly = false; inp.placeholder = "type the number on the patient's card";      // the card is the source of the number; the suggestion below is only for a patient with no card yet
+      box.append(el('button', { type: 'button', id: 'nextid', class: 'btn block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'No card yet? Next unused number: ' + nid : 'No numbers left'));
     }
   }
   box.append(msg);
