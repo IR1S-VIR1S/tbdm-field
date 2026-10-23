@@ -19,6 +19,7 @@ const CFG = {
 
 // ---------------------------------------------------------------- code lists
 const YN = [['Y', 'yes'], ['N', 'no']];
+const CONSENT = [['A', 'agreed'], ['D', 'declined']];          // what the consent form says, worded as an answer rather than as a double negative
 const PRESENT = [['P', 'present'], ['A', 'absent']];
 const AUSC = [['P', 'abnormal'], ['A', 'normal']];
 const SEX = [['M', 'male'], ['F', 'female']];
@@ -139,8 +140,8 @@ const SCHEMA = [
     col('smear_grade', 'Sputum smear grade at diagnosis', 'list', { codes: SMEAR.slice(1) }),
     col('genexpert', 'GeneXpert', 'list', { codes: [['D', 'detected'], ['N', 'not detected'], ['X', 'not done']] }),
     col('rif_res', 'Rifampicin resistance', 'list', { codes: [['D', 'detected'], ['N', 'not detected'], ['I', 'indeterminate'], ['X', 'not done']] }),
-    col('optout_questionnaires', 'Declined the questionnaires on the consent form (Study 4)', 'list', { codes: YN }),
-    col('optout_spirometry', 'Declined spirometry on the consent form (Study 5)', 'list', { codes: YN }),
+    col('optout_questionnaires', 'Questionnaires on the consent form (Study 4)', 'list', { codes: CONSENT }),
+    col('optout_spirometry', 'Spirometry on the consent form (Study 5)', 'list', { codes: CONSENT }),
     col('entered_by', 'Entered by (initials)', 'text', { max: 10 })] },
 
   { tab: 'S2_BASELINE', kind: 'one', rows: 400, title: 'Visit 1: baseline examination, anthropometry and TBscore items', cols: [
@@ -565,7 +566,7 @@ const QUERY_FIELD = [
   [/ALT upper limit/, 'alt_uln'], [/AST upper limit/, 'ast_uln'], [/ALP upper limit/, 'alp_uln'], [/Bilirubin upper limit/, 'bili_uln'], [/HDL or LDL/, 'hdl'],
   [/Fasting status/, 'fasting'], [/Baseline HbA1c/, 'hba1c'], [/Baseline serology/, 'hbsag'],
   [/Declined|Questionnaire entered but/, 'declined'], [/Questionnaire incomplete/, 'phq1'], [/Item 9 above 0 but no E1 event/, 'phq9'], [/E1 form number/, 'e1_form_no'], [/Interview outside/, 'interview_date'],
-  [/Spirometry test date|Spirometry outside/, 'test_date'], [/Spirometry status|Visit 5 smear is not|opted out/, 'spiro_status'], [/FEV1 or FVC|FEV1 greater/, 'fev1_l'], [/FEV1\/FVC/, 'fev1_fvc_pct'], [/Fewer than 3/, 'n_acceptable'],
+  [/Spirometry test date|Spirometry outside/, 'test_date'], [/Spirometry status|Visit 5 smear is not|consent form says declined/, 'spiro_status'], [/FEV1 or FVC|FEV1 greater/, 'fev1_l'], [/FEV1\/FVC/, 'fev1_fvc_pct'], [/Fewer than 3/, 'n_acceptable'],
   [/need resolution|no final Timika/, 'resolution'], [/Final Timika/, 'final_override'], [/cavity/, 'cavity_final'], [/not yet scored/, 'r1_pct'],
   [/Event type missing|E1 recorded but|E2 recorded but/, 'event_type'], [/IRB/, 'irb_reported_date'], [/Same-day risk/, 'e1_risk_assessed'], [/Treating team not recorded/, 'team_informed'],
   [/informed before|informed missing/, 'team_informed_date'], [/Detected before/, 'detected_date'], [/RUCAM/, 'e2_rucam_type'], [/Hy's law/, 'e2_hys_law'],
@@ -711,7 +712,7 @@ function computeDerived_(data, today) {
       if (!base[sid]) Q(sid, 'S2_BASELINE', '', 'V1', 'Baseline examination missing', '');
       if (!labs[sid + '|V1']) Q(sid, 'LABS', '', 'V1', 'Baseline laboratory results missing', '');
       if (!cxr[sid]) Q(sid, 'S3_CXR', '', '', 'Radiograph record missing', '');
-      if (!phq[sid + '|V1'] && e.optout_questionnaires !== 'Y') Q(sid, 'PHQ_GAD', '', 'V1', 'Baseline questionnaires missing', '');
+      if (!phq[sid + '|V1'] && e.optout_questionnaires !== 'D') Q(sid, 'PHQ_GAD', '', 'V1', 'Baseline questionnaires missing', '');
     }
   });
   const used = ids.filter(idOk_).concat(Object.keys(destroyed).filter(idOk_)).map(function (s) { return +s.slice(CFG.ID_PREFIX.length); });
@@ -775,7 +776,7 @@ function computeDerived_(data, today) {
     if (!r.declined) tag('Declined not recorded', 'Y or N');
     if (r.declined === 'Y' && filled > 0) tag('Declined but items entered', '');
     if (r.declined === 'N' && filled < 16) tag('Questionnaire incomplete', (16 - filled) + ' items blank');
-    if (filled > 0 && (enrol[r.study_id] || {}).optout_questionnaires === 'Y') tag('Questionnaire entered but the participant opted out on the consent form', '');
+    if (filled > 0 && (enrol[r.study_id] || {}).optout_questionnaires === 'D') tag('Questionnaire entered but the consent form says declined', '');
     if (r.declined !== 'Y' && num_(r.phq9) !== null && num_(r.phq9) > 0 && !hasEvent(r.study_id, 'E1')) tag('Item 9 above 0 but no E1 event recorded', '');
   });
   T('SPIRO').forEach(function (r) {
@@ -790,7 +791,7 @@ function computeDerived_(data, today) {
     if (na !== null && na < 3) tag('Fewer than 3 acceptable manoeuvres', 'result not reportable');
     const v5 = visits[r.study_id + '|V5'];
     if (!v5 || v5.smear_result !== 'N') tag('Spirometry done but the Visit 5 smear is not recorded as negative', '');
-    if ((enrol[r.study_id] || {}).optout_spirometry === 'Y') tag('Spirometry done but the participant opted out on the consent form', '');
+    if ((enrol[r.study_id] || {}).optout_spirometry === 'D') tag('Spirometry done but the consent form says declined', '');
   });
   T('S3_CXR').forEach(function (r) {
     if (!r.study_id) return;
@@ -890,7 +891,7 @@ function computeDerived_(data, today) {
       }
       const dv = diff_(r.visit_date, today);
       if (!labs[sid + '|' + v] && dv !== null && dv > 7) Q(sid, 'LABS', '', v, 'No laboratory row for this visit', 'visit was ' + dv + ' days ago; enter the results, or the row with lab status not done');
-      if (v === 'V5' && !phq[sid + '|V5'] && e.optout_questionnaires !== 'Y' && dv !== null && dv > 7) Q(sid, 'PHQ_GAD', '', 'V5', 'Visit 5 questionnaires missing', '');
+      if (v === 'V5' && !phq[sid + '|V5'] && e.optout_questionnaires !== 'D' && dv !== null && dv > 7) Q(sid, 'PHQ_GAD', '', 'V5', 'Visit 5 questionnaires missing', '');
       // treatment outcome against the smear results (WHO 2013 definitions)
       if (v === 'V5' && has(r.outcome)) {
         const v3 = visits[sid + '|V3'] || {};
@@ -1030,7 +1031,7 @@ function computeDerived_(data, today) {
       if (mv.length) R('VISITS', r._row, v, 'visit fields blank', mv.join(', '));
     });
     // questionnaires at V1 and V5
-    if (e.optout_questionnaires !== 'Y') ['V1', 'V5'].forEach(function (v) {
+    if (e.optout_questionnaires !== 'D') ['V1', 'V5'].forEach(function (v) {
       if (expected.indexOf(v) < 0) return;
       const p = phq[sid + '|' + v];
       if (!p) { if (!already(sid, 'PHQ_GAD', v, /questionnaires missing/)) R('PHQ_GAD', '', v, 'questionnaire row missing', 'enter it, or the row with declined Y'); return; }
@@ -1038,7 +1039,7 @@ function computeDerived_(data, today) {
       if (mp.length) R('PHQ_GAD', p._row, v, 'questionnaire fields blank', mp.join(', '));
     });
     // spirometry at V5: expected when completed, not opted out and the V5 smear is negative
-    if (en.status === 'C' && e.optout_spirometry !== 'Y' && (visits[sid + '|V5'] || {}).smear_result === 'N') {
+    if (en.status === 'C' && e.optout_spirometry !== 'D' && (visits[sid + '|V5'] || {}).smear_result === 'N') {
       const sp = T('SPIRO').filter(function (x) { return x.study_id === sid; })[0];
       if (!sp) R('SPIRO', '', 'V5', 'spirometry row missing', 'enter the result, or status not done, declined or contraindicated');
       else if (sp.spiro_status === 'Y') {

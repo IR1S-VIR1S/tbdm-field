@@ -736,7 +736,7 @@ function participant(p) {
   const dpk = DERIVED.DERIVED_PARTICIPANT.map((x) => x[0]), D = {}; dpk.forEach((k, i) => { D[k] = dp[i]; });
   const d0 = dayNo_(e.att_start_date), today = dayNo_(todayIso()), sched = {};
   out.schedule.filter((r) => r[0] === sid).forEach((r) => { sched[r[1]] = r[5]; });
-  const optQ = e.optout_questionnaires === 'Y', optS = e.optout_spirometry === 'Y';
+  const optQ = e.optout_questionnaires === 'D', optS = e.optout_spirometry === 'D';
   let curV = 'V1';
   const formRow = (tab, visit) => {
     if ((tab === 'PHQ_GAD' && optQ) || (tab === 'SPIRO' && optS)) return el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', null, NAMES[tab]), el('div', { class: 'sub' }, 'declined on the consent form')));
@@ -1050,6 +1050,13 @@ function fieldEl(c) {
       autocapitalize: ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 || BY_FIELDS.indexOf(c.key) >= 0 ? 'characters' : 'off',
       maxlength: c.type === 'text' ? String(c.max) : null, disabled: unitMissing, placeholder: unitMissing ? 'choose the unit first' : c.type === 'sidnew' || c.type === 'sid' ? 'TBDM-' : null,
       oninput: (ev) => set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? ev.target.value.toUpperCase() : ev.target.value), onchange: (ev) => set(ev.target.value) });
+    if (F.tab === 'S1_ENROL' && c.key === 'regimen' && !F.ro) {      // one tap for the regimens the PI named; typing any other regimen still works
+      const row = el('div', { class: 'seg quick', role: 'group', 'aria-label': c.label + ', quick choices' });
+      const paint = () => row.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === s_(F.vals[c.key])));
+      ['4HRZE/2HR'].forEach((x) => row.append(el('button', { type: 'button', 'data-v': x, onclick: () => { inp.value = x; set(x); paint(); } }, x)));
+      inp.addEventListener('input', paint); paint();
+      box.append(row);
+    }
     if (F.tab === 'R_SCORES' && (c.key === 'pct_lung' || c.key === 'n_cavities') && !F.ro) {      // tap choices; typing an exact value still works
       const picks = c.key === 'pct_lung' ? Array.from({ length: 21 }, (_, i) => String(i * 5)) : Array.from({ length: 10 }, (_, i) => String(i + 1));
       const row = el('div', { class: 'seg quick', role: 'group', 'aria-label': c.label + ', quick choices' });
@@ -1199,8 +1206,8 @@ function practiceTabs() {
       { screen_no: 2, screen_date: iso(6), age: 39, sex: 'F', smear_grade: '1', eligible: 'Y', enrolled: 'Y', study_id: PRAC_B, screened_by: 'PRAC' },
       { screen_no: 3, screen_date: iso(5), age: 52, sex: 'M', smear_grade: '3', eligible: 'N', excl_code: EXCL[0][0], enrolled: 'N', screened_by: 'PRAC' }],
     S1_ENROL: [
-      { study_id: PRAC_A, enrol_date: iso(40), att_start_date: iso(42), age_years: 46, sex: 'M', residence: 'U', education: '2', smoking: '0', alcohol: '0', dm_status: 'K', dm_years: 3, dm_drugs: 'M', htn: 'N', regimen: 'HRZE', smear_grade: '2', genexpert: 'D', rif_res: 'N', optout_questionnaires: 'N', optout_spirometry: 'N', entered_by: 'PRAC' },
-      { study_id: PRAC_B, enrol_date: iso(4), att_start_date: iso(5), age_years: 39, sex: 'F', residence: 'R', education: '1', smoking: '0', alcohol: '0', dm_status: '0', htn: 'N', regimen: 'HRZE', smear_grade: '1', genexpert: 'D', rif_res: 'N', optout_questionnaires: 'N', optout_spirometry: 'N', entered_by: 'PRAC' }],
+      { study_id: PRAC_A, enrol_date: iso(40), att_start_date: iso(42), age_years: 46, sex: 'M', residence: 'U', education: '2', smoking: '0', alcohol: '0', dm_status: 'K', dm_years: 3, dm_drugs: 'M', htn: 'N', regimen: 'HRZE', smear_grade: '2', genexpert: 'D', rif_res: 'N', optout_questionnaires: 'A', optout_spirometry: 'A', entered_by: 'PRAC' },
+      { study_id: PRAC_B, enrol_date: iso(4), att_start_date: iso(5), age_years: 39, sex: 'F', residence: 'R', education: '1', smoking: '0', alcohol: '0', dm_status: '0', htn: 'N', regimen: 'HRZE', smear_grade: '1', genexpert: 'D', rif_res: 'N', optout_questionnaires: 'A', optout_spirometry: 'A', entered_by: 'PRAC' }],
     S2_BASELINE: [{ study_id: PRAC_A, exam_date: iso(41), height_cm: 168, weight_kg: 52, waist_cm: 80, muac_mm: 230, examined_by: 'PRAC' }],
     VISITS: today >= attA + 21 ? [{ study_id: PRAC_A, visit: 'V2', attended: 'Y', visit_date: isoOf_(Math.min(today, v2)), treatment: 'C', adherence: 'G', entered_by: 'PRAC' }] : []
   };
