@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'a1006c73b849';                 // replaced by build.js with the build's hash
+const BUILD_ID = '8c292c035417';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -159,6 +159,21 @@ async function bioOpen() {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, key, vault.ct);                    // fails if the vault was reset since
   T.salt = vault.salt; KEY = key; S = JSON.parse(new TextDecoder().decode(pt));
   sessSave();
+}
+async function bioTurnOn() {
+  try { await bioEnrol(); toast('Face ID or fingerprint is on'); }
+  catch (e) { toast(e && e.name === 'NotAllowedError' ? 'Cancelled, or the phone refused the Face ID check. Nothing was changed.' : 'Could not turn it on (build ' + BUILD_ID.slice(0, 6) + ', ' + (e && e.step ? e.step + ': ' : '') + (e && e.name) + ': ' + ((e && e.message) || '') + ')'); }
+  render();
+}
+const BIOASK = 'tbdm-test-bioask';
+// After a correct PIN: if this phone can do Face ID or fingerprint and it is not on yet, offer it once. "Not now" is remembered and the offer is not repeated;
+// the person can still turn it on in Settings, or by tapping the face icon on the lock screen.
+function offerBio() {
+  let declined = false; try { declined = localStorage.getItem(BIOASK) === 'no'; } catch (e) { /* ignore */ }
+  const wanted = T.bioWant; T.bioWant = false;
+  if (!KEY || T.practice || T.hasBio || !T.bioOk || (declined && !wanted)) return;
+  modal('Open the app with Face ID or fingerprint?', [el('p', null, 'Next time you can unlock without typing the PIN. The PIN keeps working as a back-up.')],
+    [['Not now', () => { try { localStorage.setItem(BIOASK, 'no'); } catch (e) { /* ignore */ } }], ['Set up', bioTurnOn, 'primary']]);
 }
 async function bioOff() { try { await kvDel('bio'); } catch (e) { /* ignore */ } T.hasBio = false; }
 
@@ -422,6 +437,7 @@ function lockScreen() {
     const pin = T.pin; T.pin = ''; T.lockMsg = 'Opening…'; render();
     try {
       await openVault(pin); localStorage.setItem('tbdm-test-fails', '0'); T.lockMsg = ''; resetNav(); bumpIdle(); render(); sync();
+      offerBio();
     } catch (e) {
       const f = fails + 1; localStorage.setItem('tbdm-test-fails', String(f));
       if (f >= 5) localStorage.setItem('tbdm-test-wait', String(Date.now() + Math.min(3600, Math.pow(2, f - 4) * 15) * 1000));
@@ -443,7 +459,7 @@ function lockScreen() {
     el('p', null, T.join ? 'An invitation link was opened, but this phone is already set up. Unlock, then reset the phone in Settings to use it.' : 'Enter your PIN'),
     dots, el('div', { class: 'pad' }, keys.map((k) => el('button', { class: k.length > 1 ? 'txt' : '', 'aria-label': k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k, onclick: () => press(k) },
       k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k))), err,
-    T.hasBio && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', 'aria-label': 'Unlock with Face ID or fingerprint', title: 'Face ID or fingerprint', onclick: () => tryBio(false) }, bioIcon()) : null);
+    (T.hasBio || T.bioOk) && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', 'aria-label': 'Unlock with Face ID or fingerprint', title: 'Face ID or fingerprint', onclick: () => { if (T.hasBio) tryBio(false); else { T.bioWant = true; T.lockMsg = 'Type your PIN once. You will then be asked to set up Face ID or fingerprint.'; render(); } } }, bioIcon()) : null);
 }
 
 // ------------------------------------------------------------------ home and lists
@@ -1388,11 +1404,7 @@ function bioSettings() {
   if (T.bioOk === null) return el('p', { class: 'small muted' }, 'Checking whether this phone offers Face ID or fingerprint…');
   if (!T.bioOk) return el('div', null, el('p', { class: 'small muted', id: 'bio-none' }, 'Face ID / fingerprint unlock: the phone does not report a built-in biometric for this app. (' + (T.bioWhy || '') + (window.navigator.standalone ? '; opened from the home screen' : '; opened in the browser') + '.) The PIN works as normal.'),
     window.PublicKeyCredential ? el('button', { class: 'btn block', id: 'bio-try', onclick: () => { T.bioOk = true; render(); } }, 'Try to set it up anyway') : null, el('p'));
-  const ask = async () => {
-    try { await bioEnrol(); toast('Face ID or fingerprint is on'); }
-    catch (e) { toast(e && e.name === 'NotAllowedError' ? 'Cancelled, or the phone refused the Face ID check. Nothing was changed.' : 'Could not turn it on (build ' + BUILD_ID.slice(0, 6) + ', ' + (e && e.step ? e.step + ': ' : '') + (e && e.name) + ': ' + ((e && e.message) || '') + ')'); }
-    render();
-  };
+  const ask = bioTurnOn;
   return el('div', null, el('button', { class: 'btn block', id: 'bio-on', onclick: ask }, 'Unlock with Face ID or fingerprint'), el('p'));
 }
 function resetPhone() {
@@ -1806,7 +1818,7 @@ window.addEventListener('hashchange', () => { if (readJoin() && !KEY) render(); 
 (async function start() {
   readJoin();
   try { T.hasVault = !!(await kvGet('vault')); T.hasBio = T.hasVault && !!(await kvGet('bio')); } catch (e) { T.hasVault = false; T.hasBio = false; }
-  bioAvailable().then((v) => { T.bioOk = v; });
+  bioAvailable().then((v) => { T.bioOk = v; if (!KEY && T.hasVault) render(); });
   if (T.hasVault) await sessRestore();
   if ('serviceWorker' in navigator) setupAutoUpdate();
   render();
