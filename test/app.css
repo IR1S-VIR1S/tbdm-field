@@ -165,3 +165,8 @@ a.tel.big { color: var(--brand); font-weight: 700; text-decoration: none; margin
 .bn .badge { position: absolute; top: 4px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #b3261e; color: #fff; font-style: normal; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; }
 
 .lock .bio { margin-top: 14px; background: transparent; border: 1px solid rgba(255,255,255,.6); color: #fff; border-radius: 12px; padding: 12px 18px; font-size: 16px; font-weight: 600; }
+
+.bnav .bn { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.bnav.dragmode { scroll-snap-type: none; }
+.bnav.dragmode .bn:not(.dragging) { opacity: .6; transition: opacity .15s; }
+.bn.dragging { z-index: 7; background: #e6f1ef; border-radius: 12px; box-shadow: 0 4px 14px rgba(20,33,31,.25); }
