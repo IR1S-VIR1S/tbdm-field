@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'bbd0ce777b0e';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'f81846f0a4fa';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -462,7 +462,7 @@ function ownFree() {
   return out.sort((a, b) => a - b);
 }
 async function topUpNumbers(mine, still) {              // called by sync() once the pull has succeeded; a failure here never fails the sync
-  if (T.practice || !canData()) return;
+  if (T.practice || !(canData() || role() === 'dots')) return;
   const N = S.nums || (S.nums = { dev: '', blocks: [], got: false, old: false, pend: '', err: '' });
   if (!N.dev) N.dev = rid();
   if (N.got && !N.old && ownFree().length > CFG.BLOCK_LOW) return;
