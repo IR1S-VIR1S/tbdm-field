@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '876bc8e0a0f7';                 // replaced by build.js with the build's hash
+const BUILD_ID = '57c293d0ff2a';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -450,15 +450,17 @@ function lockScreen() {
     }
   };
   const tryBio = async (auto) => {
+    if (T.bioBusy === 'asking') return;                       // one check at a time: a second request would cancel the first and make the phone ask twice
+    T.bioBusy = 'asking';
     T.lockMsg = ''; if (!auto) render();
     try { await bioOpen(); localStorage.setItem('tbdm-fails', '0'); T.lockMsg = ''; resetNav(); bumpIdle(); render(); sync(); }
     catch (e) {
       if (e && e.name === 'OperationError') { await bioOff(); T.lockMsg = 'Face ID or fingerprint no longer matches this PIN. Use the PIN, then set it up again in Settings.'; }          // the PIN changed or the key is gone
       else T.lockMsg = auto ? '' : e && e.name === 'NotAllowedError' ? 'Cancelled. Use the PIN, or try again.' : 'Face ID or fingerprint did not open the app. Use the PIN.';          // an automatic try that the phone declines stays quiet
       render();
-    }
+    } finally { T.bioBusy = false; }
   };
-  if (T.hasBio && !T.join && !T.bioTried && !(Date.now() < until)) { T.bioTried = true; setTimeout(() => { if (!KEY && T.hasBio) tryBio(true); }, 350); }          // ask for Face ID as soon as the lock screen appears, once per lock; the button stays for another try
+  if (T.hasBio && !T.join && !T.bioTried && !(Date.now() < until)) { T.bioTried = true; T.bioBusy = 'waiting'; setTimeout(() => { if (!KEY && T.hasBio) tryBio(true); else T.bioBusy = false; }, 350); }          // ask for Face ID as soon as the lock screen appears, once per lock; the button stays for another try
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'];
   return el('div', { class: 'lock' }, el('h1', null, 'TBDM Field App'),
     el('p', null, T.join ? 'An invitation link was opened, but this phone is already set up. Unlock, then reset the phone in Settings to use it.' : 'Enter your PIN'),
@@ -1851,7 +1853,7 @@ window.addEventListener('hashchange', () => { if (readJoin() && !KEY) render(); 
 // so it never interrupts an entry and never needs the PIN to be typed because of the update.
 let updateReady = false;
 function applyUpdateIfSafe() {
-  if (!updateReady || KEY || T.pin || T.join) return;                       // only when locked, no PIN half typed, not mid-setup
+  if (!updateReady || KEY || T.pin || T.join || T.bioBusy) return;           // never while the phone is asking for Face ID: reloading then makes it ask a second time                       // only when locked, no PIN half typed, not mid-setup
   location.reload();
 }
 function setupAutoUpdate() {
