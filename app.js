@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'e7e07b30bd09';                 // replaced by build.js with the build's hash
+const BUILD_ID = '24f2bc928d4e';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -65,7 +65,28 @@ const kvSet = (k, v) => kv('readwrite', (s) => s.put(v, k));
 const kvDel = (k) => kv('readwrite', (s) => s.delete(k));
 async function deriveKey(pin, salt) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: PBKDF2_ROUNDS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: PBKDF2_ROUNDS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+}
+// A page refresh (pull down to reload) would otherwise ask for the PIN again. For the open tab only, the key is kept in
+// session storage until the same idle limit that locks the app, the Lock button, or closing the tab. It never reaches disk or the server.
+const SESS = 'tbdm-sess';
+function b64(u8) { let t = ''; u8.forEach((c) => { t += String.fromCharCode(c); }); return btoa(t); }
+async function sessSave() {
+  try { const raw = new Uint8Array(await crypto.subtle.exportKey('raw', KEY)); sessionStorage.setItem(SESS, JSON.stringify({ k: b64(raw), s: b64(T.salt), t: Date.now() + IDLE_LOCK_MS })); } catch (e) { /* storage blocked: the PIN is simply asked again */ }
+}
+function sessTouch() { try { const o = JSON.parse(sessionStorage.getItem(SESS) || 'null'); if (o) { o.t = Date.now() + IDLE_LOCK_MS; sessionStorage.setItem(SESS, JSON.stringify(o)); } } catch (e) { /* ignore */ } }
+function sessClear() { try { sessionStorage.removeItem(SESS); } catch (e) { /* ignore */ } }
+async function sessRestore() {
+  try {
+    const o = JSON.parse(sessionStorage.getItem(SESS) || 'null');
+    if (!o || !(o.t > Date.now())) { sessClear(); return false; }
+    const vault = await kvGet('vault');
+    if (!vault) { sessClear(); return false; }
+    const key = await crypto.subtle.importKey('raw', Uint8Array.from(atob(o.k), (c) => c.charCodeAt(0)), 'AES-GCM', true, ['encrypt', 'decrypt']);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, key, vault.ct);
+    T.salt = vault.salt; KEY = key; S = JSON.parse(new TextDecoder().decode(pt)); bumpIdle();
+    return true;
+  } catch (e) { sessClear(); return false; }
 }
 async function saveState() {
   if (T.practice) { practiceCommit(); return; }
@@ -79,7 +100,52 @@ async function openVault(pin) {
   const key = await deriveKey(pin, vault.salt);
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, key, vault.ct);
   T.salt = vault.salt; KEY = key; S = JSON.parse(new TextDecoder().decode(pt));
+  sessSave();
 }
+
+// ---- Face ID / fingerprint unlock, as an alternative to the PIN.
+// The PIN stays the master secret. At enrolment the PIN is encrypted under a key that the phone's own authenticator releases only after
+// a Face ID or fingerprint check (the WebAuthn PRF extension). Nothing the phone stores can open the vault without that check.
+// Where the phone or browser cannot do this, the option is not offered: a version that merely hides the PIN behind a button would be weaker than the PIN itself.
+async function bioAvailable() {
+  T.bioWhy = '';
+  if (!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create)) { T.bioWhy = 'WebAuthn: not in this browser'; return false; }
+  try { const v = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); T.bioWhy = 'WebAuthn: yes; built-in biometric reported: ' + (v ? 'yes' : 'no'); return !!v; }
+  catch (e) { T.bioWhy = 'WebAuthn: yes; check failed (' + (e && e.name) + ')'; return false; }
+}
+async function bioWrapKey(prf) {
+  const base = await crypto.subtle.importKey('raw', prf, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode('tbdm pin wrap v1') }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+function prfOut(cred) { const x = cred && cred.getClientExtensionResults && cred.getClientExtensionResults(); return x && x.prf && x.prf.results && x.prf.results.first ? new Uint8Array(x.prf.results.first) : null; }
+const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
+async function bioAsk(id, prfSalt) {
+  const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [{ type: 'public-key', id }], userVerification: 'required', timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+  return prfOut(a);
+}
+async function bioEnrol(pin) {
+  const vault = await kvGet('vault');
+  await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, await deriveKey(pin, vault.salt), vault.ct);          // throws unless the PIN is right
+  const prfSalt = rnd(32);
+  const cred = await navigator.credentials.create({ publicKey: { rp: { name: 'TBDM Field' }, user: { id: rnd(16), name: S.cfg.email || 'user', displayName: S.cfg.initials || 'user' }, challenge: rnd(32),
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+    timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+  const id = new Uint8Array(cred.rawId);
+  const out = prfOut(cred) || await bioAsk(id, prfSalt);               // some phones only report support at creation and give the secret on the next check
+  if (!out) throw new Error('This phone or browser cannot lock the PIN to Face ID or fingerprint. Keep using the PIN.');
+  const iv = rnd(12), ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await bioWrapKey(out), new TextEncoder().encode(pin));
+  await kvSet('bio', { v: 1, id, prfSalt, iv, ct });
+  T.hasBio = true;
+}
+async function bioOpen() {
+  const b = await kvGet('bio');
+  if (!b) throw new Error('not set up');
+  const out = await bioAsk(b.id, b.prfSalt);
+  if (!out) throw new Error('The check did not release the key.');
+  const pin = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.iv }, await bioWrapKey(out), b.ct));
+  await openVault(pin);
+}
+async function bioOff() { try { await kvDel('bio'); } catch (e) { /* ignore */ } T.hasBio = false; }
 
 // ------------------------------------------------------------------ data: server snapshot plus unsent changes
 function serverRows(tab) {
@@ -106,7 +172,7 @@ function view(tab) {
 }
 function data() { const d = {}; SCHEMA.forEach((t) => { d[t.tab] = view(t.tab); }); return d; }
 function derived() {
-  const out = computeDerived_(data(), todayIso());
+  const out = computeDerived_(data(), todayIso(), S && S.server && S.server.held);
   if (T.practice) out.queries = out.queries.filter((q) => !/^Study number skipped/.test(q[4]));      // practice numbers sit at the top of the range on purpose
   return out;
 }
@@ -141,19 +207,22 @@ function queueSave(tab, existing, values) {
 }
 
 // ------------------------------------------------------------------ server
-async function api(body) {
+async function api(body, ms) {
   if (T.practice) throw new Error('practice mode: the app never contacts the study');
-  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 45000);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms || 45000);
   try {
     const r = await fetch(S ? S.cfg.api : T.join.api, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       signal: ctl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store' });
     return await r.json();
   } finally { clearTimeout(timer); }
 }
+// The workbook takes several seconds per entry, and this phone gives up on a request after 45 seconds, so a long queue goes in small batches.
+const PUSH_BATCH = 5;
 async function sync() {
   if (!S || T.syncing || T.practice) return;
   if (!navigator.onLine) { T.syncError = 'offline'; paintSync(); return; }
   T.syncing = true; paintSync();
+  let synced = false;
   const mine = S, still = () => { if (S !== mine) throw Object.assign(new Error('stopped'), { quiet: true }); };   // the phone was locked or switched to practice meanwhile
   try {
     const hi = await api({ op: 'hello', token: S.cfg.token }); still();          // do the app and the workbook speak the same column layout?
@@ -165,9 +234,9 @@ async function sync() {
     }
     if (srv < CFG.SCHEMA_VER) throw Object.assign(new Error('The study workbook has not been upgraded yet. Your entries stay on this phone and are sent after the upgrade.'), { code: 409 });
     const pending = S.outbox.filter((c) => c.status === 'pending');
-    for (let i = 0; i < pending.length; i += 50) {
-      const batch = pending.slice(i, i + 50).map((c) => ({ cid: c.cid, tab: c.tab, rid: c.rid, create: c.create, values: c.values, base: c.base, by: c.by }));
-      const revs = {}; pending.slice(i, i + 50).forEach((c) => { revs[c.cid] = c.rev; });
+    for (let i = 0; i < pending.length; i += PUSH_BATCH) {
+      const batch = pending.slice(i, i + PUSH_BATCH).map((c) => ({ cid: c.cid, tab: c.tab, rid: c.rid, create: c.create, values: c.values, base: c.base, by: c.by }));
+      const revs = {}; pending.slice(i, i + PUSH_BATCH).forEach((c) => { revs[c.cid] = c.rev; });
       const res = await api({ op: 'push', token: S.cfg.token, schema: CFG.SCHEMA_VER, changes: batch }); still();
       if (!res.ok) throw Object.assign(new Error(res.error || 'the server refused'), { code: res.code });
       res.results.forEach((r) => {
@@ -178,31 +247,38 @@ async function sync() {
       });
       await saveState();
     }
+    await pushConf(still);
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], at: Date.now() };
-    S.cfg.role = pull.role; S.cfg.email = pull.email;
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], at: Date.now() };
+    if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
+    T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email;
     S.lastSync = Date.now(); T.syncError = ''; T.revoked = false;
     await saveState();
+    try { await confRefresh(still); } catch (e) { if (e.quiet || e.code === 401) throw e; }      // a failure here never fails the sync
+    synced = true;
   } catch (e) {
     if (e.quiet) return;
     T.syncError = e.name === 'AbortError' ? 'timed out' : (e.message || 'failed');
-    if (e.code === 401) T.revoked = true;
+    if (e.code === 401) { T.revoked = true; if (S === mine) { S.conf = null; S.confOut = []; saveState().catch(() => {}); } }      // a phone that lost access keeps no confidential copy
   } finally {
     T.syncing = false;
     if (T.form && T.form.dirty) paintSync(); else render();
   }
+  // Spare study numbers are fetched after the sync has finished and redrawn, so this extra request never delays the redraw
+  // (a late redraw can land while someone is typing into a form they have just opened). It changes no screen by itself.
+  if (synced && S === mine && !T.practice) topUpNumbers(mine, () => { if (S !== mine) throw Object.assign(new Error('stopped'), { quiet: true }); }).catch(() => {});
 }
 
 // ------------------------------------------------------------------ locking
-function bumpIdle() { clearTimeout(T.idle); if (KEY) T.idle = setTimeout(lock, IDLE_LOCK_MS); }
-function lock() { T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
+function bumpIdle() { clearTimeout(T.idle); if (KEY) { T.idle = setTimeout(lock, IDLE_LOCK_MS); sessTouch(); } }
+function lock() { sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
   else if (KEY && T.hiddenAt && Date.now() - T.hiddenAt > IDLE_LOCK_MS) lock();
 });
-window.addEventListener('online', () => { paintSync(); sync(); });
+window.addEventListener('online', () => { T.weak = false; paintSync(); sync(); });
 window.addEventListener('offline', paintSync);
 ['online', 'offline'].forEach((ev) => window.addEventListener(ev, () => { if (KEY && cur().name === 'home') render(); }));   // online-only tiles appear and disappear
 setInterval(() => { if (KEY && navigator.onLine && !T.syncing && S.outbox.some((c) => c.status === 'pending')) sync(); }, 120000);
@@ -241,18 +317,10 @@ function render() {
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
   const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
-    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen };
+    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
-  const dock = dockBar(c.name); if (dock) app.append(dock);
-}
-// Bottom bar for the PI: Contact and Link register stay one tap away on every screen except forms (which have their own Save bar). It scrolls sideways if more buttons are added.
-function dockBar(screen) {
-  if (role() !== 'pi' || T.practice || screen === 'form') return null;
-  const online = navigator.onLine, inContact = screen === 'link' || screen === 'linkpick', inReg = screen === 'register';
-  return el('nav', { class: 'dock', 'aria-label': 'Confidential tools' },
-    el('button', { class: 'dock-item' + (inContact ? ' on' : ''), type: 'button', onclick: () => { if (!inContact) { resetNav(); go('linkpick'); } } }, el('b', null, 'Contact'), el('span', null, 'call, WhatsApp')),
-    el('button', { class: 'dock-item' + (inReg ? ' on' : ''), type: 'button', disabled: !online, onclick: () => { if (!inReg) { if (T.reg) T.reg.list = null; resetNav(); go('register'); } } }, el('b', null, 'Link register'), el('span', null, online ? 'numbers and cards' : 'needs internet')));
+  if (role() === 'pi' && S && S.server && ['home', 'participants', 'due', 'tools', 'visits', 'settings', 'linkpick', 'register'].indexOf(c.name) >= 0) app.append(bottomNav(c.name));
 }
 function topBar(title, opts) {
   opts = opts || {};
@@ -314,13 +382,13 @@ function setupScreen() {
       if (!res.ok) throw new Error(res.error || 'joining failed');
       T.salt = crypto.getRandomValues(new Uint8Array(16)); KEY = await deriveKey(a, T.salt);
       S = { cfg: { api: T.join.api, token: res.token, email: res.email, role: res.role, initials: i, joined: Date.now() }, server: null, outbox: [], lastSync: 0 };
-      await saveState(); T.hasVault = true; T.join = null;
+      await saveState(); sessSave(); T.hasVault = true; T.join = null;
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
       bumpIdle(); render(); sync();
     } catch (e) { msg.textContent = e.message; btn.disabled = false; btn.textContent = 'Join'; }
   } }, 'Join');
   return el('div', { class: 'setup' }, el('h2', null, 'Join the TB-DM study'),
-    el('div', { class: 'card' }, el('p', { class: 'small muted' }, 'This phone will keep study entries, encrypted, until they are sent. Never type a name, CNIC, telephone number, address or MRN anywhere in this app.')),
+    el('div', { class: 'card' }, el('p', { class: 'small muted' }, 'This phone will keep study entries, encrypted, until they are sent. Study entries never contain a name, CNIC, telephone number, address or MRN. Those are recorded only in the confidential Link register, which only the PI and the DOTS incharge can open.')),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Your initials'), el('div', { class: 'hint' }, 'Recorded with every entry you make.'), ini),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Choose a PIN'), el('div', { class: 'hint' }, 'Unlocks the app and encrypts its data. If you forget it, the phone must be reset and anything not yet sent is lost.'), p1),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Type the PIN again'), p2, msg), btn);
@@ -345,15 +413,26 @@ function lockScreen() {
       T.lockMsg = 'Wrong PIN.'; render();
     }
   };
+  const tryBio = async () => {
+    T.lockMsg = ''; render();
+    try { await bioOpen(); localStorage.setItem('tbdm-fails', '0'); T.lockMsg = ''; resetNav(); bumpIdle(); render(); sync(); }
+    catch (e) {
+      if (e && e.name === 'OperationError') { await bioOff(); T.lockMsg = 'Face ID or fingerprint no longer matches this PIN. Use the PIN, then set it up again in Settings.'; }          // the PIN changed or the key is gone
+      else T.lockMsg = e && e.name === 'NotAllowedError' ? 'Cancelled. Use the PIN, or try again.' : 'Face ID or fingerprint did not open the app. Use the PIN.';
+      render();
+    }
+  };
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'];
   return el('div', { class: 'lock' }, el('h1', null, 'TBDM Field App'),
     el('p', null, T.join ? 'An invitation link was opened, but this phone is already set up. Unlock, then reset the phone in Settings to use it.' : 'Enter your PIN'),
     dots, el('div', { class: 'pad' }, keys.map((k) => el('button', { class: k.length > 1 ? 'txt' : '', 'aria-label': k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k, onclick: () => press(k) },
-      k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k))), err);
+      k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k))), err,
+    T.hasBio && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', onclick: tryBio }, 'Unlock with Face ID or fingerprint') : null);
 }
 
 // ------------------------------------------------------------------ home and lists
 function role() { return S.cfg.role || 'data'; }
+const confRole = () => role() === 'pi' || role() === 'dots';
 const canData = () => role() === 'data' || role() === 'pi' || role() === 'nurse';
 const isNurse = () => role() === 'nurse';
 // The next study number, from this phone's enrolments and screening lines (including ones not yet sent).
@@ -367,7 +446,37 @@ function nextId(tab) {
   ((S.server && S.server.regnums) || []).forEach((p) => { const n = num(p[0]); if (n) { used[n] = true; top = Math.max(top, n); if (p[1] === 'E' && !enrolled[n] && !out[n] && waiting.indexOf(n) < 0) waiting.push(n); } });   // numbers the register has given out
   if (tab === 'S1_ENROL' && waiting.length) return idOf_(Math.min.apply(null, waiting));
   if (T.practice) { for (let n = CFG.ID_MAX - 2; n >= 1; n--) if (!used[n]) return idOf_(n); return ''; }   // practice numbers count down from the top of the range
-  return top >= CFG.ID_MAX ? '' : idOf_(top + 1);
+  if (S.nums && S.nums.old) return top >= CFG.ID_MAX ? '' : idOf_(top + 1);   // a workbook script that cannot hand out blocks yet: the old rule, until the PI upgrades it
+  const free = ownFree();
+  return free.length ? idOf_(free[0]) : '';
+}
+// Number blocks. The workbook hands this phone its own run of numbers while it is online (numbers_block); offline, only those are offered,
+// so two phones that are both offline never offer the same number. A number typed from a patient's card is accepted whatever block it falls in.
+function usedNums() {
+  const re = new RegExp('^' + CFG.ID_PREFIX + '(\\d+)$', 'i'), used = {}, mark = (v) => { const m = re.exec(s_(v)); if (m) used[+m[1]] = true; };
+  view('S1_ENROL').forEach((r) => mark(r.study_id)); view('S0_SCREEN').forEach((r) => mark(r.study_id));
+  ((S.server && S.server.regnums) || []).forEach((p) => mark(p[0]));
+  (S.confOut || []).forEach((c) => mark(c.body && c.body.study_id)); ((S.conf && S.conf.rows) || []).forEach((r) => mark(r.study_id));
+  return used;
+}
+function ownFree() {
+  const used = usedNums(), out = [];
+  ((S.nums && S.nums.blocks) || []).forEach((b) => { for (let n = b.from; n <= b.to; n++) if (!used[n]) out.push(n); });
+  return out.sort((a, b) => a - b);
+}
+async function topUpNumbers(mine, still) {              // called by sync() once the pull has succeeded; a failure here never fails the sync
+  if (T.practice || !(canData() || role() === 'dots')) return;
+  const N = S.nums || (S.nums = { dev: '', blocks: [], got: false, old: false, pend: '', err: '' });
+  if (!N.dev) N.dev = rid();
+  if (N.got && !N.old && ownFree().length > CFG.BLOCK_LOW) return;
+  if (!N.pend) N.pend = rid();                          // the same id on a retry, so a lost reply never reserves a second block
+  try {
+    const res = await api({ op: 'numbers_block', token: S.cfg.token, rid: N.pend, dev: N.dev }); still();
+    if (res.ok) { N.blocks = res.blocks || []; N.got = true; N.old = false; N.pend = ''; N.err = ''; }
+    else if (res.error === 'unknown operation') { N.old = true; N.err = ''; }          // the workbook script has not been upgraded: keep the old behaviour
+    else N.err = res.error || 'could not get numbers';
+  } catch (e) { if (e.quiet) throw e; }
+  if (S === mine) await saveState();
 }
 function nextNo() { const n = nextId('S1_ENROL'); return n ? 'Next: ' + n : 'No numbers left'; }
 // Screened, eligible and agreed, with a study number, and not yet enrolled. Worked out from this phone's own data, so it needs no signal.
@@ -407,6 +516,8 @@ function findPatient(raw) {
 }
 // The five patients this phone opened most recently (kept in memory only: nothing is written to the phone).
 T.recent = T.recent || [];
+T.lastTap = 0;
+document.addEventListener('pointerdown', () => { T.lastTap = Date.now(); }, true);
 function recordRecent(sid) { if (!sid) return; T.recent = [sid].concat(T.recent.filter((x) => x !== sid)).slice(0, 5); }
 function findBox() {
   const recent = el('div', { class: 'recent', id: 'recent', hidden: true, role: 'listbox', 'aria-label': 'Recently opened patients' },
@@ -416,11 +527,79 @@ function findBox() {
   return el('div', { class: 'card find' }, el('label', { class: 'lab', for: 'find' }, 'Patient Study Number'),
     el('div', { class: 'inline' },
       el('input', { id: 'find', type: 'tel', inputmode: 'numeric', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7',
-        onfocus: () => show(true), onblur: (ev) => { ev.target.value = normId(ev.target.value); setTimeout(() => show(false), 150); },
-        oninput: (ev) => { const t = s_(ev.target.value).trim().toUpperCase(); if (/^(TBDM-?)?\d{3}$/.test(t)) findPatient(t); },   // a complete three-digit number opens the patient at once
+        onfocus: () => show(true),
+        oninput: (ev) => { const t = s_(ev.target.value).trim().toUpperCase(); if (/^(TBDM-?)?\d{3}$/.test(t) && idOk_(normId(t))) findPatient(t); },          // a complete three-digit number opens the patient at once
+        // The tick (Done) on the number pad only closes the keyboard. If the keyboard closed without the person tapping anything else, open the patient straight away.
+        onblur: (ev) => { const box = ev.target; box.value = normId(box.value); setTimeout(() => show(false), 150);
+          if (box.value && idOk_(box.value) && Date.now() - T.lastTap > 500) findPatient(box.value); },
         onkeydown: (ev) => { if (ev.key === 'Enter') findPatient(ev.target.value); } }),
       el('button', { class: 'btn primary', type: 'button', id: 'findgo', onclick: () => findPatient($('#find').value) }, 'Open')),
     recent);
+}
+// ---- PI home: a feed of what needs attention, with a bottom bar. Other roles keep the tile home.
+const ICONS = {
+  home: '<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.4"/><path d="M16.5 14.6c2.7.2 4.5 2 4.5 4.9"/>',
+  due: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  logs: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/>',
+  list: '<rect x="4.5" y="3.5" width="15" height="17" rx="2"/><path d="m8 9 1.6 1.6L12.5 7.5M8 15.5h8M14 10h2.5"/>',
+  phone: '<path d="M6.5 3.5h3l1.5 4-2 1.3a11 11 0 0 0 6.2 6.2l1.3-2 4 1.5v3a2 2 0 0 1-2 2A15.5 15.5 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>',
+  lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5M12 14.5v2.5"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
+};
+function icon(k) { const s = el('span', { class: 'ico', 'aria-hidden': 'true' }); s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICONS[k] + '</svg>'; return s; }
+const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['tools', 'Logs', 'logs'], ['visits', 'Checklist', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'lock'], ['settings', 'Settings', 'settings']];
+function tabTo(name) { confirmLeave(() => { resetNav(); if (name === 'register' && T.reg) T.reg.list = null; if (name !== 'home') go(name); else { T.form = null; render(); window.scrollTo(0, 0); } }); }
+function bottomNav(active) {
+  let dueN = 0;
+  try { dueN = derived().schedule.filter((r) => r[5] !== 'upcoming').length; } catch (e) { dueN = 0; }
+  const pend = T.practice || !confCopy() && !(T.reg && T.reg.list) ? 0 : identifiersPending(T.reg && T.reg.list ? T.reg.list : confAsList()).length;
+  const tabs = NAV_TABS.filter((t) => (t[0] !== 'linkpick' && t[0] !== 'register') || (role() === 'pi' && !T.practice));
+  const nav = el('nav', { class: 'bnav', 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'aria-current': t[0] === active ? 'page' : null, onclick: () => tabTo(t[0]) },
+    icon(t[2]), t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : null, el('span', { class: 'lbl' }, t[1]))));
+  setTimeout(() => { const on = nav.querySelector('.bn.on'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' }); }, 0);          // the selected tab is always in view
+  return nav;
+}
+function feedCard(cls, title, count, rows, onAll, none) {
+  return el('div', { class: 'feed ' + cls },
+    el('button', { class: 'feedhead', onclick: onAll }, el('b', null, title), el('span', { class: 'fcount' }, String(count)), el('span', { class: 'chev' })),
+    rows.length ? rows.slice(0, 3).map((r) => el('button', { class: 'feedrow', onclick: r.go }, el('span', { class: 'fmain' }, r.main, r.sub ? el('small', null, r.sub) : null), r.chip ? el('span', { class: 'chip ' + (r.chipCls || '') }, r.chip) : null)) : el('div', { class: 'feednone' }, none),
+    count > 3 ? el('button', { class: 'feedmore', onclick: onAll }, 'See all ' + count) : null);
+}
+function piHome(out, bad, waiting, oldest, dueN) {
+  const due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = waitingEnrol(), idp = !T.practice && navigator.onLine ? identifiersPending(T.reg && T.reg.list) : [];
+  const group = {}; out.queries.forEach((q) => { const g = q[0] || 'Screening log'; (group[g] = group[g] || []).push(q); });
+  const qkeys = Object.keys(group).sort();
+  const main = el('main', { class: 'pihome' },
+    bad.length ? el('button', { class: 'card alert row', onclick: () => go('attention') }, el('div', { class: 'main' }, el('div', null, bad.length + ' entr' + (bad.length > 1 ? 'ies need' : 'y needs') + ' fixing'), el('div', { class: 'sub' }, 'The workbook did not accept them. Tap to see why.')), el('span', { class: 'chev' })) :
+    waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null,
+    findBox(),
+    el('div', { class: 'quick' },
+      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, 'Add a screening line')) : null,
+      canData() ? enrolTile() : null),
+    el('h2', null, 'Needs attention'),
+    feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
+      due.map((r) => ({ main: r[0] + ' · ' + r[1], sub: 'window ' + r[3] + ' to ' + r[4], chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due'),
+    feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
+      qkeys.map((g) => ({ main: g, sub: group[g][0][4] + (group[g].length > 1 ? ' and ' + (group[g].length - 1) + ' more' : ''), chip: String(group[g].length), chipCls: 'bad', go: () => openQuery(group[g][0]) })), () => go('queries'), 'No queries'),
+    w.length ? feedCard('wait', 'Waiting to enrol', w.length, w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => findPatient(id) })), () => go('form', { tab: 'S1_ENROL', key: {} }), '') : null,
+    idp.length ? feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: 'Name, record number and telephone not recorded', go: () => { if (T.reg) T.reg.list = null; go('register'); } })), () => { if (T.reg) T.reg.list = null; go('register'); }, '') : null,
+    el('h2', null, 'Recent activity'),
+    el('div', { class: 'card feedcard' },
+      T.recent.length ? [el('div', { class: 'small muted' }, 'Opened on this phone'), el('div', { class: 'chips' }, T.recent.map((sid) => el('button', { class: 'rchip', onclick: () => findPatient(sid) }, sid)))] : el('div', { class: 'small muted' }, 'Nothing opened yet in this session.'),
+      el('div', { class: 'small muted', style: 'margin-top:8px' }, waiting.length ? waiting.length + ' waiting to send' : 'All entries sent') ),
+    el('h2', null, 'Safety'),
+    el('div', { class: 'card small' }, 'PHQ-9 item 9 above 0, or a liver result meeting the definition: act the same day (manual Part 4). The app and the e-mail alerts are only a backup.'));
+  return topBar('TBDM Field').concat([main]);
+}
+function toolRow(title, sub, fn) { return el('button', { class: 'row', onclick: fn }, el('div', { class: 'main' }, el('div', null, title), el('div', { class: 'sub' }, sub)), el('span', { class: 'chev' })); }
+function tools() {
+  return topBar('Logs and tools').concat([el('main', null,
+    el('div', { class: 'list' },
+      toolRow('Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')),
+      toolRow('Verification log', view('QC_LOG').length + ' checks', () => go('qclog')),
+      toolRow('Queries', derived().queries.length + ' to check', () => go('queries'))),
+    T.practice ? null : [el('h2', null, 'Training'), el('div', { class: 'list' }, toolRow('Practice', 'Learn with made-up patients', () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']])))])]);
 }
 function home() {
   if (role() === 'dots') return registerScreen();
@@ -429,6 +608,7 @@ function home() {
   const out = isNurse() ? { schedule: [], queries: [] } : derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
   const oldest = waiting.reduce((m, c) => Math.min(m, c.at), Infinity);
   const dueN = out.schedule.filter((r) => r[5] !== 'upcoming').length;
+  if (role() === 'pi') return piHome(out, bad, waiting, oldest, dueN);
   const main = el('main', null,
     bad.length ? el('button', { class: 'card alert row', onclick: () => go('attention') }, el('div', { class: 'main' }, el('div', null, bad.length + ' entr' + (bad.length > 1 ? 'ies need' : 'y needs') + ' fixing'), el('div', { class: 'sub' }, 'The workbook did not accept them. Tap to see why.')), el('span', { class: 'chev' })) : null,
     waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null,
@@ -439,6 +619,8 @@ function home() {
       isNurse() ? el('button', { class: 'tile primary', onclick: () => go('measure') }, el('b', null, 'Measurements'), el('span', null, 'Height, weight, waist, arm')) : null,
       isNurse() ? null : el('button', { class: 'tile guide', onclick: () => go('visits') }, el('b', null, 'Visit checklist'), el('span', null, 'What to order and do')),
       isNurse() ? null : el('button', { class: 'tile people', onclick: () => go('participants') }, el('b', null, 'Participants'), el('span', null, Object.keys(enrolledMap()).length + ' enrolled')),
+      role() === 'pi' && !T.practice ? el('button', { class: 'tile conf', onclick: () => go('linkpick') }, el('b', null, 'Contact'), el('span', null, 'Confidential · call, WhatsApp')) : null,
+      role() === 'pi' && !T.practice && navigator.onLine ? el('button', { class: 'tile conf', onclick: () => { if (T.reg) T.reg.list = null; go('register'); } }, el('b', null, 'Link register'), el('span', null, identifiersPending(T.reg && T.reg.list).length ? identifiersPending(T.reg.list).length + ' enrolled, identifiers pending' : 'Confidential · online only')) : null,
       isNurse() ? null : el('button', { class: 'tile due ' + (dueN ? 'hot' : 'calm'), onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
       isNurse() ? null : el('button', { class: 'tile queries ' + (out.queries.length ? 'hot' : 'calm'), onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
       el('button', { class: 'tile', onclick: () => go('screening') }, el('b', null, 'Screening log'), el('span', null, view('S0_SCREEN').length + ' screened')),
@@ -451,33 +633,97 @@ function home() {
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
 const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']];
+// ---- the PI phone keeps an encrypted copy of the confidential register, so Link and Link register work with no signal.
+// It lives in the PIN-protected vault with the other study data, is refreshed at every sync, and is wiped when the confidential link is
+// switched off or this phone loses access. New numbers and changes made offline wait in S.confOut and are sent at the next sync.
+// A phone with one bar of signal reports "online" yet cannot finish a request. For the confidential screens a saved copy exists, so a request
+// that fails or takes longer than FAST_MS switches them to that copy (T.weak) instead of making the user wait, until the next request that succeeds.
+const FAST_MS = 3000;
+const linkUp = () => navigator.onLine && !(T.weak && Date.now() - T.weakAt < 60000 && confCopy());       // after a minute it tries the network again
+const netFail = (e) => !!e && (e.name === 'AbortError' || e.name === 'TypeError');
+async function confApi(body) {
+  if (!confCopy()) return api(body);                    // no saved copy to fall back on: wait as long as it takes
+  try { const r = await api(body, FAST_MS); T.weak = false; return r; }
+  catch (e) { if (netFail(e)) { T.weak = true; T.weakAt = Date.now(); } throw e; }
+}
+function confCopy() { return confRole() && !T.practice && S.conf && S.conf.rows ? S.conf : null; }
+async function confSave(res) {
+  if (!confRole() || T.practice || !res || !res.ok) return;
+  S.conf = res.link ? { at: Date.now(), next: res.next, rows: res.rows.map((r) => Object.assign({}, r)) } : null;
+  await saveState();
+}
+// the list as this phone knows it: the saved copy with the changes still waiting to be sent laid over it
+function overlay(L) {
+  const out = (S.confOut || []).filter((c) => c.kind === 'add' || c.kind === 'set');
+  if (!L || !out.length) return L;
+  const rows = L.rows.map((r) => Object.assign({}, r)), by = {}; rows.forEach((r) => { by[s_(r.study_id).toUpperCase()] = r; });
+  out.forEach((c) => {
+    const id = s_(c.body.study_id).toUpperCase(), r = by[id];
+    if (c.kind === 'add' && !r) { const n = { study_id: id, assigned_date: todayIso(), status: c.body.status, reason: c.body.reason || '', mrn: c.body.mrn || '', phone: c.body.phone || '', name: c.body.name || '', guardian: c.body.guardian || '', address: c.body.address || '', note: '', pending: true }; rows.push(n); by[id] = n; }
+    else if (r && c.kind === 'set') Object.assign(r, { name: c.body.name, mrn: c.body.mrn, phone: c.body.phone, guardian: c.body.guardian, address: c.body.address, note: c.body.note, pending: true });
+  });
+  rows.sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
+  return Object.assign({}, L, { rows });
+}
+function confAsList() { const C = confCopy(); return C ? overlay({ ok: true, rows: C.rows, next: C.next, link: true, cached: true, at: C.at }) : null; }
+// sent at each sync, after the study entries; a rejected item stays listed with the reason until it is fixed or discarded
+async function pushConf(still) {
+  if (!confRole() || !(S.confOut || []).length) return;
+  for (const c of S.confOut.slice()) {
+    const body = c.kind === 'add' ? Object.assign({ op: 'register_add', token: S.cfg.token, rid: c.id }, c.body) : Object.assign({ op: 'link_set', token: S.cfg.token }, c.body);
+    const res = await api(body); still();
+    if (res.ok) { const i = S.confOut.indexOf(c); if (i >= 0) S.confOut.splice(i, 1); c.err = ''; }
+    else if (res.code === 401) throw Object.assign(new Error(res.error || 'not authorised'), { code: 401 });
+    else c.err = res.error || 'not accepted';
+    await saveState();
+  }
+}
+async function confRefresh(still) {
+  if (!confRole() || T.practice) return;
+  const res = await api({ op: 'register_list', token: S.cfg.token }); still();
+  if (res.ok) { await confSave(res); const st = T.reg; if (st && st.list) st.list = overlay(res); }
+}
 function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', name: '', mrn: '', phone: '', reason: '', guardian: '', address: '', sid: '', pendingRid: null, q: '' }); }
 async function regLoad() {
   const st = regState();
   st.err = '';
-  if (!navigator.onLine) { st.err = 'No internet connection. The numbers register works only online.'; render(); return; }
+  if (!linkUp()) { if (!confCopy()) st.err = 'No internet connection, and no copy of the register is saved on this phone yet. Open it once while online.'; render(); return; }
   st.loading = true; render();
   try {
-    const res = await api({ op: 'register_list', token: S.cfg.token });
+    const res = await confApi({ op: 'register_list', token: S.cfg.token });
     if (!res.ok) throw new Error(res.error || 'could not load');
-    st.list = res;
-  } catch (e) { st.err = 'Could not load the register. ' + e.message; }
+    st.list = overlay(res); await confSave(res);
+  } catch (e) {
+    if (T.weak && confCopy()) { st.list = confAsList(); st.loading = false; render(); return; } st.err = 'Could not load the register. ' + e.message; }
   st.loading = false; render();
 }
 async function regAssign() {
   const st = regState();
   if (st.busy) return;
-  if (!navigator.onLine) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
+  if (!linkUp() && !confCopy()) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
   if (st.list && st.list.link && st.status !== 'S' && (!s_(st.name).trim() || !s_(st.mrn).trim() || !s_(st.phone).trim())) { st.err = 'Not assigned. The participant name, the record number and the telephone number are all required.'; render(); return; }
   st.pendingRid = st.pendingRid || rid();              // the same id on a retry, so a number is never assigned twice
+  if (!linkUp()) {                              // offline: kept on this phone, encrypted, and sent at the next sync
+    const first = ownFree()[0], sid = normId(st.sid) || (first ? idOf_(first) : '');
+    if (!sid || !idOk_(sid)) { st.err = 'No spare number on this phone. Type the number from the patient card.'; render(); return; }
+    if ((S.confOut || []).some((c) => c.kind === 'add' && s_(c.body.study_id).toUpperCase() === sid) || ((S.conf && S.conf.rows) || []).some((r) => s_(r.study_id).toUpperCase() === sid)) { st.err = sid + ' is already in the register.'; render(); return; }
+    (S.confOut = S.confOut || []).push({ id: st.pendingRid, kind: 'add', at: Date.now(), err: '', body: { status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, study_id: sid } });
+    await saveState();
+    st.done = 'Saved on this phone: ' + sid + '. It is sent when you are back online.';
+    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.sid = ''; st.reason = ''; st.status = 'E';
+    st.list = confAsList(); render(); return;
+  }
   const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, study_id: normId(st.sid) };
   st.busy = true; st.err = ''; st.done = ''; render();
   try {
-    const res = await api(body);
+    const res = await confApi(body);
     if (!res.ok) throw new Error(res.error || 'not assigned');
     st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id;
     st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.sid = ''; st.reason = ''; st.status = 'E';
-  } catch (e) { st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.'; }
+  } catch (e) {
+    if (T.weak && confCopy()) { st.busy = false; return regAssign(); }           // same request id, so a request that did get through is not repeated
+    st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.';
+  }
   st.busy = false;
   await regLoad();
 }
@@ -494,21 +740,29 @@ function regList(L) {
 }
 function registerScreen() {
   const st = regState();
-  if (st.list === null && !st.loading && !st.err && navigator.onLine) { st.loading = true; setTimeout(() => regLoad(), 0); }   // never load inside a render
-  const L = st.list;
+  if (!linkUp() && (st.list === null || st.list.cached) && confCopy()) st.list = confAsList();
+  else if (linkUp() && st.list && st.list.cached) st.list = null;
+  if (st.list === null && !st.loading && !st.err && linkUp()) { st.loading = true; setTimeout(() => regLoad(), 0); }   // never load inside a render
+  const L = st.list, queued = S.confOut || [];
   const seg = (opts, cur, set) => el('div', { class: 'seg' }, opts.map((o) => el('button', { type: 'button', class: cur === o[0] ? 'on' : '', onclick: () => { set(o[0]); render(); } }, o[1])));
-  const spoiled = st.status === 'S';
-  const off = !navigator.onLine;
+  const spoiled = st.status === 'S', pend = identifiersPending(L);
+  const off = !linkUp();
   return topBar('Link register').concat([el('main', null,
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('visits') }, el('div', { class: 'main' }, el('div', null, 'Visit checklist'), el('div', { class: 'sub' }, 'What to order and do at each visit')), el('span', { class: 'chev' }))),
     L && L.link ? null : el('div', { class: 'card small muted' }, 'Study numbers only. No names, addresses, telephone numbers or record numbers are entered or shown here. Those stay on paper in the locked cabinet.'),
-    off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'This works only online. Nothing is stored on this phone.')) : null,
+    off ? (L && L.cached ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.'), el('div', { class: 'small' }, 'Updated ' + ago(L.at) + '. New numbers and changes are kept here and sent when you are back online.'))
+      : el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'No copy of the register is saved on this phone yet. Open this page once while online.'))) : null,
+    queued.length ? el('div', { class: 'card warn' }, el('b', null, queued.length + ' waiting to send'), queued.map((c) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', null, c.body.study_id + (c.kind === 'add' ? ' · new number' : ' · details changed')), c.err ? el('div', { class: 'sub' }, 'Not accepted: ' + c.err) : null),
+      c.err ? el('button', { class: 'btn', type: 'button', onclick: () => { S.confOut.splice(S.confOut.indexOf(c), 1); saveState().then(render); } }, 'Discard') : null))) : null,
     st.err ? el('div', { class: 'card alert' }, st.err) : null,
     st.done ? el('div', { class: 'card' }, el('b', null, st.done)) : null,
     el('div', { class: 'card' },
-      el('div', { class: 'muted small' }, 'Next free number'),
-      el('div', { style: 'font-size:28px;font-weight:700' }, L ? L.next : (st.loading ? 'loading…' : '–')),
-      el('button', { class: 'btn block', type: 'button', disabled: off || st.loading, onclick: () => regLoad() }, 'Refresh')),
+      el('div', { class: 'muted small' }, L && L.cached ? 'Next number on this phone' : 'Next free number'),
+      el('div', { style: 'font-size:28px;font-weight:700' }, L && L.cached ? (ownFree()[0] ? idOf_(ownFree()[0]) : 'type the card number') : L ? L.next : (st.loading ? 'loading…' : '–')),
+      el('button', { class: 'btn block', type: 'button', disabled: !navigator.onLine || st.loading, onclick: () => { T.weak = false; regLoad(); } }, 'Refresh')),
+    pend.length ? el('div', { class: 'card warn' }, el('b', null, 'Enrolled, identifiers still to record (' + pend.length + ')'),
+      el('div', { class: 'small' }, 'Tap a number to add the name, record number and telephone. Do this when you are back online.'),
+      el('div', { class: 'list' }, pend.map((r) => el('button', { class: 'row', type: 'button', onclick: () => go('link', { sid: r.study_id }) }, el('div', { class: 'main' }, el('div', null, r.study_id)), el('span', { class: 'chev' }))))) : null,
     el('h2', null, 'Assign a number'),
     L && L.link ? el('p', { class: 'small muted' }, 'Only for a patient who has agreed and is not enrolled yet. Someone already enrolled is in the list above: do not give them a new number.') : null,
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Outcome'), seg(REG_STATUS_OPTS, st.status, (v) => { st.status = v; })),
@@ -526,7 +780,7 @@ function registerScreen() {
       el('input', { id: 'reg-address', type: 'text', maxlength: '200', value: st.address, oninput: (ev) => { st.address = ev.target.value; } })),
     spoiled ? el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Reason the number is spoiled'),
       el('input', { type: 'text', maxlength: '80', value: st.reason, oninput: (ev) => { st.reason = ev.target.value; } })) : null,
-    el('button', { class: 'btn primary block', type: 'button', disabled: off || st.busy || !L, onclick: () => regAssign() }, st.busy ? 'Assigning…' : 'Assign number'),
+    el('button', { class: 'btn primary block', type: 'button', disabled: st.busy || !L, onclick: () => regAssign() }, st.busy ? 'Assigning…' : (off ? 'Save on this phone' : 'Assign number')),
     el('h2', null, 'Look up a number'),
     el('input', { class: 'search', type: 'search', placeholder: 'Number, name, MRN or telephone', autocomplete: 'off', value: st.q,
       oninput: (ev) => { st.q = ev.target.value; const old = $('#reglist'); if (old) old.replaceWith(regList(st.list)); } }),   // redraw only the list, so the keyboard stays open
@@ -538,26 +792,40 @@ function registerScreen() {
 async function linkLoad(sid) {
   const st = T.link = { sid: sid, data: null, err: '', msg: '', busy: true, edit: false };
   render();
-  if (!navigator.onLine) { st.err = 'No internet connection. The confidential link works only online.'; st.busy = false; render(); return; }
+  const fromCopy = () => {
+    const L = confAsList(), r = L && L.rows.filter((x) => s_(x.study_id).toUpperCase() === s_(sid).toUpperCase())[0];
+    if (r) { st.data = { name: r.name || '', mrn: r.mrn || '', phone: r.phone || '', guardian: r.guardian || '', address: r.address || '', note: r.note || '', updated: r.updated || '' }; st.form = Object.assign({}, st.data); st.edit = !(r.name || r.mrn || r.phone); st.offline = true; st.err = ''; }
+    else st.err = 'No signal, and no saved copy of this participant on this phone.';
+    st.busy = false; render();
+  };
+  if (!linkUp()) { fromCopy(); return; }
   try {
-    const res = await api({ op: 'link_get', token: S.cfg.token, study_id: sid });
+    const res = await confApi({ op: 'link_get', token: S.cfg.token, study_id: sid });
     if (!res.ok) throw new Error(res.error || 'could not load');
     st.data = res; st.form = { name: res.name || '', mrn: res.mrn, phone: res.phone, guardian: res.guardian || '', address: res.address, note: res.note };
     st.edit = !(res.name || res.mrn || res.phone || res.guardian || res.address || res.note);
-  } catch (e) { st.err = e.message; }
+  } catch (e) { if (T.weak && confCopy()) { fromCopy(); return; } st.err = e.message; }
   st.busy = false; render();
 }
 async function linkSave() {
   const st = T.link;
-  if (!navigator.onLine) { st.err = 'No internet connection. Nothing was saved.'; render(); return; }
+  if (!linkUp() && !confCopy()) { st.err = 'No internet connection. Nothing was saved.'; render(); return; }
   if (!s_((st.form || {}).mrn).trim() || !s_((st.form || {}).phone).trim()) { st.err = 'Not saved. The record number and the telephone number are both required.'; render(); return; }
+  if (!linkUp()) {
+    S.confOut = (S.confOut || []).filter((c) => !(c.kind === 'set' && c.body.study_id === st.sid));
+    S.confOut.push({ id: rid(), kind: 'set', at: Date.now(), err: '', body: Object.assign({ study_id: st.sid }, st.form) });
+    await saveState(); st.msg = 'Saved on this phone. It is sent when you are back online.'; st.edit = false; st.data = Object.assign({}, st.data, st.form); render(); return;
+  }
   st.busy = true; st.err = ''; st.msg = ''; render();
   try {
-    const res = await api(Object.assign({ op: 'link_set', token: S.cfg.token, study_id: st.sid }, st.form));
+    const res = await confApi(Object.assign({ op: 'link_set', token: S.cfg.token, study_id: st.sid }, st.form));
     if (!res.ok) throw new Error(res.error || 'not saved');
     st.msg = 'Saved.'; st.busy = false; st.edit = false;
     st.data = Object.assign({}, st.data, st.form); render(); return;
-  } catch (e) { st.err = 'Not saved. ' + e.message; }
+  } catch (e) {
+    if (T.weak && confCopy()) { st.busy = false; return linkSave(); }           // the signal failed: keep it on the phone instead, to be sent later
+    st.err = 'Not saved. ' + e.message;
+  }
   st.busy = false; render();
 }
 function waDigits(ph) {                                   // 0300... becomes 92300..., for WhatsApp
@@ -568,14 +836,14 @@ function waDigits(ph) {                                   // 0300... becomes 923
 function linkScreen(p) {
   const sid = p.sid;
   if (!T.link || T.link.sid !== sid) { T.link = { sid: sid, data: null, err: '', msg: '', busy: true, edit: false }; setTimeout(() => linkLoad(sid), 0); }   // never load inside a render: the nested render would draw the page twice
-  const st = T.link || { busy: true }, off = !navigator.onLine, d = st.data, f = st.form || {};
+  const st = T.link || { busy: true }, off = !linkUp(), d = st.data, f = st.form || {};
   const field = (k, lab, ml) => el('div', { class: 'field' }, el('label', { class: 'lab' }, lab),
     el('input', { type: 'text', maxlength: String(ml), value: f[k] || '', inputmode: k === 'phone' ? 'tel' : 'text', oninput: (ev) => { f[k] = ev.target.value; } }));
   const show = (lab, v) => el('div', { class: 'card' }, el('div', { class: 'muted small' }, lab), el('div', null, v || '–'));
   const ph = d && d.phone;
   return topBar(sid + ' · Contact').concat([el('main', null,
-    el('div', { class: 'card small muted' }, 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged.'),
-    off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
+    el('div', { class: 'card small muted' }, confRole() ? 'Confidential. Only the PI and the DOTS incharge. This phone keeps an encrypted copy (locked with your PIN) so it works with no signal; every opening while online is logged.' : 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged.'),
+    off && st.offline ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.')) : off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
     st.err ? el('div', { class: 'card alert' }, st.err) : null,
     st.msg ? el('div', { class: 'card' }, el('b', null, st.msg)) : null,
     st.busy && !d ? el('div', { class: 'empty' }, 'Loading…') : null,
@@ -586,9 +854,9 @@ function linkScreen(p) {
           el('a', { class: 'btn block', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp'))) : show('Telephone', ''),
       show('Name', d.name), show('Record number (MRN)', d.mrn), show('Father or husband name', d.guardian), show('Address', d.address), show('Note', d.note),
       d.updated ? el('div', { class: 'small muted' }, 'Last changed ' + d.updated) : null,
-      el('button', { class: 'btn block', type: 'button', disabled: off, onclick: () => { st.edit = true; st.msg = ''; render(); } }, 'Edit')] : null,
+      el('button', { class: 'btn block', type: 'button', disabled: off && !st.offline, onclick: () => { st.edit = true; st.msg = ''; render(); } }, 'Edit')] : null,
     d && st.edit ? [field('name', 'Participant name', 60), field('mrn', 'Record number (MRN), required', 30), field('phone', 'Telephone, required, e.g. 03001234567', 16), field('guardian', 'Father or husband name', 60), field('address', 'Address', 200), field('note', 'Note', 200),
-      el('button', { class: 'btn primary block', type: 'button', disabled: off || st.busy, onclick: () => linkSave() }, st.busy ? 'Saving…' : 'Save')] : null
+      el('button', { class: 'btn primary block', type: 'button', disabled: (off && !st.offline) || st.busy, onclick: () => linkSave() }, st.busy ? 'Saving…' : (off ? 'Save on this phone' : 'Save'))] : null
   )]);
 }
 
@@ -815,6 +1083,9 @@ function visitOpens(sid, v) {
   if (d0 === null || !w || t === null || t >= d0 + w[1]) return '';
   return isoOf_(d0 + w[1]);
 }
+// Spirometry is done only at Visit 5 and only once the Visit 5 smear is recorded as negative: it is not done on a smear-positive patient.
+function spiroOk(sid) { const v5 = find('VISITS', { study_id: sid, visit: 'V5' }); return !!v5 && s_(v5.smear_result) === 'N'; }
+const SPIRO_WHY = 'opens when the Visit 5 smear is recorded as negative (not done on a smear-positive patient)';
 function lockedRow(name, opens) { return el('div', { class: 'row locked', 'aria-disabled': 'true' }, el('div', { class: 'main' }, el('div', null, name), el('div', { class: 'sub' }, 'opens ' + opens)), el('span', { class: 'chip' }, 'not yet')); }
 function participant(p) {
   const sid = p.sid, out = derived(), e = find('S1_ENROL', { study_id: sid }); recordRecent(sid);
@@ -830,6 +1101,7 @@ function participant(p) {
     const key = visit ? { study_id: sid, visit } : { study_id: sid };
     const opens = visitOpens(sid, curV);
     if (opens && tab !== 'END_STUDY' && !find(tab, key)) return lockedRow(NAMES[tab], opens);
+    if (tab === 'SPIRO' && !find(tab, key) && !spiroOk(sid)) return lockedRow(NAMES[tab], SPIRO_WHY.replace(/^opens /, ''));
     return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, NAMES[tab])), statusChip(find(tab, key)), el('span', { class: 'chev' }));
   };
   const visits = ['V1', 'V2', 'V3', 'V4', 'V5'].map((v) => {
@@ -848,7 +1120,7 @@ function participant(p) {
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
-    role() === 'pi' && !T.practice ? el('div', { class: 'list conf' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Contact'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : null,
+    role() === 'pi' && !T.practice ? el('div', { class: 'list conf' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Contact'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : null,
     visits,
     el('h2', null, 'Unscheduled and events'),
     el('div', { class: 'list' },
@@ -881,7 +1153,7 @@ function linkPick() {
     const f = s_(q.value).toUpperCase();
     const rows = view('S1_ENROL').filter((r) => r.study_id && s_(r.study_id).toUpperCase().includes(f)).sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
     list.replaceChildren(...(rows.length ? rows.map((r) => el('button', { class: 'row', onclick: () => go('link', { sid: r.study_id }) },
-      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, 'telephone, call, WhatsApp · online only')), el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, 'No participants match.')]));
+      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, 'No participants match.')]));
   };
   q.addEventListener('input', fill); fill();
   return topBar('Contact').concat([el('main', null, q, list)]);
@@ -909,9 +1181,14 @@ function due() {
 // ---- query navigation: open the exact form, scroll to the field and flash it, with the query shown on top
 function fieldName(tab, k) { const d = defOf(tab), c = d && d.cols.filter((x) => x.key === k)[0]; return c ? c.label.split(' (')[0] : k; }
 // The enrolment has no screening line carrying its number: the fix is on the screening line, not on the enrolment.
+const SKIPPED_Q = /^Study number skipped/;   // the gap is explained in the paper linking log, which the PI keeps in the Link register
 const NO_SCREEN_Q = /^No screening line/, WAIT_ENROL_Q = /not yet enrolled|not yet in S1_ENROL/;   // the second wording is the older one, still on the workbook until its script is updated
 function openQuery(q) {
   const tab = q[1], keys = APP_KEYS[tab], query = q[4] + (q[5] ? ': ' + q[5] : '');
+  if (SKIPPED_Q.test(q[4])) {
+    if (role() === 'pi' && !T.practice) { if (T.reg) T.reg.list = null; go('register'); toast((q[0] || 'This number') + ' was skipped. Record what happened to it in the Link register.'); return; }
+    modal((q[0] || 'This number') + ' was skipped', [el('p', null, 'No screening line or enrolment uses this number. The PI explains the gap in the paper linking log.')], [['Close', null]]); return;
+  }
   if (NO_SCREEN_Q.test(q[4])) { go('screening'); toast('Open ' + (q[0] || 'the patient') + "'s screening line and enter " + (q[0] || 'the study number') + ' as its study number'); return; }
   if (WAIT_ENROL_Q.test(q[4]) && q[0]) { findPatient(q[0]); return; }   // screened and waiting: straight to the enrolment prompt
   if (!keys || !defOf(tab)) return q[0] ? go('participant', { sid: q[0] }) : go('screening');
@@ -938,6 +1215,7 @@ function queries() {
   const qrow = (q) => el('button', { class: 'row qrow', onclick: () => openQuery(q) },
     el('div', { class: 'main' }, el('div', null, (NAMES[q[1]] || q[1]) + (q[3] ? ' · ' + q[3] : '')), el('div', { class: 'sub' }, q[4] + (q[5] ? ': ' + q[5] : '')),
       WAIT_ENROL_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, 'Opens at: Enrolment')
+        : SKIPPED_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, role() === 'pi' ? 'Opens at: Link register, to record what happened to the number' : 'The PI explains this in the paper linking log')
         : NO_SCREEN_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, "Opens at: Screening log, to add the number to the patient's line")
         : q[6] ? el('div', { class: 'sub qfield' }, 'Opens at: ' + fieldName(q[1], q[6])) : null), el('span', { class: 'chev' }));
   const block = (g) => {
@@ -1014,13 +1292,32 @@ function settings() {
     el('button', { class: 'btn block', id: 'update-now', onclick: () => confirmLeave(checkUpdate) }, 'Update app now'),
     el('p', { class: 'small muted' }, 'Gets the newest version of this app from the internet. Your entries stay on the phone.'), el('p'),
     role() !== 'dots' ? el('button', { class: 'btn block', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, 'Practice mode (training)') : null, el('p'),
+    bioSettings(),
     el('button', { class: 'btn block', onclick: () => lock() }, 'Lock now'), el('p'),
     el('button', { class: 'btn danger block', onclick: resetPhone }, 'Reset this phone'),
     el('p', { class: 'small muted' }, 'Reset removes the study data and your access from this phone. Use it before passing the phone to someone else.'))]);
 }
+function bioSettings() {
+  if (T.bioOk === undefined) { T.bioOk = null; bioAvailable().then((v) => { T.bioOk = v; if (KEY && cur().name === 'settings') render(); }); }
+  if (T.hasBio) return el('div', null, el('button', { class: 'btn block', id: 'bio-off', onclick: () => modal('Turn off Face ID and fingerprint?', [el('p', null, 'The app will open with the PIN only.')], [['Cancel', null], ['Turn off', async () => { await bioOff(); toast('Face ID and fingerprint unlock is off'); render(); }, 'primary']]) }, 'Face ID / fingerprint: on (turn off)'), el('p'));
+  if (T.bioOk === null) return el('p', { class: 'small muted' }, 'Checking whether this phone offers Face ID or fingerprint…');
+  if (!T.bioOk) return el('div', null, el('p', { class: 'small muted', id: 'bio-none' }, 'Face ID / fingerprint unlock: the phone does not report a built-in biometric for this app. (' + (T.bioWhy || '') + (window.navigator.standalone ? '; opened from the home screen' : '; opened in the browser') + '.) The PIN works as normal.'),
+    window.PublicKeyCredential ? el('button', { class: 'btn block', id: 'bio-try', onclick: () => { T.bioOk = true; render(); } }, 'Try to set it up anyway') : null, el('p'));
+  const ask = () => {
+    const box = el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', id: 'bio-pin', placeholder: 'Your PIN' }), msg = el('div', { class: 'small', style: 'color:#b3261c' });
+    modal('Turn on Face ID or fingerprint', [el('p', null, 'Type your PIN once. The phone will then ask for Face ID or your fingerprint. The PIN keeps working.'), box, msg],
+      [['Cancel', null], ['Continue', async () => {
+        try { await bioEnrol(box.value); toast('Face ID or fingerprint is on'); }
+        catch (e) { toast(e && e.name === 'OperationError' ? 'That PIN is not right.' : e && e.name === 'NotAllowedError' ? 'Cancelled. Nothing was changed.' : (e.message || 'Could not turn it on')); }
+        render();
+      }, 'primary']]);
+  };
+  return el('div', null, el('button', { class: 'btn block', id: 'bio-on', onclick: ask }, 'Unlock with Face ID or fingerprint'),
+    el('p', { class: 'small muted' }, 'An alternative to typing the PIN. Needs a phone with Face ID or a fingerprint reader.'), el('p'));
+}
 function resetPhone() {
   const n = S.outbox.length;
-  const doIt = async () => { await kvDel('vault'); localStorage.removeItem('tbdm-fails'); localStorage.removeItem('tbdm-wait'); T.hasVault = false; lock(); };
+  const doIt = async () => { await kvDel('vault'); await kvDel('bio'); T.hasBio = false; localStorage.removeItem('tbdm-fails'); localStorage.removeItem('tbdm-wait'); T.hasVault = false; lock(); };
   modal('Reset this phone?', [el('p', null, n ? n + ' entries on this phone have NOT reached the workbook and will be lost. Sync first if you can.' : 'All entries have reached the workbook. The phone will forget the study and your access.')],
     [['Cancel', null], [n ? 'Reset and lose ' + n : 'Reset', doIt, 'danger']]);
 }
@@ -1235,7 +1532,8 @@ function fieldEl(c) {
     if (c.type === 'sidnew' && !F.ro && !fixed && !F.numberGiven && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN')) {      // no suggestion once the number has come from the card
       const nid = nextId(F.tab);
       inp.readOnly = false; inp.placeholder = "type the number on the patient's card";      // the card is the source of the number; the suggestion below is only for a patient with no card yet
-      box.append(el('button', { type: 'button', id: 'nextid', class: 'btn block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'No card yet? Next unused number: ' + nid : 'No numbers left'));
+      box.append(el('button', { type: 'button', id: 'nextid', class: 'btn block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'No card yet? Next unused number: ' + nid : 'No spare numbers on this phone'));
+      if (!nid && !(S.nums && S.nums.old)) box.append(el('div', { class: 'small muted' }, 'Type the number from the card. To get more spare numbers, connect to the internet and press Sync.' + (S.nums && S.nums.err ? ' (' + S.nums.err + ')' : '')));
     }
   }
   box.append(msg);
@@ -1328,6 +1626,7 @@ async function saveForm() {
     const dup = APP_SERIAL[F.tab] ? null : find(F.tab, F.vals);
     if (dup) { toast('This record already exists. Opening it.'); T.form = null; T.nav[T.nav.length - 1].p.key = F.vals; render(); return; }
   }
+  if (F.tab === 'SPIRO' && !F.existing && !spiroOk(s_(F.vals.study_id))) { toast('Spirometry is not done yet: the Visit 5 smear must be recorded as negative first.'); return; }
   if (F.tab === 'EVENTS' && s_(F.vals.event_type) === 'E2') { const rt = rucamTotal_(F.vals); F.vals.e2_rucam_score = rt === '' ? '' : String(rt); }
   if (F.tab === 'R_SCORES' && s_(F.vals.cavity).toUpperCase() === 'N') F.vals.n_cavities = '0';
   const vals = {}; def.cols.forEach((c) => { if (APP_SERIAL[F.tab] !== c.key || s_(F.vals[c.key])) vals[c.key] = F.vals[c.key]; });
@@ -1426,7 +1725,9 @@ function readJoin(given) {
 window.addEventListener('hashchange', () => { if (readJoin() && !KEY) render(); });
 (async function start() {
   readJoin();
-  try { T.hasVault = !!(await kvGet('vault')); } catch (e) { T.hasVault = false; }
+  try { T.hasVault = !!(await kvGet('vault')); T.hasBio = T.hasVault && !!(await kvGet('bio')); } catch (e) { T.hasVault = false; T.hasBio = false; }
+  bioAvailable().then((v) => { T.bioOk = v; });
+  if (T.hasVault) await sessRestore();
   if ('serviceWorker' in navigator) setupAutoUpdate();
   render();
 })();

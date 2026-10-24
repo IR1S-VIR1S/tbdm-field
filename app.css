@@ -141,8 +141,26 @@ a.tel.big { color: var(--brand); font-weight: 700; text-decoration: none; margin
 .recent[hidden] { display: none; }
 .recent-item { text-align: left; min-height: 44px; border: 0; background: #f4f7f6; border-radius: 8px; font-size: 1rem; padding: 0 12px; color: inherit; }
 
-.dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; background: rgba(244,246,245,.97); border-top: 1px solid var(--line); padding: 8px 12px calc(8px + var(--safe-bot)); }
-.dock::-webkit-scrollbar { display: none; }
-.dock-item { flex: 0 0 auto; min-width: 150px; min-height: 52px; border: 0; border-radius: 12px; background: #3b2a6b; color: #fff; text-align: left; padding: 6px 14px; display: flex; flex-direction: column; justify-content: center; }
-.dock-item b { font-size: 15px; } .dock-item span { font-size: 12px; opacity: .85; }
-.dock-item.on { outline: 3px solid #b9a9f0; } .dock-item:disabled { opacity: .5; }
+/* PI home: attention feed and bottom bar */
+.quick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.feed { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); margin-bottom: 10px; overflow: hidden; box-shadow: 0 1px 2px rgba(20,33,31,.06); }
+.feed.due.hot { border-color: #e9b27b; } .feed.queries.hot { border-color: #eca29b; } .feed.conf { border-color: #54428a; }
+.feedhead { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: 0; padding: 12px 14px; text-align: left; min-height: var(--tap); }
+.feedhead b { flex: 1; font-size: 16px; }
+.fcount { min-width: 28px; text-align: center; border-radius: 999px; padding: 2px 9px; font-weight: 700; font-size: 13px; background: #eef1f0; color: var(--muted); }
+.feed.due.hot .fcount { background: #ad4c0a; color: #fff; } .feed.queries.hot .fcount { background: #b3261e; color: #fff; } .feed.conf .fcount { background: #3b2a6b; color: #fff; } .feed.wait .fcount { background: var(--pend); color: #fff; }
+.feedrow { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: 0; border-top: 1px solid var(--line); padding: 10px 14px; text-align: left; min-height: var(--tap); }
+.fmain { flex: 1; min-width: 0; font-weight: 600; } .fmain small { display: block; font-weight: 400; color: var(--muted); font-size: 13px; }
+.feednone { padding: 4px 14px 14px; color: var(--muted); font-size: 14px; }
+.feedmore { width: 100%; background: none; border: 0; border-top: 1px solid var(--line); padding: 10px; color: var(--brand); font-weight: 700; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.rchip { border: 1px solid var(--line); background: var(--brand-soft); color: var(--brand); border-radius: 999px; padding: 8px 14px; font-weight: 700; min-height: 40px; }
+.bnav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; background: #fff; border-top: 1px solid var(--line); padding-bottom: var(--safe-bot); box-shadow: 0 -2px 10px rgba(20,33,31,.06); }
+.bnav::-webkit-scrollbar { display: none; }
+.bn { position: relative; flex: 1 0 auto; min-width: 74px; scroll-snap-align: center; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 2px 8px; background: none; border: 0; color: var(--muted); min-height: 58px; }
+.bn .ico { width: 24px; height: 24px; display: block; } .bn .ico svg { width: 24px; height: 24px; display: block; }
+.bn .lbl { font-size: 11px; font-weight: 600; }
+.bn.on { color: var(--brand); } .bn.on::before { content: ""; position: absolute; top: 0; left: 22%; right: 22%; height: 3px; border-radius: 0 0 3px 3px; background: var(--brand); }
+.bn .badge { position: absolute; top: 4px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #b3261e; color: #fff; font-style: normal; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; }
+
+.lock .bio { margin-top: 14px; background: transparent; border: 1px solid rgba(255,255,255,.6); color: #fff; border-radius: 12px; padding: 12px 18px; font-size: 16px; font-weight: 600; }

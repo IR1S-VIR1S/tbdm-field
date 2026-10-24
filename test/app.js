@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '312edf171e85';                 // replaced by build.js with the build's hash
+const BUILD_ID = '673ae82a5a41';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -528,6 +528,7 @@ function findBox() {
     el('div', { class: 'inline' },
       el('input', { id: 'find', type: 'tel', inputmode: 'numeric', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7',
         onfocus: () => show(true),
+        oninput: (ev) => { const t = s_(ev.target.value).trim().toUpperCase(); if (/^(TBDM-?)?\d{3}$/.test(t) && idOk_(normId(t))) findPatient(t); },          // a complete three-digit number opens the patient at once
         // The tick (Done) on the number pad only closes the keyboard. If the keyboard closed without the person tapping anything else, open the patient straight away.
         onblur: (ev) => { const box = ev.target; box.value = normId(box.value); setTimeout(() => show(false), 150);
           if (box.value && idOk_(box.value) && Date.now() - T.lastTap > 500) findPatient(box.value); },
@@ -618,7 +619,7 @@ function home() {
       isNurse() ? el('button', { class: 'tile primary', onclick: () => go('measure') }, el('b', null, 'Measurements'), el('span', null, 'Height, weight, waist, arm')) : null,
       isNurse() ? null : el('button', { class: 'tile guide', onclick: () => go('visits') }, el('b', null, 'Visit checklist'), el('span', null, 'What to order and do')),
       isNurse() ? null : el('button', { class: 'tile people', onclick: () => go('participants') }, el('b', null, 'Participants'), el('span', null, Object.keys(enrolledMap()).length + ' enrolled')),
-      role() === 'pi' && !T.practice ? el('button', { class: 'tile conf', onclick: () => go('linkpick') }, el('b', null, 'Link'), el('span', null, 'Confidential · call, WhatsApp')) : null,
+      role() === 'pi' && !T.practice ? el('button', { class: 'tile conf', onclick: () => go('linkpick') }, el('b', null, 'Contact'), el('span', null, 'Confidential · call, WhatsApp')) : null,
       role() === 'pi' && !T.practice && navigator.onLine ? el('button', { class: 'tile conf', onclick: () => { if (T.reg) T.reg.list = null; go('register'); } }, el('b', null, 'Link register'), el('span', null, identifiersPending(T.reg && T.reg.list).length ? identifiersPending(T.reg.list).length + ' enrolled, identifiers pending' : 'Confidential · online only')) : null,
       isNurse() ? null : el('button', { class: 'tile due ' + (dueN ? 'hot' : 'calm'), onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
       isNurse() ? null : el('button', { class: 'tile queries ' + (out.queries.length ? 'hot' : 'calm'), onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
@@ -840,7 +841,7 @@ function linkScreen(p) {
     el('input', { type: 'text', maxlength: String(ml), value: f[k] || '', inputmode: k === 'phone' ? 'tel' : 'text', oninput: (ev) => { f[k] = ev.target.value; } }));
   const show = (lab, v) => el('div', { class: 'card' }, el('div', { class: 'muted small' }, lab), el('div', null, v || '–'));
   const ph = d && d.phone;
-  return topBar(sid + ' · Link').concat([el('main', null,
+  return topBar(sid + ' · Contact').concat([el('main', null,
     el('div', { class: 'card small muted' }, confRole() ? 'Confidential. Only the PI and the DOTS incharge. This phone keeps an encrypted copy (locked with your PIN) so it works with no signal; every opening while online is logged.' : 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged.'),
     off && st.offline ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.')) : off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
     st.err ? el('div', { class: 'card alert' }, st.err) : null,
@@ -1119,7 +1120,7 @@ function participant(p) {
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
-    role() === 'pi' && !T.practice ? el('div', { class: 'list conf' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Link'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : null,
+    role() === 'pi' && !T.practice ? el('div', { class: 'list conf' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Contact'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : null,
     visits,
     el('h2', null, 'Unscheduled and events'),
     el('div', { class: 'list' },
@@ -1145,7 +1146,7 @@ function measureList() {
 }
 // ---- PI: pick an enrolled participant, then open the confidential Link screen (same screen as from the participant page)
 function linkPick() {
-  if (role() !== 'pi' || T.practice) return topBar('Link').concat([el('main', null, el('div', { class: 'card' }, 'Link is for the PI only, and is not available in practice mode.'))]);
+  if (role() !== 'pi' || T.practice) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is for the PI only, and is not available in practice mode.'))]);
   const q = el('input', { class: 'search', type: 'search', placeholder: 'Search study number', autocomplete: 'off' });
   const list = el('div', { class: 'list conf' });
   const fill = () => {
@@ -1155,7 +1156,7 @@ function linkPick() {
       el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, 'No participants match.')]));
   };
   q.addEventListener('input', fill); fill();
-  return topBar('Link').concat([el('main', null, q, list)]);
+  return topBar('Contact').concat([el('main', null, q, list)]);
 }
 function measureFor(p) {
   const sid = p.sid; recordRecent(sid);
