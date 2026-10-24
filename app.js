@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'be0a09264551';                 // replaced by build.js with the build's hash
+const BUILD_ID = '92405ff9de17';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -124,18 +124,26 @@ async function bioAsk(id, prfSalt) {
   return prfOut(a);
 }
 async function bioEnrol(pin) {
+  let step = 'pin';
   const vault = await kvGet('vault');
-  await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, await deriveKey(pin, vault.salt), vault.ct);          // throws unless the PIN is right
+  try { await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, await deriveKey(s_(pin).trim(), vault.salt), vault.ct); }          // fails unless the PIN is right
+  catch (e) { throw Object.assign(new Error('That PIN is not right.'), { step: 'pin' }); }
+  pin = s_(pin).trim();
   const prfSalt = rnd(32);
+  try {
+  step = 'passkey';
   const cred = await navigator.credentials.create({ publicKey: { rp: { name: 'TBDM Field' }, user: { id: rnd(16), name: S.cfg.email || 'user', displayName: S.cfg.initials || 'user' }, challenge: rnd(32),
     pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
     timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
   const id = new Uint8Array(cred.rawId);
+  step = 'secret';
   const out = prfOut(cred) || await bioAsk(id, prfSalt);               // some phones only report support at creation and give the secret on the next check
   if (!out) throw new Error('This phone or browser cannot lock the PIN to Face ID or fingerprint. Keep using the PIN.');
+  step = 'save';
   const iv = rnd(12), ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await bioWrapKey(out), new TextEncoder().encode(pin));
   await kvSet('bio', { v: 1, id, prfSalt, iv, ct });
   T.hasBio = true;
+  } catch (e) { if (e && !e.step) e.step = step; throw e; }
 }
 async function bioOpen() {
   const b = await kvGet('bio');
@@ -1296,18 +1304,22 @@ function checkUpdate() {
     });
   }).catch(() => toast('Could not check for an update. Try again when connected.'));
 }
+function practiceAsk() { modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]); }
 function settings() {
   if (T.practice) return topBar('Settings').concat([el('main', null, practiceCard())]);
   const pending = S.outbox.length;
   return topBar('Settings').concat([el('main', null,
+    role() === 'pi' ? [el('h2', null, 'Logs'), el('div', { class: 'list logs' },
+      toolRow('Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')),
+      toolRow('Verification log', view('QC_LOG').length + ' checks', () => go('qclog')),
+      toolRow('Practice mode', 'Learn with made-up patients', practiceAsk)), el('h2', null, 'Account')] : null,
     el('div', { class: 'list' }, [['Account', S.cfg.email], ['Role', S.cfg.role], ['Initials', S.cfg.initials], ['Server', (S.cfg.api || '').replace(/^https:\/\/([^/]+).*$/, '$1')],
       ['App version', APP_VERSION + ' · build ' + (BUILD_ID.indexOf('__') === 0 ? 'dev' : BUILD_ID) + ' (rules v' + CFG.VERSION + ')'], ['Last update', S.lastSync ? new Date(S.lastSync).toLocaleString('en-GB') : 'never'], ['Entries on this phone not yet in the workbook', String(pending)]]
       .map((r) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', { class: 'sub' }, r[0]), el('div', null, r[1] || '–'))))),
-    role() === 'pi' ? [el('div', { class: 'list' }, toolRow('Logs', 'Screening log, verification log, practice', () => go('tools'))), el('p')] : null,
     el('button', { class: 'btn primary block', onclick: () => sync() }, 'Sync now'), el('p'),
     el('button', { class: 'btn block', id: 'update-now', onclick: () => confirmLeave(checkUpdate) }, 'Update app now'),
-    el('p', { class: 'small muted' }, 'Gets the newest version of this app from the internet. Your entries stay on the phone.'), el('p'),
-    role() !== 'dots' ? el('button', { class: 'btn block', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, 'Practice mode (training)') : null, el('p'),
+    el('p'),
+    role() !== 'dots' && role() !== 'pi' ? el('button', { class: 'btn block', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, 'Practice mode (training)') : null, el('p'),
     bioSettings(),
     el('button', { class: 'btn block', onclick: () => lock() }, 'Lock now'), el('p'),
     el('button', { class: 'btn danger block', onclick: resetPhone }, 'Reset this phone'),
@@ -1320,16 +1332,16 @@ function bioSettings() {
   if (!T.bioOk) return el('div', null, el('p', { class: 'small muted', id: 'bio-none' }, 'Face ID / fingerprint unlock: the phone does not report a built-in biometric for this app. (' + (T.bioWhy || '') + (window.navigator.standalone ? '; opened from the home screen' : '; opened in the browser') + '.) The PIN works as normal.'),
     window.PublicKeyCredential ? el('button', { class: 'btn block', id: 'bio-try', onclick: () => { T.bioOk = true; render(); } }, 'Try to set it up anyway') : null, el('p'));
   const ask = () => {
-    const box = el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', id: 'bio-pin', placeholder: 'Your PIN' }), msg = el('div', { class: 'small', style: 'color:#b3261c' });
+    let typed = '';
+    const box = el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', id: 'bio-pin', placeholder: 'Your PIN', oninput: (ev) => { typed = ev.target.value; }, onchange: (ev) => { typed = ev.target.value; } }), msg = el('div', { class: 'small', style: 'color:#b3261c' });
     modal('Turn on Face ID or fingerprint', [el('p', null, 'Type your PIN once. The phone will then ask for Face ID or your fingerprint. The PIN keeps working.'), box, msg],
       [['Cancel', null], ['Continue', async () => {
-        try { await bioEnrol(box.value); toast('Face ID or fingerprint is on'); }
-        catch (e) { toast(e && e.name === 'OperationError' ? 'That PIN is not right.' : e && e.name === 'NotAllowedError' ? 'Cancelled. Nothing was changed.' : (e.message || 'Could not turn it on')); }
+        try { await bioEnrol(typed || box.value); toast('Face ID or fingerprint is on'); }
+        catch (e) { toast(e && e.step === 'pin' ? 'That PIN is not right.' : e && e.name === 'NotAllowedError' ? 'Cancelled, or the phone refused the Face ID check. Nothing was changed.' : 'Could not turn it on (' + (e && e.step ? e.step + ': ' : '') + (e && e.name) + ': ' + ((e && e.message) || '') + ')'); }
         render();
       }, 'primary']]);
   };
-  return el('div', null, el('button', { class: 'btn block', id: 'bio-on', onclick: ask }, 'Unlock with Face ID or fingerprint'),
-    el('p', { class: 'small muted' }, 'An alternative to typing the PIN. Needs a phone with Face ID or a fingerprint reader.'), el('p'));
+  return el('div', null, el('button', { class: 'btn block', id: 'bio-on', onclick: ask }, 'Unlock with Face ID or fingerprint'), el('p'));
 }
 function resetPhone() {
   const n = S.outbox.length;

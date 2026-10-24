@@ -43,6 +43,7 @@ h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: v
 .tile.due.hot { background: #ad4c0a; border-color: #ad4c0a; color: #fff; box-shadow: 0 2px 8px rgba(173,76,10,.35); } .tile.due.hot span { color: #fff0e2; }
 /* confidential: deep indigo, PI only */
 .tile.conf { background: #3b2a6b; border-color: #3b2a6b; color: #fff; box-shadow: 0 2px 8px rgba(59,42,107,.35); } .tile.conf span { color: #d8cff0; }
+.list.logs { background: #1b4f72; border-color: #1b4f72; } .list.logs .row { color: #fff; border-top-color: #2f6a92; } .list.logs .row .sub { color: #cfe3f2; } .list.logs .chev::after { color: #fff; }
 .list.conf { background: #3b2a6b; border-color: #3b2a6b; } .list.conf .row { color: #fff; border-top-color: #54428a; } .list.conf .row .sub { color: #d8cff0; } .list.conf .chev::after { color: #fff; }
 
 /* lists */
