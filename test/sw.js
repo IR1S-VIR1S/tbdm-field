@@ -1,6 +1,6 @@
 // Offline cache for the app shell. Study data never pass through this file: requests to the
 // study server go straight to the network and are never cached.
-const CACHE = 'tbdmtest-7e575133fac0';
+const CACHE = 'tbdmtest-84c2403985d5';
 const FILES = ["./","index.html","app.js","app.css","logic.js","manifest.webmanifest","icon-192.png","icon-512.png","apple-touch-icon.png"];
 // install fetches every file straight from the server (cache: 'reload'): a copy the phone kept for a few minutes must never be saved as the new version
 self.addEventListener('install', (e) => {

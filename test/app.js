@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '7e575133fac0';                 // replaced by build.js with the build's hash
+const BUILD_ID = '84c2403985d5';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -282,7 +282,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) { T.idle = setTimeout(lock, IDLE_LOCK_MS); sessTouch(); } }
-function lock() { sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
+function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -423,21 +423,22 @@ function lockScreen() {
       T.lockMsg = 'Wrong PIN.'; render();
     }
   };
-  const tryBio = async () => {
-    T.lockMsg = ''; render();
+  const tryBio = async (auto) => {
+    T.lockMsg = ''; if (!auto) render();
     try { await bioOpen(); localStorage.setItem('tbdm-test-fails', '0'); T.lockMsg = ''; resetNav(); bumpIdle(); render(); sync(); }
     catch (e) {
       if (e && e.name === 'OperationError') { await bioOff(); T.lockMsg = 'Face ID or fingerprint no longer matches this PIN. Use the PIN, then set it up again in Settings.'; }          // the PIN changed or the key is gone
-      else T.lockMsg = e && e.name === 'NotAllowedError' ? 'Cancelled. Use the PIN, or try again.' : 'Face ID or fingerprint did not open the app. Use the PIN.';
+      else T.lockMsg = auto ? '' : e && e.name === 'NotAllowedError' ? 'Cancelled. Use the PIN, or try again.' : 'Face ID or fingerprint did not open the app. Use the PIN.';          // an automatic try that the phone declines stays quiet
       render();
     }
   };
+  if (T.hasBio && !T.join && !T.bioTried && !(Date.now() < until)) { T.bioTried = true; setTimeout(() => { if (!KEY && T.hasBio) tryBio(true); }, 350); }          // ask for Face ID as soon as the lock screen appears, once per lock; the button stays for another try
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'];
   return el('div', { class: 'lock' }, el('h1', null, 'TBDM Field TEST'),
     el('p', null, T.join ? 'An invitation link was opened, but this phone is already set up. Unlock, then reset the phone in Settings to use it.' : 'Enter your PIN'),
     dots, el('div', { class: 'pad' }, keys.map((k) => el('button', { class: k.length > 1 ? 'txt' : '', 'aria-label': k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k, onclick: () => press(k) },
       k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k))), err,
-    T.hasBio && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', onclick: tryBio }, 'Unlock with Face ID or fingerprint') : null);
+    T.hasBio && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', onclick: () => tryBio(false) }, 'Unlock with Face ID or fingerprint') : null);
 }
 
 // ------------------------------------------------------------------ home and lists
