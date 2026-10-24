@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '0088604a44be';                 // replaced by build.js with the build's hash
+const BUILD_ID = '1b0007ca6cf6';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -455,6 +455,8 @@ function findPatient(raw) {
 }
 // The five patients this phone opened most recently (kept in memory only: nothing is written to the phone).
 T.recent = T.recent || [];
+T.lastTap = 0;
+document.addEventListener('pointerdown', () => { T.lastTap = Date.now(); }, true);
 function recordRecent(sid) { if (!sid) return; T.recent = [sid].concat(T.recent.filter((x) => x !== sid)).slice(0, 5); }
 function findBox() {
   const recent = el('div', { class: 'recent', id: 'recent', hidden: true, role: 'listbox', 'aria-label': 'Recently opened patients' },
@@ -464,7 +466,10 @@ function findBox() {
   return el('div', { class: 'card find' }, el('label', { class: 'lab', for: 'find' }, 'Patient Study Number'),
     el('div', { class: 'inline' },
       el('input', { id: 'find', type: 'tel', inputmode: 'numeric', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7',
-        onfocus: () => show(true), onblur: (ev) => { ev.target.value = normId(ev.target.value); setTimeout(() => show(false), 150); },
+        onfocus: () => show(true),
+        // The tick (Done) on the number pad only closes the keyboard. If the keyboard closed without the person tapping anything else, open the patient straight away.
+        onblur: (ev) => { const box = ev.target; box.value = normId(box.value); setTimeout(() => show(false), 150);
+          if (box.value && idOk_(box.value) && Date.now() - T.lastTap > 500) findPatient(box.value); },
         onkeydown: (ev) => { if (ev.key === 'Enter') findPatient(ev.target.value); } }),
       el('button', { class: 'btn primary', type: 'button', id: 'findgo', onclick: () => findPatient($('#find').value) }, 'Open')),
     recent);
