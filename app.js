@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '27457133e59d';                 // replaced by build.js with the build's hash
+const BUILD_ID = '6a2a231655fe';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -372,7 +372,7 @@ function identifiersPending(L) { return L && L.link ? L.rows.filter((r) => r.sta
 function enrolTile() {
   const w = waitingEnrol();
   return el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrol'),
-    el('span', null, w.length ? 'Waiting: ' + w[0] + (w.length > 1 ? ' and ' + (w.length - 1) + ' more' : '') : 'Number from the patient card'));
+    el('span', null, w.length ? 'Waiting: ' + w[0] + (w.length > 1 ? ' and ' + (w.length - 1) + ' more' : '') : 'Patient Study Number'));
 }
 // Every patient carries a card with the study number. Typing it here opens whatever that person needs next, whatever the role.
 // One rule for every box that takes the number on the patient's card: "7", "07", "007", "TBDM7" and "tbdm 7" all become TBDM-007.
