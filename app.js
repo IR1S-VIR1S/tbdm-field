@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '4d23355e4bdd';                 // replaced by build.js with the build's hash
+const BUILD_ID = '60811b5a3ced';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -681,9 +681,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
     el('h2', null, 'Recent activity'),
     el('div', { class: 'card feedcard' },
       T.recent.length ? [el('div', { class: 'small muted' }, 'Opened on this phone'), el('div', { class: 'chips' }, T.recent.map((sid) => el('button', { class: 'rchip', onclick: () => findPatient(sid) }, sid)))] : el('div', { class: 'small muted' }, 'Nothing opened yet in this session.'),
-      el('div', { class: 'small muted', style: 'margin-top:8px' }, waiting.length ? waiting.length + ' waiting to send' : 'All entries sent') ),
-    el('h2', null, 'Safety'),
-    el('div', { class: 'card small' }, 'PHQ-9 item 9 above 0, or a liver result meeting the definition: act the same day (manual Part 4). The app and the e-mail alerts are only a backup.'));
+      el('div', { class: 'small muted', style: 'margin-top:8px' }, waiting.length ? waiting.length + ' waiting to send' : 'All entries sent') ));
   return topBar('TBDM Field').concat([main]);
 }
 function toolRow(title, sub, fn) { return el('button', { class: 'row', onclick: fn }, el('div', { class: 'main' }, el('div', null, title), el('div', { class: 'sub' }, sub)), el('span', { class: 'chev' })); }
@@ -720,9 +718,7 @@ function home() {
       el('button', { class: 'tile', onclick: () => go('screening') }, el('b', null, 'Screening log'), el('span', null, view('S0_SCREEN').length + ' screened')),
       role() === 'qc' || role() === 'pi' ? el('button', { class: 'tile', onclick: () => go('qclog') }, el('b', null, 'Verification log'), el('span', null, view('QC_LOG').length + ' checks')) : null,
       T.practice ? null : el('button', { class: 'tile guide', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, el('b', null, 'Practice'), el('span', null, 'Learn with made-up patients')),
-      el('button', { class: 'tile', onclick: () => go('settings') }, el('b', null, 'Settings'), el('span', null, S.cfg.email || ''))),
-    isNurse() ? null : el('h2', null, 'Safety'),
-    isNurse() ? null : el('div', { class: 'card small' }, 'PHQ-9 item 9 above 0, or a liver result meeting the definition: act the same day (manual Part 4). The app and the e-mail alerts are only a backup.'));
+      el('button', { class: 'tile', onclick: () => go('settings') }, el('b', null, 'Settings'), el('span', null, S.cfg.email || ''))));
   return topBar('TBDM Field').concat([main]);
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
