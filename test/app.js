@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '673ae82a5a41';                 // replaced by build.js with the build's hash
+const BUILD_ID = '50f0626d8f7a';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -320,7 +320,7 @@ function render() {
     queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
-  if (role() === 'pi' && S && S.server && ['home', 'participants', 'due', 'tools', 'visits', 'settings', 'linkpick', 'register'].indexOf(c.name) >= 0) app.append(bottomNav(c.name));
+  if (role() === 'pi' && S && S.server && ['home', 'participants', 'due', 'tools', 'queries', 'visits', 'settings', 'linkpick', 'register'].indexOf(c.name) >= 0) app.append(bottomNav(c.name === 'tools' ? 'settings' : c.name));
 }
 function topBar(title, opts) {
   opts = opts || {};
@@ -541,6 +541,7 @@ const ICONS = {
   home: '<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.4"/><path d="M16.5 14.6c2.7.2 4.5 2 4.5 4.9"/>',
   due: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  query: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.2.9-1.2 1.8M12 16.6v.1"/>',
   logs: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/>',
   list: '<rect x="4.5" y="3.5" width="15" height="17" rx="2"/><path d="m8 9 1.6 1.6L12.5 7.5M8 15.5h8M14 10h2.5"/>',
   phone: '<path d="M6.5 3.5h3l1.5 4-2 1.3a11 11 0 0 0 6.2 6.2l1.3-2 4 1.5v3a2 2 0 0 1-2 2A15.5 15.5 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>',
@@ -548,15 +549,15 @@ const ICONS = {
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
 };
 function icon(k) { const s = el('span', { class: 'ico', 'aria-hidden': 'true' }); s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICONS[k] + '</svg>'; return s; }
-const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['tools', 'Logs', 'logs'], ['visits', 'Checklist', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'lock'], ['settings', 'Settings', 'settings']];
+const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['queries', 'Queries', 'query'], ['visits', 'Checklist', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'lock'], ['settings', 'Settings', 'settings']];
 function tabTo(name) { confirmLeave(() => { resetNav(); if (name === 'register' && T.reg) T.reg.list = null; if (name !== 'home') go(name); else { T.form = null; render(); window.scrollTo(0, 0); } }); }
 function bottomNav(active) {
-  let dueN = 0;
-  try { dueN = derived().schedule.filter((r) => r[5] !== 'upcoming').length; } catch (e) { dueN = 0; }
+  let dueN = 0, qN = 0;
+  try { const d = derived(); dueN = d.schedule.filter((r) => r[5] !== 'upcoming').length; qN = d.queries.length; } catch (e) { dueN = 0; qN = 0; }
   const pend = T.practice || !confCopy() && !(T.reg && T.reg.list) ? 0 : identifiersPending(T.reg && T.reg.list ? T.reg.list : confAsList()).length;
   const tabs = NAV_TABS.filter((t) => (t[0] !== 'linkpick' && t[0] !== 'register') || (role() === 'pi' && !T.practice));
   const nav = el('nav', { class: 'bnav', 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'aria-current': t[0] === active ? 'page' : null, onclick: () => tabTo(t[0]) },
-    icon(t[2]), t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : null, el('span', { class: 'lbl' }, t[1]))));
+    icon(t[2]), t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'queries' && qN ? el('i', { class: 'badge' }, String(qN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : null, el('span', { class: 'lbl' }, t[1]))));
   setTimeout(() => { const on = nav.querySelector('.bn.on'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' }); }, 0);          // the selected tab is always in view
   return nav;
 }
@@ -597,8 +598,7 @@ function tools() {
   return topBar('Logs and tools').concat([el('main', null,
     el('div', { class: 'list' },
       toolRow('Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')),
-      toolRow('Verification log', view('QC_LOG').length + ' checks', () => go('qclog')),
-      toolRow('Queries', derived().queries.length + ' to check', () => go('queries'))),
+      toolRow('Verification log', view('QC_LOG').length + ' checks', () => go('qclog'))),
     T.practice ? null : [el('h2', null, 'Training'), el('div', { class: 'list' }, toolRow('Practice', 'Learn with made-up patients', () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']])))])]);
 }
 function home() {
@@ -1288,6 +1288,7 @@ function settings() {
     el('div', { class: 'list' }, [['Account', S.cfg.email], ['Role', S.cfg.role], ['Initials', S.cfg.initials], ['Server', (S.cfg.api || '').replace(/^https:\/\/([^/]+).*$/, '$1')],
       ['App version', APP_VERSION + ' · build ' + (BUILD_ID.indexOf('__') === 0 ? 'dev' : BUILD_ID) + ' (rules v' + CFG.VERSION + ')'], ['Last update', S.lastSync ? new Date(S.lastSync).toLocaleString('en-GB') : 'never'], ['Entries on this phone not yet in the workbook', String(pending)]]
       .map((r) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', { class: 'sub' }, r[0]), el('div', null, r[1] || '–'))))),
+    role() === 'pi' ? [el('div', { class: 'list' }, toolRow('Logs', 'Screening log, verification log, practice', () => go('tools'))), el('p')] : null,
     el('button', { class: 'btn primary block', onclick: () => sync() }, 'Sync now'), el('p'),
     el('button', { class: 'btn block', id: 'update-now', onclick: () => confirmLeave(checkUpdate) }, 'Update app now'),
     el('p', { class: 'small muted' }, 'Gets the newest version of this app from the internet. Your entries stay on the phone.'), el('p'),
