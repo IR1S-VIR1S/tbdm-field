@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '0d9a7db7969a';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'a426cd25727e';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -65,7 +65,28 @@ const kvSet = (k, v) => kv('readwrite', (s) => s.put(v, k));
 const kvDel = (k) => kv('readwrite', (s) => s.delete(k));
 async function deriveKey(pin, salt) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: PBKDF2_ROUNDS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: PBKDF2_ROUNDS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+}
+// A page refresh (pull down to reload) would otherwise ask for the PIN again. For the open tab only, the key is kept in
+// session storage until the same idle limit that locks the app, the Lock button, or closing the tab. It never reaches disk or the server.
+const SESS = 'tbdm-test-sess';
+function b64(u8) { let t = ''; u8.forEach((c) => { t += String.fromCharCode(c); }); return btoa(t); }
+async function sessSave() {
+  try { const raw = new Uint8Array(await crypto.subtle.exportKey('raw', KEY)); sessionStorage.setItem(SESS, JSON.stringify({ k: b64(raw), s: b64(T.salt), t: Date.now() + IDLE_LOCK_MS })); } catch (e) { /* storage blocked: the PIN is simply asked again */ }
+}
+function sessTouch() { try { const o = JSON.parse(sessionStorage.getItem(SESS) || 'null'); if (o) { o.t = Date.now() + IDLE_LOCK_MS; sessionStorage.setItem(SESS, JSON.stringify(o)); } } catch (e) { /* ignore */ } }
+function sessClear() { try { sessionStorage.removeItem(SESS); } catch (e) { /* ignore */ } }
+async function sessRestore() {
+  try {
+    const o = JSON.parse(sessionStorage.getItem(SESS) || 'null');
+    if (!o || !(o.t > Date.now())) { sessClear(); return false; }
+    const vault = await kvGet('vault');
+    if (!vault) { sessClear(); return false; }
+    const key = await crypto.subtle.importKey('raw', Uint8Array.from(atob(o.k), (c) => c.charCodeAt(0)), 'AES-GCM', true, ['encrypt', 'decrypt']);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, key, vault.ct);
+    T.salt = vault.salt; KEY = key; S = JSON.parse(new TextDecoder().decode(pt)); bumpIdle();
+    return true;
+  } catch (e) { sessClear(); return false; }
 }
 async function saveState() {
   if (T.practice) { practiceCommit(); return; }
@@ -79,6 +100,7 @@ async function openVault(pin) {
   const key = await deriveKey(pin, vault.salt);
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, key, vault.ct);
   T.salt = vault.salt; KEY = key; S = JSON.parse(new TextDecoder().decode(pt));
+  sessSave();
 }
 
 // ------------------------------------------------------------------ data: server snapshot plus unsent changes
@@ -200,8 +222,8 @@ async function sync() {
 }
 
 // ------------------------------------------------------------------ locking
-function bumpIdle() { clearTimeout(T.idle); if (KEY) T.idle = setTimeout(lock, IDLE_LOCK_MS); }
-function lock() { T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
+function bumpIdle() { clearTimeout(T.idle); if (KEY) { T.idle = setTimeout(lock, IDLE_LOCK_MS); sessTouch(); } }
+function lock() { sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -311,7 +333,7 @@ function setupScreen() {
       if (!res.ok) throw new Error(res.error || 'joining failed');
       T.salt = crypto.getRandomValues(new Uint8Array(16)); KEY = await deriveKey(a, T.salt);
       S = { cfg: { api: T.join.api, token: res.token, email: res.email, role: res.role, initials: i, joined: Date.now() }, server: null, outbox: [], lastSync: 0 };
-      await saveState(); T.hasVault = true; T.join = null;
+      await saveState(); sessSave(); T.hasVault = true; T.join = null;
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
       bumpIdle(); render(); sync();
     } catch (e) { msg.textContent = e.message; btn.disabled = false; btn.textContent = 'Join'; }
@@ -1522,6 +1544,7 @@ window.addEventListener('hashchange', () => { if (readJoin() && !KEY) render(); 
 (async function start() {
   readJoin();
   try { T.hasVault = !!(await kvGet('vault')); } catch (e) { T.hasVault = false; }
+  if (T.hasVault) await sessRestore();
   if ('serviceWorker' in navigator) setupAutoUpdate();
   render();
 })();
