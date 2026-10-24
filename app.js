@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '3221b4539eb1';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'baeba04cfb06';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -583,6 +583,11 @@ const ICONS = {
   list: '<rect x="4.5" y="3.5" width="15" height="17" rx="2"/><path d="m8 9 1.6 1.6L12.5 7.5M8 15.5h8M14 10h2.5"/>',
   phone: '<path d="M6.5 3.5h3l1.5 4-2 1.3a11 11 0 0 0 6.2 6.2l1.3-2 4 1.5v3a2 2 0 0 1-2 2A15.5 15.5 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>',
   lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5M12 14.5v2.5"/>',
+  sync: '<path d="M20 11a8 8 0 0 0-14.3-4.6L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.3 4.6l1.7-2.1M20 20v-4.5h-4.5"/>',
+  update: '<path d="M12 3.5v11M7.5 10l4.5 4.5 4.5-4.5M4.5 16.5v2a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2"/>',
+  face: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.2 15.6a4 4 0 0 0 5.6 0"/>',
+  practice: '<path d="M2.5 9 12 4.5 21.5 9 12 13.5z"/><path d="M6.5 11v4.5c0 1.5 2.5 3 5.5 3s5.5-1.5 5.5-3V11M21.5 9v5"/>',
+  check: '<path d="M9 3.5h6l1 2h2.5a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1H8z"/><path d="m8.5 13 2.4 2.4 4.6-4.8"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
 };
 function icon(k) { const s = el('span', { class: 'ico', 'aria-hidden': 'true' }); s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICONS[k] + '</svg>'; return s; }
@@ -1384,34 +1389,37 @@ function checkUpdate() {
   }).catch(() => toast('Could not check for an update. Try again when connected.'));
 }
 function practiceAsk() { modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]); }
+function toolTile(ic, title, sub, fn, id, off) {
+  return el('button', { class: 'tool' + (off ? ' off' : ''), id: id || null, onclick: fn, disabled: off ? true : null }, icon(ic), el('b', null, title), sub ? el('small', null, sub) : null);
+}
 function settings() {
   if (T.practice) return topBar('Settings').concat([el('main', null, practiceCard())]);
-  const pending = S.outbox.length;
+  const pending = S.outbox.length, pi = role() === 'pi';
+  const tiles = [
+    pi ? toolTile('logs', 'Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')) : null,
+    pi ? toolTile('check', 'Verification log', view('QC_LOG').length + ' checks', () => go('qclog')) : null,
+    role() !== 'dots' ? toolTile('practice', 'Practice mode', 'Made-up patients', practiceAsk) : null,
+    toolTile('sync', 'Sync now', pending ? pending + ' waiting' : 'All sent', () => sync()),
+    toolTile('update', 'Update app', 'Get newest', () => confirmLeave(checkUpdate), 'update-now'),
+    bioTile()];
   return topBar('Settings').concat([el('main', null,
-    role() === 'pi' ? [el('h2', null, 'Tools'), el('div', { class: 'list logs' },
-      toolRow('Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')),
-      toolRow('Verification log', view('QC_LOG').length + ' checks', () => go('qclog')),
-      toolRow('Practice mode', 'Learn with made-up patients', practiceAsk)), el('h2', null, 'Account')] : null,
+    el('h2', null, 'Tools'), el('div', { class: 'tools' }, tiles),
+    el('h2', null, 'Account'),
     el('div', { class: 'list' }, [['Account', S.cfg.email], ['Role', S.cfg.role], ['Initials', S.cfg.initials], ['Server', (S.cfg.api || '').replace(/^https:\/\/([^/]+).*$/, '$1')],
       ['App version', APP_VERSION + ' · build ' + (BUILD_ID.indexOf('__') === 0 ? 'dev' : BUILD_ID) + ' (rules v' + CFG.VERSION + ')'], ['Last update', S.lastSync ? new Date(S.lastSync).toLocaleString('en-GB') : 'never'], ['Entries on this phone not yet in the workbook', String(pending)]]
       .map((r) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', { class: 'sub' }, r[0]), el('div', null, r[1] || '–'))))),
-    el('button', { class: 'btn primary block', onclick: () => sync() }, 'Sync now'), el('p'),
-    el('button', { class: 'btn block', id: 'update-now', onclick: () => confirmLeave(checkUpdate) }, 'Update app now'),
     el('p'),
-    role() !== 'dots' && role() !== 'pi' ? el('button', { class: 'btn block', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, 'Practice mode (training)') : null, el('p'),
-    bioSettings(),
-    el('button', { class: 'btn block', onclick: () => lock() }, 'Lock now'), el('p'),
     el('button', { class: 'btn danger block', onclick: resetPhone }, 'Reset this phone'),
     el('p', { class: 'small muted' }, 'Reset removes the study data and your access from this phone. Use it before passing the phone to someone else.'))]);
 }
-function bioSettings() {
+// The Face ID / fingerprint tile shows its state; tapping it turns it on or off.
+function bioTile() {
   if (T.bioOk === undefined) { T.bioOk = null; bioAvailable().then((v) => { T.bioOk = v; if (KEY && cur().name === 'settings') render(); }); }
-  if (T.hasBio) return el('div', null, el('button', { class: 'btn block', id: 'bio-off', onclick: () => modal('Turn off Face ID and fingerprint?', [el('p', null, 'The app will open with the PIN only.')], [['Cancel', null], ['Turn off', async () => { await bioOff(); toast('Face ID and fingerprint unlock is off'); render(); }, 'primary']]) }, 'Face ID / fingerprint: on (turn off)'), el('p'));
-  if (T.bioOk === null) return el('p', { class: 'small muted' }, 'Checking whether this phone offers Face ID or fingerprint…');
-  if (!T.bioOk) return el('div', null, el('p', { class: 'small muted', id: 'bio-none' }, 'Face ID / fingerprint unlock: the phone does not report a built-in biometric for this app. (' + (T.bioWhy || '') + (window.navigator.standalone ? '; opened from the home screen' : '; opened in the browser') + '.) The PIN works as normal.'),
-    window.PublicKeyCredential ? el('button', { class: 'btn block', id: 'bio-try', onclick: () => { T.bioOk = true; render(); } }, 'Try to set it up anyway') : null, el('p'));
-  const ask = bioTurnOn;
-  return el('div', null, el('button', { class: 'btn block', id: 'bio-on', onclick: ask }, 'Unlock with Face ID or fingerprint'), el('p'));
+  if (T.hasBio) return toolTile('face', 'Face ID', 'On · tap to turn off', () => modal('Turn off Face ID and fingerprint?', [el('p', null, 'The app will open with the PIN only.')], [['Cancel', null], ['Turn off', async () => { await bioOff(); toast('Face ID and fingerprint unlock is off'); render(); }, 'primary']]), 'bio-off');
+  if (T.bioOk === null) return toolTile('face', 'Face ID', 'Checking…', null, null, true);
+  if (!T.bioOk) return toolTile('face', 'Face ID', 'Not available', () => modal('Face ID / fingerprint', [el('p', { id: 'bio-none' }, 'The phone does not report a built-in biometric for this app. (' + (T.bioWhy || '') + (window.navigator.standalone ? '; opened from the home screen' : '; opened in the browser') + '.) The PIN works as normal.')],
+    window.PublicKeyCredential ? [['Close', null], ['Try to set it up anyway', () => { T.bioOk = true; bioTurnOn(); }, 'primary']] : [['Close', null]]), 'bio-na');
+  return toolTile('face', 'Face ID', 'Off · tap to turn on', bioTurnOn, 'bio-on');
 }
 function resetPhone() {
   const n = S.outbox.length;
