@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '60811b5a3ced';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'cc91774ea530';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1579,7 +1579,10 @@ function fieldEl(c) {
     if (rerender) { const y = window.scrollY; T.refill(); window.scrollTo(0, y); }
     paintCalc();
   };
-  box.append(el('label', { class: 'lab', for: 'i-' + c.key }, c.label), ...[itemWording(c.key)].filter(Boolean), el('div', { class: 'hint' }, helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
+  // Enrolment: the study number box reads the same as in the Link register ("Assign a study number", blank = the next free number).
+  const nidBox = c.type === 'sidnew' && F.tab === 'S1_ENROL' && !F.ro && !fixed && !F.numberGiven, nid0 = nidBox ? nextId(F.tab) : '';
+  box.append(el('label', { class: 'lab', for: 'i-' + c.key }, nidBox ? 'Assign a study number' : c.label), ...[itemWording(c.key)].filter(Boolean),
+    el('div', { class: 'hint' }, nidBox ? (nid0 ? 'Leave blank to use the next free number: ' + nid0 + '. If the patient\'s card shows a different number, type that one.' : 'Type the number from the patient\'s card. There are no spare numbers on this phone: to get more, connect to the internet and press Sync.') : helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
   const val = s_(F.vals[c.key]);
   const carried = (F.carried || []).indexOf(c.key) >= 0, locked = carried || screenLocked(F, c);
   if (locked || (fixed && (APP_KEYS[F.tab].indexOf(c.key) >= 0 || F.ro))) {
@@ -1641,9 +1644,9 @@ function fieldEl(c) {
     } else box.append(inp);
     if (c.type === 'sidnew' && !F.ro && !fixed && !F.numberGiven && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN')) {      // no suggestion once the number has come from the card
       const nid = nextId(F.tab);
-      inp.readOnly = false; inp.placeholder = "type the number on the patient's card";      // the card is the source of the number; the suggestion below is only for a patient with no card yet
-      box.append(el('button', { type: 'button', id: 'nextid', class: 'btn block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'No card yet? Next unused number: ' + nid : 'No spare numbers on this phone'));
-      if (!nid && !(S.nums && S.nums.old)) box.append(el('div', { class: 'small muted' }, 'Type the number from the card. To get more spare numbers, connect to the internet and press Sync.' + (S.nums && S.nums.err ? ' (' + S.nums.err + ')' : '')));
+      inp.readOnly = false; inp.placeholder = nidBox ? (nid0 || "type the number on the patient's card") : "type the number on the patient's card";      // the card is the source of the number; the suggestion below is only for a patient with no card yet
+      if (!nidBox) box.append(el('button', { type: 'button', id: 'nextid', class: 'btn block', disabled: !nid, onclick: () => { inp.value = nid; set(nid); } }, nid ? 'No card yet? Next unused number: ' + nid : 'No spare numbers on this phone'));
+      if (!nidBox && !nid && !(S.nums && S.nums.old)) box.append(el('div', { class: 'small muted' }, 'Type the number from the card. To get more spare numbers, connect to the internet and press Sync.' + (S.nums && S.nums.err ? ' (' + S.nums.err + ')' : '')));
     }
   }
   box.append(msg);
@@ -1715,6 +1718,9 @@ function paintCalc() {
 }
 async function saveForm() {
   const F = T.form, def = F.def, errs = [];
+  if (F.tab === 'S1_ENROL' && !F.existing && !F.ro && !F.numberGiven && !s_(F.vals.study_id)) {          // a blank study number takes the next free one, as in the Link register
+    const nid = nextId('S1_ENROL'); if (nid) { F.vals.study_id = nid; const bx = $('#i-study_id'); if (bx) bx.value = nid; }
+  }
   def.cols.forEach((c) => {
     if (['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 && s_(F.vals[c.key])) {        // a study number typed as 7 is saved as TBDM-007, even if the box was never left
       F.vals[c.key] = normId(F.vals[c.key]); const box = $('#i-' + c.key); if (box) box.value = F.vals[c.key];
