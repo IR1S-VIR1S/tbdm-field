@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '849b13270b1e';                 // replaced by build.js with the build's hash
+const BUILD_ID = '8916bc9837ac';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -107,6 +107,11 @@ async function openVault(pin) {
 // The PIN stays the master secret. At enrolment the PIN is encrypted under a key that the phone's own authenticator releases only after
 // a Face ID or fingerprint check (the WebAuthn PRF extension). Nothing the phone stores can open the vault without that check.
 // Where the phone or browser cannot do this, the option is not offered: a version that merely hides the PIN behind a button would be weaker than the PIN itself.
+function bioIcon() {                                       // a plain face-scan symbol: corner brackets, two eyes, a nose and a smile
+  const b = el('span', { class: 'bioico', 'aria-hidden': 'true' });
+  b.innerHTML = '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 17V12a6 6 0 0 1 6-6h5M31 6h5a6 6 0 0 1 6 6v5M42 31v5a6 6 0 0 1-6 6h-5M17 42h-5a6 6 0 0 1-6-6v-5"/><path d="M17.5 19v3M30.5 19v3M24 19.5v6.5h-2.2M17.5 31.5c3.8 3.6 9.2 3.6 13 0"/></svg>';
+  return b;
+}
 async function bioAvailable() {
   T.bioWhy = '';
   if (!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create)) { T.bioWhy = 'WebAuthn: not in this browser'; return false; }
@@ -120,7 +125,7 @@ async function bioWrapKey(prf) {
 function prfOut(cred) { const x = cred && cred.getClientExtensionResults && cred.getClientExtensionResults(); return x && x.prf && x.prf.results && x.prf.results.first ? new Uint8Array(x.prf.results.first) : null; }
 const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
 async function bioAsk(id, prfSalt) {
-  const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [{ type: 'public-key', id }], userVerification: 'required', timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+  const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [{ type: 'public-key', id, transports: ['internal'] }], userVerification: 'required', hints: ['client-device'], timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
   return prfOut(a);
 }
 async function bioEnrol() {
@@ -132,7 +137,7 @@ async function bioEnrol() {
     step = 'passkey';
     const cred = await navigator.credentials.create({ publicKey: { rp: { name: 'TBDM Field' }, user: { id: rnd(16), name: S.cfg.email || 'user', displayName: S.cfg.initials || 'user' }, challenge: rnd(32),
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
-      timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+      hints: ['client-device'], timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
     const id = new Uint8Array(cred.rawId);
     step = 'secret';
     const out = prfOut(cred) || await bioAsk(id, prfSalt);               // some phones only report support at creation and give the secret on the next check
@@ -154,6 +159,21 @@ async function bioOpen() {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, key, vault.ct);                    // fails if the vault was reset since
   T.salt = vault.salt; KEY = key; S = JSON.parse(new TextDecoder().decode(pt));
   sessSave();
+}
+async function bioTurnOn() {
+  try { await bioEnrol(); toast('Face ID or fingerprint is on'); }
+  catch (e) { toast(e && e.name === 'NotAllowedError' ? 'Cancelled, or the phone refused the Face ID check. Nothing was changed.' : 'Could not turn it on (build ' + BUILD_ID.slice(0, 6) + ', ' + (e && e.step ? e.step + ': ' : '') + (e && e.name) + ': ' + ((e && e.message) || '') + ')'); }
+  render();
+}
+const BIOASK = 'tbdm-bioask';
+// After a correct PIN: if this phone can do Face ID or fingerprint and it is not on yet, offer it once. "Not now" is remembered and the offer is not repeated;
+// the person can still turn it on in Settings, or by tapping the face icon on the lock screen.
+function offerBio() {
+  let declined = false; try { declined = localStorage.getItem(BIOASK) === 'no'; } catch (e) { /* ignore */ }
+  const wanted = T.bioWant; T.bioWant = false;
+  if (!KEY || T.practice || T.hasBio || !T.bioOk || (declined && !wanted)) return;
+  modal('Open the app with Face ID or fingerprint?', [el('p', null, 'Next time you can unlock without typing the PIN. The PIN keeps working as a back-up.')],
+    [['Not now', () => { try { localStorage.setItem(BIOASK, 'no'); } catch (e) { /* ignore */ } }], ['Set up', bioTurnOn, 'primary']]);
 }
 async function bioOff() { try { await kvDel('bio'); } catch (e) { /* ignore */ } T.hasBio = false; }
 
@@ -282,7 +302,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) { T.idle = setTimeout(lock, IDLE_LOCK_MS); sessTouch(); } }
-function lock() { sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
+function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -417,27 +437,29 @@ function lockScreen() {
     const pin = T.pin; T.pin = ''; T.lockMsg = 'Opening…'; render();
     try {
       await openVault(pin); localStorage.setItem('tbdm-fails', '0'); T.lockMsg = ''; resetNav(); bumpIdle(); render(); sync();
+      offerBio();
     } catch (e) {
       const f = fails + 1; localStorage.setItem('tbdm-fails', String(f));
       if (f >= 5) localStorage.setItem('tbdm-wait', String(Date.now() + Math.min(3600, Math.pow(2, f - 4) * 15) * 1000));
       T.lockMsg = 'Wrong PIN.'; render();
     }
   };
-  const tryBio = async () => {
-    T.lockMsg = ''; render();
+  const tryBio = async (auto) => {
+    T.lockMsg = ''; if (!auto) render();
     try { await bioOpen(); localStorage.setItem('tbdm-fails', '0'); T.lockMsg = ''; resetNav(); bumpIdle(); render(); sync(); }
     catch (e) {
       if (e && e.name === 'OperationError') { await bioOff(); T.lockMsg = 'Face ID or fingerprint no longer matches this PIN. Use the PIN, then set it up again in Settings.'; }          // the PIN changed or the key is gone
-      else T.lockMsg = e && e.name === 'NotAllowedError' ? 'Cancelled. Use the PIN, or try again.' : 'Face ID or fingerprint did not open the app. Use the PIN.';
+      else T.lockMsg = auto ? '' : e && e.name === 'NotAllowedError' ? 'Cancelled. Use the PIN, or try again.' : 'Face ID or fingerprint did not open the app. Use the PIN.';          // an automatic try that the phone declines stays quiet
       render();
     }
   };
+  if (T.hasBio && !T.join && !T.bioTried && !(Date.now() < until)) { T.bioTried = true; setTimeout(() => { if (!KEY && T.hasBio) tryBio(true); }, 350); }          // ask for Face ID as soon as the lock screen appears, once per lock; the button stays for another try
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'];
   return el('div', { class: 'lock' }, el('h1', null, 'TBDM Field App'),
     el('p', null, T.join ? 'An invitation link was opened, but this phone is already set up. Unlock, then reset the phone in Settings to use it.' : 'Enter your PIN'),
     dots, el('div', { class: 'pad' }, keys.map((k) => el('button', { class: k.length > 1 ? 'txt' : '', 'aria-label': k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k, onclick: () => press(k) },
       k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k))), err,
-    T.hasBio && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', onclick: tryBio }, 'Unlock with Face ID or fingerprint') : null);
+    (T.hasBio || T.bioOk) && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', 'aria-label': 'Unlock with Face ID or fingerprint', title: 'Face ID or fingerprint', onclick: () => { if (T.hasBio) tryBio(false); else { T.bioWant = true; T.lockMsg = 'Type your PIN once. You will then be asked to set up Face ID or fingerprint.'; render(); } } }, bioIcon()) : null);
 }
 
 // ------------------------------------------------------------------ home and lists
@@ -1382,11 +1404,7 @@ function bioSettings() {
   if (T.bioOk === null) return el('p', { class: 'small muted' }, 'Checking whether this phone offers Face ID or fingerprint…');
   if (!T.bioOk) return el('div', null, el('p', { class: 'small muted', id: 'bio-none' }, 'Face ID / fingerprint unlock: the phone does not report a built-in biometric for this app. (' + (T.bioWhy || '') + (window.navigator.standalone ? '; opened from the home screen' : '; opened in the browser') + '.) The PIN works as normal.'),
     window.PublicKeyCredential ? el('button', { class: 'btn block', id: 'bio-try', onclick: () => { T.bioOk = true; render(); } }, 'Try to set it up anyway') : null, el('p'));
-  const ask = async () => {
-    try { await bioEnrol(); toast('Face ID or fingerprint is on'); }
-    catch (e) { toast(e && e.name === 'NotAllowedError' ? 'Cancelled, or the phone refused the Face ID check. Nothing was changed.' : 'Could not turn it on (build ' + BUILD_ID.slice(0, 6) + ', ' + (e && e.step ? e.step + ': ' : '') + (e && e.name) + ': ' + ((e && e.message) || '') + ')'); }
-    render();
-  };
+  const ask = bioTurnOn;
   return el('div', null, el('button', { class: 'btn block', id: 'bio-on', onclick: ask }, 'Unlock with Face ID or fingerprint'), el('p'));
 }
 function resetPhone() {
@@ -1800,7 +1818,7 @@ window.addEventListener('hashchange', () => { if (readJoin() && !KEY) render(); 
 (async function start() {
   readJoin();
   try { T.hasVault = !!(await kvGet('vault')); T.hasBio = T.hasVault && !!(await kvGet('bio')); } catch (e) { T.hasVault = false; T.hasBio = false; }
-  bioAvailable().then((v) => { T.bioOk = v; });
+  bioAvailable().then((v) => { T.bioOk = v; if (!KEY && T.hasVault) render(); });
   if (T.hasVault) await sessRestore();
   if ('serviceWorker' in navigator) setupAutoUpdate();
   render();
