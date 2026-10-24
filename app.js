@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '46666692ed21';                 // replaced by build.js with the build's hash
+const BUILD_ID = '3221b4539eb1';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -350,7 +350,12 @@ function render() {
     queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
-  if (role() === 'pi' && S && S.server && ['home', 'participants', 'due', 'tools', 'queries', 'visits', 'settings', 'linkpick', 'register'].indexOf(c.name) >= 0) app.append(bottomNav(c.name === 'tools' ? 'settings' : c.name));
+  const hasNav = role() === 'pi' && S && S.server && ['home', 'participants', 'due', 'tools', 'queries', 'visits', 'settings', 'linkpick', 'register'].indexOf(c.name) >= 0;
+  if (hasNav) app.append(bottomNav(c.name === 'tools' ? 'settings' : c.name));
+  // iOS home-screen apps (WebKit bug 301994): on a page shorter than the screen, a bar pinned to the bottom floats about one
+  // status bar above the real bottom. Pages long enough to scroll are fine, so short pages are made just taller than the screen.
+  let sa = false; try { sa = !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)); } catch (e) { sa = false; }
+  app.style.minHeight = hasNav && sa ? (Math.max(screen.height || 0, innerHeight) + 1) + 'px' : '';
 }
 function topBar(title, opts) {
   opts = opts || {};
