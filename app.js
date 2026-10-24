@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'f1c08ac9482b';                 // replaced by build.js with the build's hash
+const BUILD_ID = '4d23355e4bdd';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -859,9 +859,8 @@ function registerScreen() {
       pend.length ? [el('b', null, 'Enrolled, identifiers still to record (' + pend.length + ')'),
         el('div', { class: 'small' }, 'Tap a number to add the name, record number and telephone. Do this when you are back online.'),
         el('div', { class: 'list' }, pend.map((r) => el('button', { class: 'row', type: 'button', onclick: () => go('link', { sid: r.study_id }) }, el('div', { class: 'main' }, el('div', null, r.study_id)), el('span', { class: 'chev' }))))] : null) : null,
-    el('h2', null, 'Assign a number'),
-    L && L.link ? el('p', { class: 'small muted' }, 'Only for a patient who has agreed and is not enrolled yet.') : null,
-    el('div', { class: 'field' }, el('label', { class: 'lab', for: 'reg-sid' }, 'Study number'),
+    el('div', { class: 'field' }, el('label', { class: 'lab', for: 'reg-sid' }, 'Assign a study number'),
+      L && L.link ? el('div', { class: 'hint' }, 'Only for a patient who has agreed and is not enrolled yet.') : null,
       el('div', { class: 'hint' }, 'Leave blank to use the next free number' + (nextTxt ? ': ' + nextTxt : '') + '. If the patient\'s card shows a different number, type that one.'),
       el('input', { id: 'reg-sid', type: 'tel', inputmode: 'numeric', maxlength: '8', autocapitalize: 'characters', placeholder: nextTxt || 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onblur: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, required'),
