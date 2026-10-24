@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'a426cd25727e';                 // replaced by build.js with the build's hash
+const BUILD_ID = '0088604a44be';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -271,7 +271,7 @@ function render() {
     queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
-  if (role() === 'pi' && S && S.server && ['home', 'participants', 'due', 'tools', 'settings'].indexOf(c.name) >= 0) app.append(bottomNav(c.name));
+  if (role() === 'pi' && S && S.server && ['home', 'participants', 'due', 'tools', 'visits', 'settings'].indexOf(c.name) >= 0) app.append(bottomNav(c.name));
 }
 function topBar(title, opts) {
   opts = opts || {};
@@ -475,10 +475,11 @@ const ICONS = {
   people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.4"/><path d="M16.5 14.6c2.7.2 4.5 2 4.5 4.9"/>',
   due: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
   logs: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/>',
+  list: '<rect x="4.5" y="3.5" width="15" height="17" rx="2"/><path d="m8 9 1.6 1.6L12.5 7.5M8 15.5h8M14 10h2.5"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
 };
 function icon(k) { const s = el('span', { class: 'ico', 'aria-hidden': 'true' }); s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICONS[k] + '</svg>'; return s; }
-const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['tools', 'Logs', 'logs'], ['settings', 'Settings', 'settings']];
+const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['tools', 'Logs', 'logs'], ['visits', 'Checklist', 'list'], ['settings', 'Settings', 'settings']];
 function tabTo(name) { confirmLeave(() => { resetNav(); if (name !== 'home') go(name); else { T.form = null; render(); window.scrollTo(0, 0); } }); }
 function bottomNav(active) {
   let dueN = 0;
@@ -527,8 +528,7 @@ function tools() {
     el('div', { class: 'list' },
       toolRow('Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')),
       toolRow('Verification log', view('QC_LOG').length + ' checks', () => go('qclog')),
-      toolRow('Queries', derived().queries.length + ' to check', () => go('queries')),
-      toolRow('Visit checklist', 'What to order and do', () => go('visits'))),
+      toolRow('Queries', derived().queries.length + ' to check', () => go('queries'))),
     conf.length ? [el('h2', null, 'Confidential'), el('div', { class: 'list conf' }, conf)] : null,
     T.practice ? null : [el('h2', null, 'Training'), el('div', { class: 'list' }, toolRow('Practice', 'Learn with made-up patients', () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']])))])]);
 }
