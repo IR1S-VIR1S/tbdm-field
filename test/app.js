@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '8c292c035417';                 // replaced by build.js with the build's hash
+const BUILD_ID = '5d2ed10652a3';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -829,7 +829,8 @@ function registerScreen() {
   const spoiled = st.status === 'S', pend = identifiersPending(L);
   const off = !linkUp();
   return topBar('Link register').concat([el('main', null,
-    el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('visits') }, el('div', { class: 'main' }, el('div', null, 'Visit checklist'), el('div', { class: 'sub' }, 'What to order and do at each visit')), el('span', { class: 'chev' }))),
+    el('div', { class: 'field' }, el('label', { class: 'lab' }, "Number on the patient's card"), el('div', { class: 'hint' }, 'Leave blank only if the patient has no card yet: the number shown below is then used.'),
+      el('input', { id: 'reg-sid', type: 'tel', inputmode: 'numeric', maxlength: '8', autocapitalize: 'characters', placeholder: 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onblur: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; }, onchange: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
     L && L.link ? null : el('div', { class: 'card small muted' }, 'Study numbers only. No names, addresses, telephone numbers or record numbers are entered or shown here. Those stay on paper in the locked cabinet.'),
     off ? (L && L.cached ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.'), el('div', { class: 'small' }, 'Updated ' + ago(L.at) + '. New numbers and changes are kept here and sent when you are back online.'))
       : el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'No copy of the register is saved on this phone yet. Open this page once while online.'))) : null,
@@ -847,8 +848,6 @@ function registerScreen() {
     el('h2', null, 'Assign a number'),
     L && L.link ? el('p', { class: 'small muted' }, 'Only for a patient who has agreed and is not enrolled yet. Someone already enrolled is in the list above: do not give them a new number.') : null,
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Outcome'), seg(REG_STATUS_OPTS, st.status, (v) => { st.status = v; })),
-    el('div', { class: 'field' }, el('label', { class: 'lab' }, "Number on the patient's card"), el('div', { class: 'hint' }, 'Leave blank only if the patient has no card yet: the number shown above is then used.'),
-      el('input', { id: 'reg-sid', type: 'tel', inputmode: 'numeric', maxlength: '8', autocapitalize: 'characters', placeholder: 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onblur: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; }, onchange: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, required'),
       el('input', { id: 'reg-name', type: 'text', maxlength: '60', value: st.name, oninput: (ev) => { st.name = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Record number (MRN), required'),
