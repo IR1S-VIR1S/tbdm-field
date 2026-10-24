@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'cc91774ea530';                 // replaced by build.js with the build's hash
+const BUILD_ID = '018928ffa29f';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1579,10 +1579,10 @@ function fieldEl(c) {
     if (rerender) { const y = window.scrollY; T.refill(); window.scrollTo(0, y); }
     paintCalc();
   };
-  // Enrolment: the study number box reads the same as in the Link register ("Assign a study number", blank = the next free number).
-  const nidBox = c.type === 'sidnew' && F.tab === 'S1_ENROL' && !F.ro && !fixed && !F.numberGiven, nid0 = nidBox ? nextId(F.tab) : '';
+  // Enrolment and screening: the study number box reads the same as in the Link register ("Assign a study number", blank = the next free number).
+  const nidBox = c.type === 'sidnew' && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN') && !F.ro && !fixed && !F.numberGiven, nid0 = nidBox ? nextId(F.tab) : '';
   box.append(el('label', { class: 'lab', for: 'i-' + c.key }, nidBox ? 'Assign a study number' : c.label), ...[itemWording(c.key)].filter(Boolean),
-    el('div', { class: 'hint' }, nidBox ? (nid0 ? 'Leave blank to use the next free number: ' + nid0 + '. If the patient\'s card shows a different number, type that one.' : 'Type the number from the patient\'s card. There are no spare numbers on this phone: to get more, connect to the internet and press Sync.') : helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
+    el('div', { class: 'hint' }, nidBox ? (nid0 ? 'Leave blank to use the next free number: ' + nid0 + (F.tab === 'S0_SCREEN' ? ' (only if the patient is enrolled)' : '') + '. If the patient\'s card shows a different number, type that one.' : 'Type the number from the patient\'s card. There are no spare numbers on this phone: to get more, connect to the internet and press Sync.') : helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
   const val = s_(F.vals[c.key]);
   const carried = (F.carried || []).indexOf(c.key) >= 0, locked = carried || screenLocked(F, c);
   if (locked || (fixed && (APP_KEYS[F.tab].indexOf(c.key) >= 0 || F.ro))) {
@@ -1718,8 +1718,8 @@ function paintCalc() {
 }
 async function saveForm() {
   const F = T.form, def = F.def, errs = [];
-  if (F.tab === 'S1_ENROL' && !F.existing && !F.ro && !F.numberGiven && !s_(F.vals.study_id)) {          // a blank study number takes the next free one, as in the Link register
-    const nid = nextId('S1_ENROL'); if (nid) { F.vals.study_id = nid; const bx = $('#i-study_id'); if (bx) bx.value = nid; }
+  if ((F.tab === 'S1_ENROL' || (F.tab === 'S0_SCREEN' && F.vals.enrolled === 'Y')) && !F.existing && !F.ro && !F.numberGiven && !s_(F.vals.study_id)) {          // a blank study number takes the next free one, as in the Link register (a screening line only when the patient is enrolled)
+    const nid = nextId(F.tab); if (nid) { F.vals.study_id = nid; const bx = $('#i-study_id'); if (bx) bx.value = nid; }
   }
   def.cols.forEach((c) => {
     if (['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 && s_(F.vals[c.key])) {        // a study number typed as 7 is saved as TBDM-007, even if the box was never left
