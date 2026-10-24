@@ -2,8 +2,9 @@
 // study server go straight to the network and are never cached.
 const CACHE = 'tbdm-849b13270b1e';
 const FILES = ["./","index.html","app.js","app.css","logic.js","manifest.webmanifest","icon-192.png","icon-512.png","apple-touch-icon.png"];
+// install fetches every file straight from the server (cache: 'reload'): a copy the phone kept for a few minutes must never be saved as the new version
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
