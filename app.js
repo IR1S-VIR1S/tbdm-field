@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '56b36336601a';                 // replaced by build.js with the build's hash
+const BUILD_ID = '27457133e59d';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -196,7 +196,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) T.idle = setTimeout(lock, IDLE_LOCK_MS); }
-function lock() { T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.nav = []; T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
+function lock() { T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -208,8 +208,26 @@ window.addEventListener('offline', paintSync);
 setInterval(() => { if (KEY && navigator.onLine && !T.syncing && S.outbox.some((c) => c.status === 'pending')) sync(); }, 120000);
 
 // ------------------------------------------------------------------ navigation
-function go(name, p) { T.nav.push({ name, p: p || {} }); T.form = null; render(); window.scrollTo(0, 0); }
-function back() { T.nav.pop(); T.form = null; render(); window.scrollTo(0, 0); }
+// The in-app stack and the browser history move together, so the edge swipe (right to left) and the Android back gesture go back one screen.
+let navSkip = false, navEpoch = 0;   // epoch: bumped when the stack is reset (lock, practice), so older history entries are not replayed
+function navSnap() { return { depth: T.nav.length, epoch: navEpoch, nav: JSON.parse(JSON.stringify(T.nav)) }; }   // each history entry remembers the stack it stands for, so going forward can restore it
+function resetNav() { T.nav = []; navEpoch++; history.replaceState(navSnap(), ''); }
+// set while the app itself moves the history, so the listener does not pop a second time
+function go(name, p) { T.nav.push({ name, p: p || {} }); history.pushState(navSnap(), ''); T.form = null; render(); window.scrollTo(0, 0); }
+function back() {
+  T.nav.pop(); T.form = null; render(); window.scrollTo(0, 0);
+  if (history.state && history.state.depth > T.nav.length && history.state.epoch === navEpoch) { navSkip = true; history.back(); }
+}
+window.addEventListener('popstate', (ev) => {
+  if (navSkip) { navSkip = false; return; }
+  const want = ev.state && ev.state.depth ? ev.state.depth : 0, ep = ev.state && ev.state.epoch ? ev.state.epoch : 0;
+  if (ep !== navEpoch) { navEpoch = ep; T.nav = []; T.form = null; render(); window.scrollTo(0, 0); return; }   // older than the last reset: start screen
+  if (want > T.nav.length && ev.state && Array.isArray(ev.state.nav)) { T.nav = ev.state.nav; T.form = null; render(); window.scrollTo(0, 0); return; }   // forward: restore the screen
+  if (want >= T.nav.length) { if (want > T.nav.length) history.replaceState(navSnap(), ''); return; }
+  if (T.form && T.form.dirty) { history.pushState(navSnap(), ''); confirmLeave(back); return; }   // unsaved changes: ask first, as the Back button does
+  while (T.nav.length > want) T.nav.pop();
+  T.form = null; render(); window.scrollTo(0, 0);
+});
 function cur() { return T.nav[T.nav.length - 1] || { name: 'home', p: {} }; }
 function confirmLeave(fn) {
   if (T.form && T.form.dirty) return modal('Leave without saving?', [el('p', null, 'Your changes on this screen have not been saved.')],
@@ -311,7 +329,7 @@ function lockScreen() {
     if (T.pin.length < 6) { T.lockMsg = 'At least 6 digits.'; render(); return; }
     const pin = T.pin; T.pin = ''; T.lockMsg = 'Opening…'; render();
     try {
-      await openVault(pin); localStorage.setItem('tbdm-fails', '0'); T.lockMsg = ''; T.nav = []; bumpIdle(); render(); sync();
+      await openVault(pin); localStorage.setItem('tbdm-fails', '0'); T.lockMsg = ''; resetNav(); bumpIdle(); render(); sync();
     } catch (e) {
       const f = fails + 1; localStorage.setItem('tbdm-fails', String(f));
       if (f >= 5) localStorage.setItem('tbdm-wait', String(Date.now() + Math.min(3600, Math.pow(2, f - 4) * 15) * 1000));
@@ -366,6 +384,7 @@ function normId(v) {
 function findPatient(raw) {
   const sid = normId(raw);
   if (!idOk_(sid)) { toast('Not a study number. Type it as on the card, for example ' + idOf_(7)); return; }
+  recordRecent(sid);
   const e = find('S1_ENROL', { study_id: sid }), sc = view('S0_SCREEN').filter((r) => code_(r.study_id) === sid)[0];
   if (e) { go(isNurse() ? 'measurefor' : 'participant', { sid }); return; }
   if (sc && sc.eligible === 'Y' && sc.enrolled === 'Y') {
@@ -377,11 +396,21 @@ function findPatient(raw) {
   modal(sid + ' is not in the study yet', [el('p', null, 'No screening line has this number on this phone. If the patient was screened on another phone, sync first.')],
     [['Close', null], ['Screen this patient', () => go('form', { tab: 'S0_SCREEN', key: {}, preset: { study_id: sid } }), 'primary']]);
 }
+// The five patients this phone opened most recently (kept in memory only: nothing is written to the phone).
+T.recent = T.recent || [];
+function recordRecent(sid) { if (!sid) return; T.recent = [sid].concat(T.recent.filter((x) => x !== sid)).slice(0, 5); }
 function findBox() {
-  return el('div', { class: 'card find' }, el('label', { class: 'lab', for: 'find' }, 'Patient card number'),
+  const recent = el('div', { class: 'recent', id: 'recent', hidden: true, role: 'listbox', 'aria-label': 'Recently opened patients' },
+    el('div', { class: 'small muted' }, 'Recently opened'),
+    ...T.recent.map((sid) => el('button', { type: 'button', class: 'recent-item', onmousedown: (ev) => ev.preventDefault(), onclick: () => { $('#find').value = sid; findPatient(sid); } }, sid)));
+  const show = (on) => { const r = $('#recent'); if (r && T.recent.length) r.hidden = !on; };
+  return el('div', { class: 'card find' }, el('label', { class: 'lab', for: 'find' }, 'Patient Study Number'),
     el('div', { class: 'inline' },
-      el('input', { id: 'find', type: 'text', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7', onblur: (ev) => { ev.target.value = normId(ev.target.value); }, onkeydown: (ev) => { if (ev.key === 'Enter') findPatient(ev.target.value); } }),
-      el('button', { class: 'btn primary', type: 'button', id: 'findgo', onclick: () => findPatient($('#find').value) }, 'Open')));
+      el('input', { id: 'find', type: 'text', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7',
+        onfocus: () => show(true), onblur: (ev) => { ev.target.value = normId(ev.target.value); setTimeout(() => show(false), 150); },
+        onkeydown: (ev) => { if (ev.key === 'Enter') findPatient(ev.target.value); } }),
+      el('button', { class: 'btn primary', type: 'button', id: 'findgo', onclick: () => findPatient($('#find').value) }, 'Open')),
+    recent);
 }
 function home() {
   if (role() === 'dots') return registerScreen();
@@ -783,7 +812,7 @@ function visitOpens(sid, v) {
 }
 function lockedRow(name, opens) { return el('div', { class: 'row locked', 'aria-disabled': 'true' }, el('div', { class: 'main' }, el('div', null, name), el('div', { class: 'sub' }, 'opens ' + opens)), el('span', { class: 'chip' }, 'not yet')); }
 function participant(p) {
-  const sid = p.sid, out = derived(), e = find('S1_ENROL', { study_id: sid });
+  const sid = p.sid, out = derived(), e = find('S1_ENROL', { study_id: sid }); recordRecent(sid);
   if (!e) return topBar(sid).concat([el('main', null, el('div', { class: 'card' }, 'This study number is not in the workbook (it may have been withdrawn).'))]);
   const dp = out.participant.filter((r) => r[0] === sid)[0] || [];
   const dpk = DERIVED.DERIVED_PARTICIPANT.map((x) => x[0]), D = {}; dpk.forEach((k, i) => { D[k] = dp[i]; });
@@ -853,7 +882,8 @@ function linkPick() {
   return topBar('Link').concat([el('main', null, q, list)]);
 }
 function measureFor(p) {
-  const sid = p.sid, row = (tab, key, name) => {
+  const sid = p.sid; recordRecent(sid);
+  const row = (tab, key, name) => {
     const opens = visitOpens(sid, key.visit || 'V1');
     if (opens && !find(tab, key)) return lockedRow(name, opens);
     return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, name)), statusChip(find(tab, key)), el('span', { class: 'chev' }));
@@ -1339,9 +1369,9 @@ function practiceStart() {
   T.real = S;
   S = { cfg: Object.assign({}, S.cfg, { token: '', api: '', email: 'practice' }), outbox: [], lastSync: Date.now(), server: null };
   S.server = { tabs: practiceTabs(), at: Date.now(), films: /^reader/.test(T.real.cfg.role) ? [{ study_id: PRAC_A, cxr_date: isoOf_(dayNo_(todayIso()) - 41), repeat: false }, { study_id: PRAC_B, cxr_date: isoOf_(dayNo_(todayIso()) - 4), repeat: false }] : [] };
-  T.practice = true; T.nav = []; T.form = null; render();
+  T.practice = true; resetNav(); T.form = null; render();
 }
-function practiceStop() { if (!T.practice) return; S = T.real; T.real = null; T.practice = false; T.nav = []; T.form = null; render(); }
+function practiceStop() { if (!T.practice) return; S = T.real; T.real = null; T.practice = false; resetNav(); T.form = null; render(); }
 function practiceCommit() {                       // "sending" in practice: apply the queued entries to the sandbox copy only
   S.outbox.filter((c) => c.status === 'pending').forEach((c) => {
     const t = S.server.tabs[c.tab], d = defOf(c.tab), keys = APP_KEYS[c.tab], serial = APP_SERIAL[c.tab];
