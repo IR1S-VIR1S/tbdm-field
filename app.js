@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '92405ff9de17';                 // replaced by build.js with the build's hash
+const BUILD_ID = '849b13270b1e';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -123,35 +123,37 @@ async function bioAsk(id, prfSalt) {
   const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [{ type: 'public-key', id }], userVerification: 'required', timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
   return prfOut(a);
 }
-async function bioEnrol(pin) {
-  let step = 'pin';
-  const vault = await kvGet('vault');
-  try { await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, await deriveKey(s_(pin).trim(), vault.salt), vault.ct); }          // fails unless the PIN is right
-  catch (e) { throw Object.assign(new Error('That PIN is not right.'), { step: 'pin' }); }
-  pin = s_(pin).trim();
-  const prfSalt = rnd(32);
+async function bioEnrol() {
+  // Called straight from the tap (the phone only allows Face ID in answer to a tap). The unlocked vault key is what gets locked behind Face ID, so no PIN is typed.
+  let step = 'start';
   try {
-  step = 'passkey';
-  const cred = await navigator.credentials.create({ publicKey: { rp: { name: 'TBDM Field' }, user: { id: rnd(16), name: S.cfg.email || 'user', displayName: S.cfg.initials || 'user' }, challenge: rnd(32),
-    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
-    timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
-  const id = new Uint8Array(cred.rawId);
-  step = 'secret';
-  const out = prfOut(cred) || await bioAsk(id, prfSalt);               // some phones only report support at creation and give the secret on the next check
-  if (!out) throw new Error('This phone or browser cannot lock the PIN to Face ID or fingerprint. Keep using the PIN.');
-  step = 'save';
-  const iv = rnd(12), ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await bioWrapKey(out), new TextEncoder().encode(pin));
-  await kvSet('bio', { v: 1, id, prfSalt, iv, ct });
-  T.hasBio = true;
+    if (!KEY) throw new Error('The app is locked.');
+    const raw = new Uint8Array(await crypto.subtle.exportKey('raw', KEY)), prfSalt = rnd(32);
+    step = 'passkey';
+    const cred = await navigator.credentials.create({ publicKey: { rp: { name: 'TBDM Field' }, user: { id: rnd(16), name: S.cfg.email || 'user', displayName: S.cfg.initials || 'user' }, challenge: rnd(32),
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+      timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+    const id = new Uint8Array(cred.rawId);
+    step = 'secret';
+    const out = prfOut(cred) || await bioAsk(id, prfSalt);               // some phones only report support at creation and give the secret on the next check
+    if (!out) throw new Error('This phone or browser cannot lock the app to Face ID or fingerprint. Keep using the PIN.');
+    step = 'save';
+    const iv = rnd(12), ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await bioWrapKey(out), raw);
+    await kvSet('bio', { v: 2, id, prfSalt, iv, ct, salt: T.salt });
+    T.hasBio = true;
   } catch (e) { if (e && !e.step) e.step = step; throw e; }
 }
 async function bioOpen() {
   const b = await kvGet('bio');
-  if (!b) throw new Error('not set up');
+  if (!b || b.v !== 2) throw Object.assign(new Error('not set up'), { name: 'OperationError' });
   const out = await bioAsk(b.id, b.prfSalt);
   if (!out) throw new Error('The check did not release the key.');
-  const pin = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.iv }, await bioWrapKey(out), b.ct));
-  await openVault(pin);
+  const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.iv }, await bioWrapKey(out), b.ct);
+  const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', true, ['encrypt', 'decrypt']);
+  const vault = await kvGet('vault');
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, key, vault.ct);                    // fails if the vault was reset since
+  T.salt = vault.salt; KEY = key; S = JSON.parse(new TextDecoder().decode(pt));
+  sessSave();
 }
 async function bioOff() { try { await kvDel('bio'); } catch (e) { /* ignore */ } T.hasBio = false; }
 
@@ -559,13 +561,62 @@ const ICONS = {
 function icon(k) { const s = el('span', { class: 'ico', 'aria-hidden': 'true' }); s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICONS[k] + '</svg>'; return s; }
 const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['queries', 'Queries', 'query'], ['visits', 'Checklist', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'lock'], ['settings', 'Settings', 'settings']];
 function tabTo(name) { confirmLeave(() => { resetNav(); if (name === 'register' && T.reg) T.reg.list = null; if (name !== 'home') go(name); else { T.form = null; render(); window.scrollTo(0, 0); } }); }
+// The bar can be rearranged: hold a tab for a moment, then slide it left or right. The order is kept on this phone (not sensitive, not sent anywhere).
+const NAVKEY = 'tbdm-nav';
+function navSaved() { try { const v = JSON.parse(localStorage.getItem(NAVKEY) || 'null'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
+function navOrdered(tabs) { const o = navSaved(), rank = (t) => { const i = o.indexOf(t[0]); return i < 0 ? 999 : i; }; return tabs.map((t, i) => [t, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((x) => x[0]); }
+function navDrag(nav) {
+  let timer = 0, drag = null, sx = 0, sy = 0, swallow = false, edge = 0;
+  const btns = () => Array.from(nav.querySelectorAll('.bn'));
+  const stop = (save) => {
+    clearTimeout(timer); clearInterval(edge);
+    if (drag) {
+      drag.el.classList.remove('dragging'); drag.el.style.transform = ''; nav.classList.remove('dragmode');
+      if (save) { try { localStorage.setItem(NAVKEY, JSON.stringify(btns().map((b) => b.dataset.tab))); } catch (e) { /* ignore */ } }
+      drag = null; swallow = true; setTimeout(() => { swallow = false; }, 350);
+    }
+  };
+  const follow = (x) => {
+    const e = drag.el; e.style.transform = '';
+    const mid = (r) => r.left + r.width / 2;
+    let moved = true;
+    while (moved) {                                                    // swap with a neighbour once the finger passes its middle
+      moved = false; const r = e.getBoundingClientRect(), prev = e.previousElementSibling, next = e.nextElementSibling;
+      if (prev && x < mid(prev.getBoundingClientRect())) { nav.insertBefore(e, prev); moved = true; }
+      else if (next && x > mid(next.getBoundingClientRect())) { nav.insertBefore(next, e); moved = true; }
+    }
+    const r2 = e.getBoundingClientRect(); e.style.transform = 'translateX(' + Math.round(x - (r2.left + r2.width / 2)) + 'px) scale(1.08)';
+    drag.x = x;
+  };
+  nav.addEventListener('touchmove', (ev) => { if (drag) ev.preventDefault(); }, { passive: false });          // no sideways scrolling while a tab is being carried
+  nav.addEventListener('contextmenu', (ev) => ev.preventDefault());
+  nav.addEventListener('click', (ev) => { if (swallow) { ev.stopPropagation(); ev.preventDefault(); } }, true);
+  btns().forEach((b) => {
+    b.addEventListener('pointerdown', (ev) => {
+      if (drag) return; sx = ev.clientX; sy = ev.clientY; clearTimeout(timer);
+      timer = setTimeout(() => {
+        drag = { el: b, x: sx }; b.classList.add('dragging'); nav.classList.add('dragmode');
+        try { b.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+        if (navigator.vibrate) navigator.vibrate(15);
+        follow(sx);
+        edge = setInterval(() => { if (!drag) return; const r = nav.getBoundingClientRect(); if (drag.x < r.left + 36) nav.scrollLeft -= 8; else if (drag.x > r.right - 36) nav.scrollLeft += 8; follow(drag.x); }, 30);
+      }, 450);
+    });
+    b.addEventListener('pointermove', (ev) => {
+      if (drag) { follow(ev.clientX); return; }
+      if (Math.abs(ev.clientX - sx) > 10 || Math.abs(ev.clientY - sy) > 10) clearTimeout(timer);                 // the person is scrolling, not holding
+    });
+    ['pointerup', 'pointercancel'].forEach((n) => b.addEventListener(n, () => { clearTimeout(timer); stop(true); }));
+  });
+}
 function bottomNav(active) {
   let dueN = 0, qN = 0;
   try { const d = derived(); dueN = d.schedule.filter((r) => r[5] !== 'upcoming').length; qN = d.queries.length; } catch (e) { dueN = 0; qN = 0; }
   const pend = T.practice || !confCopy() && !(T.reg && T.reg.list) ? 0 : identifiersPending(T.reg && T.reg.list ? T.reg.list : confAsList()).length;
-  const tabs = NAV_TABS.filter((t) => (t[0] !== 'linkpick' && t[0] !== 'register') || (role() === 'pi' && !T.practice));
-  const nav = el('nav', { class: 'bnav', 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'aria-current': t[0] === active ? 'page' : null, onclick: () => tabTo(t[0]) },
+  const tabs = navOrdered(NAV_TABS.filter((t) => (t[0] !== 'linkpick' && t[0] !== 'register') || (role() === 'pi' && !T.practice)));
+  const nav = el('nav', { class: 'bnav', 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'data-tab': t[0], 'aria-current': t[0] === active ? 'page' : null, onclick: () => tabTo(t[0]) },
     icon(t[2]), t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'queries' && qN ? el('i', { class: 'badge' }, String(qN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : null, el('span', { class: 'lbl' }, t[1]))));
+  navDrag(nav);
   setTimeout(() => { const on = nav.querySelector('.bn.on'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' }); }, 0);          // the selected tab is always in view
   return nav;
 }
@@ -1309,7 +1360,7 @@ function settings() {
   if (T.practice) return topBar('Settings').concat([el('main', null, practiceCard())]);
   const pending = S.outbox.length;
   return topBar('Settings').concat([el('main', null,
-    role() === 'pi' ? [el('h2', null, 'Logs'), el('div', { class: 'list logs' },
+    role() === 'pi' ? [el('h2', null, 'Tools'), el('div', { class: 'list logs' },
       toolRow('Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')),
       toolRow('Verification log', view('QC_LOG').length + ' checks', () => go('qclog')),
       toolRow('Practice mode', 'Learn with made-up patients', practiceAsk)), el('h2', null, 'Account')] : null,
@@ -1331,15 +1382,10 @@ function bioSettings() {
   if (T.bioOk === null) return el('p', { class: 'small muted' }, 'Checking whether this phone offers Face ID or fingerprint…');
   if (!T.bioOk) return el('div', null, el('p', { class: 'small muted', id: 'bio-none' }, 'Face ID / fingerprint unlock: the phone does not report a built-in biometric for this app. (' + (T.bioWhy || '') + (window.navigator.standalone ? '; opened from the home screen' : '; opened in the browser') + '.) The PIN works as normal.'),
     window.PublicKeyCredential ? el('button', { class: 'btn block', id: 'bio-try', onclick: () => { T.bioOk = true; render(); } }, 'Try to set it up anyway') : null, el('p'));
-  const ask = () => {
-    let typed = '';
-    const box = el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', id: 'bio-pin', placeholder: 'Your PIN', oninput: (ev) => { typed = ev.target.value; }, onchange: (ev) => { typed = ev.target.value; } }), msg = el('div', { class: 'small', style: 'color:#b3261c' });
-    modal('Turn on Face ID or fingerprint', [el('p', null, 'Type your PIN once. The phone will then ask for Face ID or your fingerprint. The PIN keeps working.'), box, msg],
-      [['Cancel', null], ['Continue', async () => {
-        try { await bioEnrol(typed || box.value); toast('Face ID or fingerprint is on'); }
-        catch (e) { toast(e && e.step === 'pin' ? 'That PIN is not right.' : e && e.name === 'NotAllowedError' ? 'Cancelled, or the phone refused the Face ID check. Nothing was changed.' : 'Could not turn it on (' + (e && e.step ? e.step + ': ' : '') + (e && e.name) + ': ' + ((e && e.message) || '') + ')'); }
-        render();
-      }, 'primary']]);
+  const ask = async () => {
+    try { await bioEnrol(); toast('Face ID or fingerprint is on'); }
+    catch (e) { toast(e && e.name === 'NotAllowedError' ? 'Cancelled, or the phone refused the Face ID check. Nothing was changed.' : 'Could not turn it on (build ' + BUILD_ID.slice(0, 6) + ', ' + (e && e.step ? e.step + ': ' : '') + (e && e.name) + ': ' + ((e && e.message) || '') + ')'); }
+    render();
   };
   return el('div', null, el('button', { class: 'btn block', id: 'bio-on', onclick: ask }, 'Unlock with Face ID or fingerprint'), el('p'));
 }
