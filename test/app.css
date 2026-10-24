@@ -161,3 +161,5 @@ a.tel.big { color: var(--brand); font-weight: 700; text-decoration: none; margin
 .bn .lbl { font-size: 11px; font-weight: 600; }
 .bn.on { color: var(--brand); } .bn.on::before { content: ""; position: absolute; top: 0; left: 22%; right: 22%; height: 3px; border-radius: 0 0 3px 3px; background: var(--brand); }
 .bn .badge { position: absolute; top: 4px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #b3261e; color: #fff; font-style: normal; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; }
+
+.lock .bio { margin-top: 14px; background: transparent; border: 1px solid rgba(255,255,255,.6); color: #fff; border-radius: 12px; padding: 12px 18px; font-size: 16px; font-weight: 600; }

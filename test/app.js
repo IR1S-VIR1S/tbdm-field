@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'd022bc3b3961';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'f81846f0a4fa';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -102,6 +102,47 @@ async function openVault(pin) {
   T.salt = vault.salt; KEY = key; S = JSON.parse(new TextDecoder().decode(pt));
   sessSave();
 }
+
+// ---- Face ID / fingerprint unlock, as an alternative to the PIN.
+// The PIN stays the master secret. At enrolment the PIN is encrypted under a key that the phone's own authenticator releases only after
+// a Face ID or fingerprint check (the WebAuthn PRF extension). Nothing the phone stores can open the vault without that check.
+// Where the phone or browser cannot do this, the option is not offered: a version that merely hides the PIN behind a button would be weaker than the PIN itself.
+async function bioAvailable() {
+  try { return !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (e) { return false; }
+}
+async function bioWrapKey(prf) {
+  const base = await crypto.subtle.importKey('raw', prf, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode('tbdm pin wrap v1') }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+function prfOut(cred) { const x = cred && cred.getClientExtensionResults && cred.getClientExtensionResults(); return x && x.prf && x.prf.results && x.prf.results.first ? new Uint8Array(x.prf.results.first) : null; }
+const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
+async function bioAsk(id, prfSalt) {
+  const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [{ type: 'public-key', id }], userVerification: 'required', timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+  return prfOut(a);
+}
+async function bioEnrol(pin) {
+  const vault = await kvGet('vault');
+  await crypto.subtle.decrypt({ name: 'AES-GCM', iv: vault.iv }, await deriveKey(pin, vault.salt), vault.ct);          // throws unless the PIN is right
+  const prfSalt = rnd(32);
+  const cred = await navigator.credentials.create({ publicKey: { rp: { name: 'TBDM Field' }, user: { id: rnd(16), name: S.cfg.email || 'user', displayName: S.cfg.initials || 'user' }, challenge: rnd(32),
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+    timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+  const id = new Uint8Array(cred.rawId);
+  const out = prfOut(cred) || await bioAsk(id, prfSalt);               // some phones only report support at creation and give the secret on the next check
+  if (!out) throw new Error('This phone or browser cannot lock the PIN to Face ID or fingerprint. Keep using the PIN.');
+  const iv = rnd(12), ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await bioWrapKey(out), new TextEncoder().encode(pin));
+  await kvSet('bio', { v: 1, id, prfSalt, iv, ct });
+  T.hasBio = true;
+}
+async function bioOpen() {
+  const b = await kvGet('bio');
+  if (!b) throw new Error('not set up');
+  const out = await bioAsk(b.id, b.prfSalt);
+  if (!out) throw new Error('The check did not release the key.');
+  const pin = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.iv }, await bioWrapKey(out), b.ct));
+  await openVault(pin);
+}
+async function bioOff() { try { await kvDel('bio'); } catch (e) { /* ignore */ } T.hasBio = false; }
 
 // ------------------------------------------------------------------ data: server snapshot plus unsent changes
 function serverRows(tab) {
@@ -344,7 +385,7 @@ function setupScreen() {
     } catch (e) { msg.textContent = e.message; btn.disabled = false; btn.textContent = 'Join'; }
   } }, 'Join');
   return el('div', { class: 'setup' }, el('h2', null, 'Join the TB-DM study'),
-    el('div', { class: 'card' }, el('p', { class: 'small muted' }, 'This phone will keep study entries, encrypted, until they are sent. Never type a name, CNIC, telephone number, address or MRN anywhere in this app.')),
+    el('div', { class: 'card' }, el('p', { class: 'small muted' }, 'This phone will keep study entries, encrypted, until they are sent. Study entries never contain a name, CNIC, telephone number, address or MRN. Those are recorded only in the confidential Link register, which only the PI and the DOTS incharge can open.')),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Your initials'), el('div', { class: 'hint' }, 'Recorded with every entry you make.'), ini),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Choose a PIN'), el('div', { class: 'hint' }, 'Unlocks the app and encrypts its data. If you forget it, the phone must be reset and anything not yet sent is lost.'), p1),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Type the PIN again'), p2, msg), btn);
@@ -369,15 +410,26 @@ function lockScreen() {
       T.lockMsg = 'Wrong PIN.'; render();
     }
   };
+  const tryBio = async () => {
+    T.lockMsg = ''; render();
+    try { await bioOpen(); localStorage.setItem('tbdm-test-fails', '0'); T.lockMsg = ''; resetNav(); bumpIdle(); render(); sync(); }
+    catch (e) {
+      if (e && e.name === 'OperationError') { await bioOff(); T.lockMsg = 'Face ID or fingerprint no longer matches this PIN. Use the PIN, then set it up again in Settings.'; }          // the PIN changed or the key is gone
+      else T.lockMsg = e && e.name === 'NotAllowedError' ? 'Cancelled. Use the PIN, or try again.' : 'Face ID or fingerprint did not open the app. Use the PIN.';
+      render();
+    }
+  };
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'];
   return el('div', { class: 'lock' }, el('h1', null, 'TBDM Field TEST'),
     el('p', null, T.join ? 'An invitation link was opened, but this phone is already set up. Unlock, then reset the phone in Settings to use it.' : 'Enter your PIN'),
     dots, el('div', { class: 'pad' }, keys.map((k) => el('button', { class: k.length > 1 ? 'txt' : '', 'aria-label': k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k, onclick: () => press(k) },
-      k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k))), err);
+      k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k))), err,
+    T.hasBio && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', onclick: tryBio }, 'Unlock with Face ID or fingerprint') : null);
 }
 
 // ------------------------------------------------------------------ home and lists
 function role() { return S.cfg.role || 'data'; }
+const confRole = () => role() === 'pi' || role() === 'dots';
 const canData = () => role() === 'data' || role() === 'pi' || role() === 'nurse';
 const isNurse = () => role() === 'nurse';
 // The next study number, from this phone's enrolments and screening lines (including ones not yet sent).
@@ -410,7 +462,7 @@ function ownFree() {
   return out.sort((a, b) => a - b);
 }
 async function topUpNumbers(mine, still) {              // called by sync() once the pull has succeeded; a failure here never fails the sync
-  if (T.practice || !canData()) return;
+  if (T.practice || !(canData() || role() === 'dots')) return;
   const N = S.nums || (S.nums = { dev: '', blocks: [], got: false, old: false, pend: '', err: '' });
   if (!N.dev) N.dev = rid();
   if (N.got && !N.old && ownFree().length > CFG.BLOCK_LOW) return;
@@ -578,9 +630,9 @@ const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']]
 // ---- the PI phone keeps an encrypted copy of the confidential register, so Link and Link register work with no signal.
 // It lives in the PIN-protected vault with the other study data, is refreshed at every sync, and is wiped when the confidential link is
 // switched off or this phone loses access. New numbers and changes made offline wait in S.confOut and are sent at the next sync.
-function confCopy() { return role() === 'pi' && !T.practice && S.conf && S.conf.rows ? S.conf : null; }
+function confCopy() { return confRole() && !T.practice && S.conf && S.conf.rows ? S.conf : null; }
 async function confSave(res) {
-  if (role() !== 'pi' || T.practice || !res || !res.ok) return;
+  if (!confRole() || T.practice || !res || !res.ok) return;
   S.conf = res.link ? { at: Date.now(), next: res.next, rows: res.rows.map((r) => Object.assign({}, r)) } : null;
   await saveState();
 }
@@ -600,7 +652,7 @@ function overlay(L) {
 function confAsList() { const C = confCopy(); return C ? overlay({ ok: true, rows: C.rows, next: C.next, link: true, cached: true, at: C.at }) : null; }
 // sent at each sync, after the study entries; a rejected item stays listed with the reason until it is fixed or discarded
 async function pushConf(still) {
-  if (role() !== 'pi' || !(S.confOut || []).length) return;
+  if (!confRole() || !(S.confOut || []).length) return;
   for (const c of S.confOut.slice()) {
     const body = c.kind === 'add' ? Object.assign({ op: 'register_add', token: S.cfg.token, rid: c.id }, c.body) : Object.assign({ op: 'link_set', token: S.cfg.token }, c.body);
     const res = await api(body); still();
@@ -611,7 +663,7 @@ async function pushConf(still) {
   }
 }
 async function confRefresh(still) {
-  if (role() !== 'pi' || T.practice) return;
+  if (!confRole() || T.practice) return;
   const res = await api({ op: 'register_list', token: S.cfg.token }); still();
   if (res.ok) { await confSave(res); const st = T.reg; if (st && st.list) st.list = overlay(res); }
 }
@@ -766,7 +818,7 @@ function linkScreen(p) {
   const show = (lab, v) => el('div', { class: 'card' }, el('div', { class: 'muted small' }, lab), el('div', null, v || '–'));
   const ph = d && d.phone;
   return topBar(sid + ' · Link').concat([el('main', null,
-    el('div', { class: 'card small muted' }, role() === 'pi' ? 'Confidential. Only the PI and the DOTS incharge. This phone keeps an encrypted copy (locked with your PIN) so it works with no signal; every opening while online is logged.' : 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged.'),
+    el('div', { class: 'card small muted' }, confRole() ? 'Confidential. Only the PI and the DOTS incharge. This phone keeps an encrypted copy (locked with your PIN) so it works with no signal; every opening while online is logged.' : 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged.'),
     off && st.offline ? el('div', { class: 'card warn' }, el('b', null, 'Offline. Showing the copy saved on this phone.')) : off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
     st.err ? el('div', { class: 'card alert' }, st.err) : null,
     st.msg ? el('div', { class: 'card' }, el('b', null, st.msg)) : null,
@@ -1216,13 +1268,30 @@ function settings() {
     el('button', { class: 'btn block', id: 'update-now', onclick: () => confirmLeave(checkUpdate) }, 'Update app now'),
     el('p', { class: 'small muted' }, 'Gets the newest version of this app from the internet. Your entries stay on the phone.'), el('p'),
     role() !== 'dots' ? el('button', { class: 'btn block', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, 'Practice mode (training)') : null, el('p'),
+    bioSettings(),
     el('button', { class: 'btn block', onclick: () => lock() }, 'Lock now'), el('p'),
     el('button', { class: 'btn danger block', onclick: resetPhone }, 'Reset this phone'),
     el('p', { class: 'small muted' }, 'Reset removes the study data and your access from this phone. Use it before passing the phone to someone else.'))]);
 }
+function bioSettings() {
+  if (T.bioOk === undefined) { T.bioOk = null; bioAvailable().then((v) => { T.bioOk = v; if (KEY && cur().name === 'settings') render(); }); }
+  if (T.hasBio) return el('div', null, el('button', { class: 'btn block', id: 'bio-off', onclick: () => modal('Turn off Face ID and fingerprint?', [el('p', null, 'The app will open with the PIN only.')], [['Cancel', null], ['Turn off', async () => { await bioOff(); toast('Face ID and fingerprint unlock is off'); render(); }, 'primary']]) }, 'Face ID / fingerprint: on (turn off)'), el('p'));
+  if (!T.bioOk) return null;
+  const ask = () => {
+    const box = el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', id: 'bio-pin', placeholder: 'Your PIN' }), msg = el('div', { class: 'small', style: 'color:#b3261c' });
+    modal('Turn on Face ID or fingerprint', [el('p', null, 'Type your PIN once. The phone will then ask for Face ID or your fingerprint. The PIN keeps working.'), box, msg],
+      [['Cancel', null], ['Continue', async () => {
+        try { await bioEnrol(box.value); toast('Face ID or fingerprint is on'); }
+        catch (e) { toast(e && e.name === 'OperationError' ? 'That PIN is not right.' : e && e.name === 'NotAllowedError' ? 'Cancelled. Nothing was changed.' : (e.message || 'Could not turn it on')); }
+        render();
+      }, 'primary']]);
+  };
+  return el('div', null, el('button', { class: 'btn block', id: 'bio-on', onclick: ask }, 'Unlock with Face ID or fingerprint'),
+    el('p', { class: 'small muted' }, 'An alternative to typing the PIN. Needs a phone with Face ID or a fingerprint reader.'), el('p'));
+}
 function resetPhone() {
   const n = S.outbox.length;
-  const doIt = async () => { await kvDel('vault'); localStorage.removeItem('tbdm-test-fails'); localStorage.removeItem('tbdm-test-wait'); T.hasVault = false; lock(); };
+  const doIt = async () => { await kvDel('vault'); await kvDel('bio'); T.hasBio = false; localStorage.removeItem('tbdm-test-fails'); localStorage.removeItem('tbdm-test-wait'); T.hasVault = false; lock(); };
   modal('Reset this phone?', [el('p', null, n ? n + ' entries on this phone have NOT reached the workbook and will be lost. Sync first if you can.' : 'All entries have reached the workbook. The phone will forget the study and your access.')],
     [['Cancel', null], [n ? 'Reset and lose ' + n : 'Reset', doIt, 'danger']]);
 }
@@ -1630,7 +1699,8 @@ function readJoin(given) {
 window.addEventListener('hashchange', () => { if (readJoin() && !KEY) render(); });
 (async function start() {
   readJoin();
-  try { T.hasVault = !!(await kvGet('vault')); } catch (e) { T.hasVault = false; }
+  try { T.hasVault = !!(await kvGet('vault')); T.hasBio = T.hasVault && !!(await kvGet('bio')); } catch (e) { T.hasVault = false; T.hasBio = false; }
+  bioAvailable().then((v) => { T.bioOk = v; });
   if (T.hasVault) await sessRestore();
   if ('serviceWorker' in navigator) setupAutoUpdate();
   render();
