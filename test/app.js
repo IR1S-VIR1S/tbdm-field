@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '5d2ed10652a3';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'c81748ca008b';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1276,6 +1276,7 @@ function due() {
 // ---- query navigation: open the exact form, scroll to the field and flash it, with the query shown on top
 function fieldName(tab, k) { const d = defOf(tab), c = d && d.cols.filter((x) => x.key === k)[0]; return c ? c.label.split(' (')[0] : k; }
 // The enrolment has no screening line carrying its number: the fix is on the screening line, not on the enrolment.
+const SPIRO_V5_Q = /Spirometry done but the Visit 5 smear/;   // opens the Visit 5 smear result
 const SKIPPED_Q = /^Study number skipped/;   // the gap is explained in the paper linking log, which the PI keeps in the Link register
 const NO_SCREEN_Q = /^No screening line/, WAIT_ENROL_Q = /not yet enrolled|not yet in S1_ENROL/;   // the second wording is the older one, still on the workbook until its script is updated
 function openQuery(q) {
@@ -1285,6 +1286,7 @@ function openQuery(q) {
     modal((q[0] || 'This number') + ' was skipped', [el('p', null, 'No screening line or enrolment uses this number. The PI explains the gap in the paper linking log.')], [['Close', null]]); return;
   }
   if (NO_SCREEN_Q.test(q[4])) { go('screening'); toast('Open ' + (q[0] || 'the patient') + "'s screening line and enter " + (q[0] || 'the study number') + ' as its study number'); return; }
+  if (SPIRO_V5_Q.test(q[4]) && q[0]) { go('form', { tab: 'VISITS', key: { study_id: q[0], visit: 'V5' }, focus: 'smear_result', query: query }); return; }   // the fix is the Visit 5 smear, not the spirometry form
   if (WAIT_ENROL_Q.test(q[4]) && q[0]) { findPatient(q[0]); return; }   // screened and waiting: straight to the enrolment prompt
   if (!keys || !defOf(tab)) return q[0] ? go('participant', { sid: q[0] }) : go('screening');
   let key = null;
