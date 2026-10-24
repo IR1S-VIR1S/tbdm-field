@@ -218,3 +218,4 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
 .homerow .card.find input { min-width: 0; height: 40px; padding: 0 8px; font-size: 16px; }
 .homerow .card.find .btn { min-height: 36px; padding: 0 8px; }
 .homerow .tile { min-height: 0; padding: 10px; margin: 0; min-width: 0; } .homerow .tile b { font-size: 15px; line-height: 1.15; } .homerow .tile span { font-size: 12px; }
+.homerow.solo { grid-template-columns: 1fr; } .homerow.solo > .card.find .inline { flex-direction: row; } .homerow.solo > .card.find .inline > * { width: auto; flex: 1; }
