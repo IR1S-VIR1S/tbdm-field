@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'e93f0c3ac0ec';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'a2cd8a8cc780';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -556,14 +556,14 @@ T.recent = T.recent || [];
 T.lastTap = 0;
 document.addEventListener('pointerdown', () => { T.lastTap = Date.now(); }, true);
 function recordRecent(sid) { if (!sid) return; T.recent = [sid].concat(T.recent.filter((x) => x !== sid)).slice(0, 5); }
-function findBox() {
+function findBox(short) {
   const recent = el('div', { class: 'recent', id: 'recent', hidden: true, role: 'listbox', 'aria-label': 'Recently opened patients' },
     el('div', { class: 'small muted' }, 'Recently opened'),
     ...T.recent.map((sid) => el('button', { type: 'button', class: 'recent-item', onmousedown: (ev) => ev.preventDefault(), onclick: () => { $('#find').value = sid; findPatient(sid); } }, sid)));
   const show = (on) => { const r = $('#recent'); if (r && T.recent.length) r.hidden = !on; };
   return el('div', { class: 'card find' }, el('label', { class: 'lab', for: 'find' }, 'Patient Study Number'),
     el('div', { class: 'inline' },
-      el('input', { id: 'find', type: 'tel', inputmode: 'numeric', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7',
+      el('input', { id: 'find', type: 'tel', inputmode: 'numeric', autocomplete: 'off', autocapitalize: 'characters', placeholder: short ? idOf_(7) : 'e.g. ' + idOf_(7) + ' or 7',
         onfocus: () => show(true),
         oninput: (ev) => { const t = s_(ev.target.value).trim().toUpperCase(); if (/^(TBDM-?)?\d{3}$/.test(t) && idOk_(normId(t))) findPatient(t); },          // a complete three-digit number opens the patient at once
         // The tick (Done) on the number pad only closes the keyboard. If the keyboard closed without the person tapping anything else, open the patient straight away.
@@ -665,8 +665,8 @@ function piHome(out, bad, waiting, oldest, dueN) {
   const main = el('main', { class: 'pihome' },
     bad.length ? el('button', { class: 'card alert row', onclick: () => go('attention') }, el('div', { class: 'main' }, el('div', null, bad.length + ' entr' + (bad.length > 1 ? 'ies need' : 'y needs') + ' fixing'), el('div', { class: 'sub' }, 'The workbook did not accept them. Tap to see why.')), el('span', { class: 'chev' })) :
     waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null,
-    findBox(),
-    el('div', { class: 'quick' },
+    el('div', { class: 'homerow' },
+      findBox(true),
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, 'Add a screening line')) : null,
       canData() ? enrolTile() : null),
     el('h2', null, 'Needs attention'),

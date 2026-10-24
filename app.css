@@ -209,3 +209,12 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
   .tile, .feed { box-shadow: none; }
   @keyframes qflash { 0%, 45% { background: #5a4710; box-shadow: 0 0 0 3px #b08a10; } 100% { background: transparent; box-shadow: 0 0 0 0 transparent; } }
 }
+
+/* PI home: search, Screen and Enrol share one row */
+.homerow { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 8px; align-items: stretch; margin-bottom: 12px; }
+.homerow > .card.find { margin: 0; padding: 10px; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; min-width: 0; }
+.homerow .card.find .lab { font-size: 12px; line-height: 1.15; }
+.homerow .card.find .inline { flex-direction: column; gap: 6px; } .homerow .card.find .inline > * { flex: none; width: 100%; }
+.homerow .card.find input { min-width: 0; height: 40px; padding: 0 8px; font-size: 16px; }
+.homerow .card.find .btn { min-height: 36px; padding: 0 8px; }
+.homerow .tile { min-height: 0; padding: 10px; margin: 0; min-width: 0; } .homerow .tile b { font-size: 15px; line-height: 1.15; } .homerow .tile span { font-size: 12px; }
