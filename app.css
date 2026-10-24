@@ -219,3 +219,9 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
 .homerow .card.find .btn { min-height: 36px; padding: 0 8px; }
 .homerow .tile { min-height: 0; padding: 10px; margin: 0; min-width: 0; } .homerow .tile b { font-size: 15px; line-height: 1.15; } .homerow .tile span { font-size: 12px; }
 .homerow.solo { grid-template-columns: 1fr; } .homerow.solo > .card.find .inline { flex-direction: row; } .homerow.solo > .card.find .inline > * { width: auto; flex: 1; }
+
+/* Link register: one status line, one to-do card */
+.regstat { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); font-size: 14px; color: var(--muted); }
+.regstat .dot { width: 9px; height: 9px; border-radius: 50%; background: #4ade80; flex: none; } .regstat span { flex: 1; } .regstat .btn { min-height: 36px; padding: 0 14px; }
+.card.todo b { display: block; margin: 8px 0 4px; } .card.todo b:first-child { margin-top: 0; } .card.todo .list { margin: 6px 0 8px; }
+.card.done { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }

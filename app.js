@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'd3911e983c01';                 // replaced by build.js with the build's hash
+const BUILD_ID = '876bc8e0a0f7';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -839,26 +839,31 @@ function registerScreen() {
   const seg = (opts, cur, set) => el('div', { class: 'seg' }, opts.map((o) => el('button', { type: 'button', class: cur === o[0] ? 'on' : '', onclick: () => { set(o[0]); render(); } }, o[1])));
   const spoiled = st.status === 'S', pend = identifiersPending(L);
   const off = !linkUp();
+  const msg = st.err || st.done || '';          // a new result is brought into view: it sits under the button, and the form is long
+  if (msg && msg !== st.shown) setTimeout(() => { const m = $('#regmsg'); if (m && m.scrollIntoView) m.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 60);
+  st.shown = msg;
+  const nextTxt = L && L.cached ? (ownFree()[0] ? idOf_(ownFree()[0]) : '') : L ? s_(L.next) : '';   // the one number the register would give next
   return topBar('Link register').concat([el('main', null,
-    el('div', { class: 'field' }, el('label', { class: 'lab' }, "Number on the patient's card"), el('div', { class: 'hint' }, 'Leave blank only if the patient has no card yet: the number shown below is then used.'),
-      el('input', { id: 'reg-sid', type: 'tel', inputmode: 'numeric', maxlength: '8', autocapitalize: 'characters', placeholder: 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onblur: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; }, onchange: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
+    // One status line (not several cards): is the register live or a saved copy, and a Refresh.
+    off ? (L && L.cached ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.'), el('div', { class: 'small' }, 'Updated ' + ago(L.at) + '. New numbers and changes are kept here and sent when you are back online.'),
+        el('button', { class: 'btn block', type: 'button', disabled: !navigator.onLine || st.loading, onclick: () => { T.weak = false; regLoad(); } }, 'Refresh'))
+      : el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'No copy of the register is saved on this phone yet. Open this page once while online.')))
+    : el('div', { class: 'regstat' }, el('i', { class: 'dot' }), el('span', null, st.loading ? 'Online · loading the register…' : 'Online · register up to date'),
+        el('button', { class: 'btn', type: 'button', disabled: !navigator.onLine || st.loading, onclick: () => { T.weak = false; regLoad(); } }, 'Refresh')),
     L && L.link ? null : el('div', { class: 'card small muted' }, 'Study numbers only. No names, addresses, telephone numbers or record numbers are entered or shown here. Those stay on paper in the locked cabinet.'),
-    off ? (L && L.cached ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.'), el('div', { class: 'small' }, 'Updated ' + ago(L.at) + '. New numbers and changes are kept here and sent when you are back online.'))
-      : el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'No copy of the register is saved on this phone yet. Open this page once while online.'))) : null,
-    queued.length ? el('div', { class: 'card warn' }, el('b', null, queued.length + ' waiting to send'), queued.map((c) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', null, c.body.study_id + (c.kind === 'add' ? ' · new number' : ' · details changed')), c.err ? el('div', { class: 'sub' }, 'Not accepted: ' + c.err) : null),
-      c.err ? el('button', { class: 'btn', type: 'button', onclick: () => { S.confOut.splice(S.confOut.indexOf(c), 1); saveState().then(render); } }, 'Discard') : null))) : null,
-    st.err ? el('div', { class: 'card alert' }, st.err) : null,
-    st.done ? el('div', { class: 'card' }, el('b', null, st.done)) : null,
-    el('div', { class: 'card' },
-      el('div', { class: 'muted small' }, L && L.cached ? 'Next number on this phone' : 'Next free number'),
-      el('div', { style: 'font-size:28px;font-weight:700' }, L && L.cached ? (ownFree()[0] ? idOf_(ownFree()[0]) : 'type the card number') : L ? L.next : (st.loading ? 'loading…' : '–')),
-      el('button', { class: 'btn block', type: 'button', disabled: !navigator.onLine || st.loading, onclick: () => { T.weak = false; regLoad(); } }, 'Refresh')),
-    pend.length ? el('div', { class: 'card warn' }, el('b', null, 'Enrolled, identifiers still to record (' + pend.length + ')'),
-      el('div', { class: 'small' }, 'Tap a number to add the name, record number and telephone. Do this when you are back online.'),
-      el('div', { class: 'list' }, pend.map((r) => el('button', { class: 'row', type: 'button', onclick: () => go('link', { sid: r.study_id }) }, el('div', { class: 'main' }, el('div', null, r.study_id)), el('span', { class: 'chev' }))))) : null,
+    // One list of things to do: entries waiting to be sent, and enrolled people whose identifiers are still to be recorded.
+    queued.length || pend.length ? el('div', { class: 'card warn todo' },
+      queued.length ? [el('b', null, queued.length + ' waiting to send'), el('div', { class: 'list' }, queued.map((c) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', null, c.body.study_id + (c.kind === 'add' ? ' · new number' : ' · details changed')), c.err ? el('div', { class: 'sub' }, 'Not accepted: ' + c.err) : null),
+        c.err ? el('button', { class: 'btn', type: 'button', onclick: () => { S.confOut.splice(S.confOut.indexOf(c), 1); saveState().then(render); } }, 'Discard') : null)))] : null,
+      pend.length ? [el('b', null, 'Enrolled, identifiers still to record (' + pend.length + ')'),
+        el('div', { class: 'small' }, 'Tap a number to add the name, record number and telephone. Do this when you are back online.'),
+        el('div', { class: 'list' }, pend.map((r) => el('button', { class: 'row', type: 'button', onclick: () => go('link', { sid: r.study_id }) }, el('div', { class: 'main' }, el('div', null, r.study_id)), el('span', { class: 'chev' }))))] : null) : null,
     el('h2', null, 'Assign a number'),
-    L && L.link ? el('p', { class: 'small muted' }, 'Only for a patient who has agreed and is not enrolled yet. Someone already enrolled is in the list above: do not give them a new number.') : null,
+    L && L.link ? el('p', { class: 'small muted' }, 'Only for a patient who has agreed and is not enrolled yet. Someone already enrolled is in the list below: do not give them a new number.') : null,
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Outcome'), seg(REG_STATUS_OPTS, st.status, (v) => { st.status = v; })),
+    el('div', { class: 'field' }, el('label', { class: 'lab', for: 'reg-sid' }, 'Study number'),
+      el('div', { class: 'hint' }, 'Leave blank to use the next free number' + (nextTxt ? ': ' + nextTxt : '') + '. If the patient\'s card shows a different number, type that one.'),
+      el('input', { id: 'reg-sid', type: 'tel', inputmode: 'numeric', maxlength: '8', autocapitalize: 'characters', placeholder: nextTxt || 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onblur: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, required'),
       el('input', { id: 'reg-name', type: 'text', maxlength: '60', value: st.name, oninput: (ev) => { st.name = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Record number (MRN), required'),
@@ -872,6 +877,8 @@ function registerScreen() {
     spoiled ? el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Reason the number is spoiled'),
       el('input', { type: 'text', maxlength: '80', value: st.reason, oninput: (ev) => { st.reason = ev.target.value; } })) : null,
     el('button', { class: 'btn primary block', type: 'button', disabled: st.busy || !L, onclick: () => regAssign() }, st.busy ? 'Assigning…' : (off ? 'Save on this phone' : 'Assign number')),
+    st.err ? el('div', { class: 'card alert', id: 'regmsg' }, st.err) : null,
+    st.done ? el('div', { class: 'card done', id: 'regmsg' }, el('b', null, st.done)) : null,
     el('h2', null, 'Look up a number'),
     el('input', { class: 'search', type: 'search', placeholder: 'Number, name, MRN or telephone', autocomplete: 'off', value: st.q,
       oninput: (ev) => { st.q = ev.target.value; const old = $('#reglist'); if (old) old.replaceWith(regList(st.list)); } }),   // redraw only the list, so the keyboard stays open
