@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '57c293d0ff2a';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'ad5701d2cc0c';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -847,8 +847,7 @@ function registerScreen() {
   const nextTxt = L && L.cached ? (ownFree()[0] ? idOf_(ownFree()[0]) : '') : L ? s_(L.next) : '';   // the one number the register would give next
   return topBar('Link register').concat([el('main', null,
     // One status line (not several cards): is the register live or a saved copy, and a Refresh.
-    off ? (L && L.cached ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.'), el('div', { class: 'small' }, 'Updated ' + ago(L.at) + '. New numbers and changes are kept here and sent when you are back online.'),
-        el('button', { class: 'btn block', type: 'button', disabled: !navigator.onLine || st.loading, onclick: () => { T.weak = false; regLoad(); } }, 'Refresh'))
+    off ? (L && L.cached ? el('div', { class: 'regstat solo' }, el('button', { class: 'btn', type: 'button', disabled: !navigator.onLine || st.loading, onclick: () => { T.weak = false; regLoad(); } }, 'Refresh'))
       : el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'No copy of the register is saved on this phone yet. Open this page once while online.')))
     : el('div', { class: 'regstat' }, el('i', { class: 'dot' }), el('span', null, st.loading ? 'Online · loading the register…' : 'Online · register up to date'),
         el('button', { class: 'btn', type: 'button', disabled: !navigator.onLine || st.loading, onclick: () => { T.weak = false; regLoad(); } }, 'Refresh')),
@@ -943,7 +942,7 @@ function linkScreen(p) {
   const ph = d && d.phone;
   return topBar(sid + ' · Contact').concat([el('main', null,
     el('div', { class: 'card small muted' }, confRole() ? 'Confidential. Only the PI and the DOTS incharge. This phone keeps an encrypted copy (locked with your PIN) so it works with no signal; every opening while online is logged.' : 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged.'),
-    off && st.offline ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.')) : off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
+    off && st.offline ? null : off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
     st.err ? el('div', { class: 'card alert' }, st.err) : null,
     st.msg ? el('div', { class: 'card' }, el('b', null, st.msg)) : null,
     st.busy && !d ? el('div', { class: 'empty' }, 'Loading…') : null,

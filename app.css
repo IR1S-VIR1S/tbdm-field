@@ -225,3 +225,4 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
 .regstat .dot { width: 9px; height: 9px; border-radius: 50%; background: #4ade80; flex: none; } .regstat span { flex: 1; } .regstat .btn { min-height: 36px; padding: 0 14px; }
 .card.todo b { display: block; margin: 8px 0 4px; } .card.todo b:first-child { margin-top: 0; } .card.todo .list { margin: 6px 0 8px; }
 .card.done { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
+.regstat.solo { justify-content: flex-end; border: 0; background: none; padding: 0; }
