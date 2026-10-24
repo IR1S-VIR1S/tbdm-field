@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '6a2a231655fe';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'c450721290ca';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -406,7 +406,7 @@ function findBox() {
   const show = (on) => { const r = $('#recent'); if (r && T.recent.length) r.hidden = !on; };
   return el('div', { class: 'card find' }, el('label', { class: 'lab', for: 'find' }, 'Patient Study Number'),
     el('div', { class: 'inline' },
-      el('input', { id: 'find', type: 'text', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7',
+      el('input', { id: 'find', type: 'tel', inputmode: 'numeric', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. ' + idOf_(7) + ' or 7',
         onfocus: () => show(true), onblur: (ev) => { ev.target.value = normId(ev.target.value); setTimeout(() => show(false), 150); },
         onkeydown: (ev) => { if (ev.key === 'Enter') findPatient(ev.target.value); } }),
       el('button', { class: 'btn primary', type: 'button', id: 'findgo', onclick: () => findPatient($('#find').value) }, 'Open')),
@@ -508,7 +508,7 @@ function registerScreen() {
     L && L.link ? el('p', { class: 'small muted' }, 'Only for a patient who has agreed and is not enrolled yet. Someone already enrolled is in the list above: do not give them a new number.') : null,
     el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Outcome'), seg(REG_STATUS_OPTS, st.status, (v) => { st.status = v; })),
     el('div', { class: 'field' }, el('label', { class: 'lab' }, "Number on the patient's card"), el('div', { class: 'hint' }, 'Leave blank only if the patient has no card yet: the number shown above is then used.'),
-      el('input', { id: 'reg-sid', type: 'text', maxlength: '8', autocapitalize: 'characters', placeholder: 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onblur: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; }, onchange: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
+      el('input', { id: 'reg-sid', type: 'tel', inputmode: 'numeric', maxlength: '8', autocapitalize: 'characters', placeholder: 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onblur: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; }, onchange: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, required'),
       el('input', { id: 'reg-name', type: 'text', maxlength: '60', value: st.name, oninput: (ev) => { st.name = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Record number (MRN), required'),
@@ -1184,7 +1184,7 @@ function fieldEl(c) {
     box.append(seg); paint();
   } else {
     const isNum = ['num', 'int', 'uniqueint', 'unitnum'].indexOf(c.type) >= 0;
-    const type = c.type === 'date' ? 'date' : c.type === 'time' ? 'time' : 'text';
+    const type = c.type === 'date' ? 'date' : c.type === 'time' ? 'time' : ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? 'tel' : 'text';   // study numbers open the number pad: a plain 7 is enough
     const unitMissing = c.type === 'unitnum' && !s_(F.vals[c.unit]);
     const inp = el('input', { id: 'i-' + c.key, type, value: val, autocomplete: 'off', inputmode: isNum ? (c.type === 'int' || c.type === 'uniqueint' ? 'numeric' : 'decimal') : null,
       autocapitalize: ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 || BY_FIELDS.indexOf(c.key) >= 0 ? 'characters' : 'off',
