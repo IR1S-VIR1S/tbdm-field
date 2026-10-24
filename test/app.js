@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'f3f01321171e';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'fa139fd81244';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -632,7 +632,7 @@ const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']]
 // switched off or this phone loses access. New numbers and changes made offline wait in S.confOut and are sent at the next sync.
 // A phone with one bar of signal reports "online" yet cannot finish a request. For the confidential screens a saved copy exists, so a request
 // that fails or takes longer than FAST_MS switches them to that copy (T.weak) instead of making the user wait, until the next request that succeeds.
-const FAST_MS = 7000;
+const FAST_MS = 3000;
 const linkUp = () => navigator.onLine && !(T.weak && Date.now() - T.weakAt < 60000 && confCopy());       // after a minute it tries the network again
 const netFail = (e) => !!e && (e.name === 'AbortError' || e.name === 'TypeError');
 async function confApi(body) {
