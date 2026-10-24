@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '3e0479403683';                 // replaced by build.js with the build's hash
+const BUILD_ID = '7e575133fac0';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -120,7 +120,7 @@ async function bioWrapKey(prf) {
 function prfOut(cred) { const x = cred && cred.getClientExtensionResults && cred.getClientExtensionResults(); return x && x.prf && x.prf.results && x.prf.results.first ? new Uint8Array(x.prf.results.first) : null; }
 const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
 async function bioAsk(id, prfSalt) {
-  const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [{ type: 'public-key', id }], userVerification: 'required', timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+  const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [{ type: 'public-key', id, transports: ['internal'] }], userVerification: 'required', hints: ['client-device'], timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
   return prfOut(a);
 }
 async function bioEnrol() {
@@ -132,7 +132,7 @@ async function bioEnrol() {
     step = 'passkey';
     const cred = await navigator.credentials.create({ publicKey: { rp: { name: 'TBDM Field' }, user: { id: rnd(16), name: S.cfg.email || 'user', displayName: S.cfg.initials || 'user' }, challenge: rnd(32),
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
-      timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+      hints: ['client-device'], timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
     const id = new Uint8Array(cred.rawId);
     step = 'secret';
     const out = prfOut(cred) || await bioAsk(id, prfSalt);               // some phones only report support at creation and give the secret on the next check
