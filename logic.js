@@ -4,7 +4,7 @@ const CFG = {
   VERSION: '1.2',
   SCHEMA_VER: 2,                      // raised whenever a data tab gains, loses or reorders a column; phones compare it before sending
   ID_PREFIX: 'TBDM-',
-  ID_MAX: 300,
+  ID_MAX: 999,
   EARLIEST: '2026-10-01',          // no study date can be earlier than this
   PULSE_PRIMARY: 90,               // TBscore pulse threshold (Rudolf 2014)
   PULSE_SENSITIVITY: 100,          // sensitivity analysis threshold

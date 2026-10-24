@@ -140,3 +140,9 @@ a.tel.big { color: var(--brand); font-weight: 700; text-decoration: none; margin
 .recent { margin-top: 8px; border: 1px solid var(--line, #d9dfdd); border-radius: 12px; background: #fff; padding: 6px; display: grid; gap: 4px; }
 .recent[hidden] { display: none; }
 .recent-item { text-align: left; min-height: 44px; border: 0; background: #f4f7f6; border-radius: 8px; font-size: 1rem; padding: 0 12px; color: inherit; }
+
+.dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; background: rgba(244,246,245,.97); border-top: 1px solid var(--line); padding: 8px 12px calc(8px + var(--safe-bot)); }
+.dock::-webkit-scrollbar { display: none; }
+.dock-item { flex: 0 0 auto; min-width: 150px; min-height: 52px; border: 0; border-radius: 12px; background: #3b2a6b; color: #fff; text-align: left; padding: 6px 14px; display: flex; flex-direction: column; justify-content: center; }
+.dock-item b { font-size: 15px; } .dock-item span { font-size: 12px; opacity: .85; }
+.dock-item.on { outline: 3px solid #b9a9f0; } .dock-item:disabled { opacity: .5; }
