@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'c450721290ca';                 // replaced by build.js with the build's hash
+const BUILD_ID = '53e0a68d14f3';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -983,6 +983,21 @@ function films() {
     el('h2', null, 'Scored'), el('div', { class: 'list' }, done.length ? done.map(item) : el('div', { class: 'empty' }, 'None yet')),
     el('button', { class: 'btn block', onclick: () => go('settings') }, 'Settings'))]);
 }
+// Manual update: asks the server for a newer version, then reloads once the new one is in place.
+function checkUpdate() {
+  if (!('serviceWorker' in navigator)) { toast('This phone cannot update the app from here. Reopen it from the internet once.'); return; }
+  if (!navigator.onLine) { toast('Connect to the internet first, then try again.'); return; }
+  toast('Checking for an update…');
+  navigator.serviceWorker.getRegistration().then((reg) => {
+    if (!reg) { location.reload(); return; }
+    return reg.update().then(() => {
+      if (reg.installing || reg.waiting) {
+        navigator.serviceWorker.addEventListener('controllerchange', () => location.reload(), { once: true });
+        setTimeout(() => location.reload(), 10000);   // fallback if the switch is slow
+      } else toast('Already the newest version.');
+    });
+  }).catch(() => toast('Could not check for an update. Try again when connected.'));
+}
 function settings() {
   if (T.practice) return topBar('Settings').concat([el('main', null, practiceCard())]);
   const pending = S.outbox.length;
@@ -991,6 +1006,8 @@ function settings() {
       ['App version', APP_VERSION + ' · build ' + (BUILD_ID.indexOf('__') === 0 ? 'dev' : BUILD_ID) + ' (rules v' + CFG.VERSION + ')'], ['Last update', S.lastSync ? new Date(S.lastSync).toLocaleString('en-GB') : 'never'], ['Entries on this phone not yet in the workbook', String(pending)]]
       .map((r) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', { class: 'sub' }, r[0]), el('div', null, r[1] || '–'))))),
     el('button', { class: 'btn primary block', onclick: () => sync() }, 'Sync now'), el('p'),
+    el('button', { class: 'btn block', id: 'update-now', onclick: () => confirmLeave(checkUpdate) }, 'Update app now'),
+    el('p', { class: 'small muted' }, 'Gets the newest version of this app from the internet. Your entries stay on the phone.'), el('p'),
     role() !== 'dots' ? el('button', { class: 'btn block', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, 'Practice mode (training)') : null, el('p'),
     el('button', { class: 'btn block', onclick: () => lock() }, 'Lock now'), el('p'),
     el('button', { class: 'btn danger block', onclick: resetPhone }, 'Reset this phone'),
