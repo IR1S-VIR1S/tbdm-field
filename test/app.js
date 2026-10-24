@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'b1b638b28af9';                 // replaced by build.js with the build's hash
+const BUILD_ID = '797b351b5950';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1300,10 +1300,10 @@ function settings() {
   if (T.practice) return topBar('Settings').concat([el('main', null, practiceCard())]);
   const pending = S.outbox.length;
   return topBar('Settings').concat([el('main', null,
+    role() === 'pi' ? [el('div', { class: 'list' }, toolRow('Logs', 'Screening log, verification log, practice', () => go('tools'))), el('p')] : null,
     el('div', { class: 'list' }, [['Account', S.cfg.email], ['Role', S.cfg.role], ['Initials', S.cfg.initials], ['Server', (S.cfg.api || '').replace(/^https:\/\/([^/]+).*$/, '$1')],
       ['App version', APP_VERSION + ' · build ' + (BUILD_ID.indexOf('__') === 0 ? 'dev' : BUILD_ID) + ' (rules v' + CFG.VERSION + ')'], ['Last update', S.lastSync ? new Date(S.lastSync).toLocaleString('en-GB') : 'never'], ['Entries on this phone not yet in the workbook', String(pending)]]
       .map((r) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', { class: 'sub' }, r[0]), el('div', null, r[1] || '–'))))),
-    role() === 'pi' ? [el('div', { class: 'list' }, toolRow('Logs', 'Screening log, verification log, practice', () => go('tools'))), el('p')] : null,
     el('button', { class: 'btn primary block', onclick: () => sync() }, 'Sync now'), el('p'),
     el('button', { class: 'btn block', id: 'update-now', onclick: () => confirmLeave(checkUpdate) }, 'Update app now'),
     el('p', { class: 'small muted' }, 'Gets the newest version of this app from the internet. Your entries stay on the phone.'), el('p'),
