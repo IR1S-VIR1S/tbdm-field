@@ -6,6 +6,7 @@ const CFG = {
   ID_PREFIX: 'TBDM-',
   ID_MAX: 999,                     // three digits after the prefix; the format cannot go higher without changing the id rules
   BLOCK_SIZE: 10,                  // study numbers handed to one phone at a time, so two phones that are offline together never offer the same number
+  BLOCK_GRACE_DAYS: 14,            // numbers still unused inside a block handed to a phone in the last 14 days are not reported as skipped
   BLOCK_LOW: 3,                    // a phone asks for its next block when this many or fewer numbers are left in its own blocks
   EARLIEST: '2026-10-01',          // no study date can be earlier than this
   PULSE_PRIMARY: 90,               // TBscore pulse threshold (Rudolf 2014)
@@ -584,7 +585,7 @@ function queryField_(tab, check, detail) {
   return keys.indexOf(first) >= 0 ? first : '';
 }
 
-function computeDerived_(data, today) {
+function computeDerived_(data, today, held) {
   const T = function (n) { return data[n] || []; };
   const tday = dayNo_(today);
   const byId = function (rows) { const m = {}; rows.forEach(function (r) { if (r.study_id && !m[r.study_id]) m[r.study_id] = r; }); return m; };
@@ -720,9 +721,12 @@ function computeDerived_(data, today) {
   const used = ids.filter(idOk_).concat(Object.keys(destroyed).filter(idOk_)).map(function (s) { return +s.slice(CFG.ID_PREFIX.length); });
   if (used.length) {
     const top = Math.max.apply(null, used);
+    const inHeld = function (k) {
+      return (held || []).some(function (b) { return k >= +b.from && k <= +b.to && b.day && dayNo_(today) - dayNo_(b.day) <= CFG.BLOCK_GRACE_DAYS; });
+    };
     for (let k = 1; k < top; k++) {
       const sid = idOf_(k);
-      if (!enrol[sid] && !destroyed[sid] && !screenIds[sid])   // a number used on a screening line (even screened out) is accounted for
+      if (!enrol[sid] && !destroyed[sid] && !screenIds[sid] && !inHeld(k))   // a number used on a screening line (even screened out) is accounted for
         Q(sid, 'S1_ENROL', '', '', 'Study number skipped', 'explain the gap in the paper linking log');
     }
   }

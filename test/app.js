@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '1b0007ca6cf6';                 // replaced by build.js with the build's hash
+const BUILD_ID = '25fce4a92913';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -128,7 +128,7 @@ function view(tab) {
 }
 function data() { const d = {}; SCHEMA.forEach((t) => { d[t.tab] = view(t.tab); }); return d; }
 function derived() {
-  const out = computeDerived_(data(), todayIso());
+  const out = computeDerived_(data(), todayIso(), S && S.server && S.server.held);
   if (T.practice) out.queries = out.queries.filter((q) => !/^Study number skipped/.test(q[4]));      // practice numbers sit at the top of the range on purpose
   return out;
 }
@@ -172,6 +172,8 @@ async function api(body) {
     return await r.json();
   } finally { clearTimeout(timer); }
 }
+// The workbook takes several seconds per entry, and this phone gives up on a request after 45 seconds, so a long queue goes in small batches.
+const PUSH_BATCH = 5;
 async function sync() {
   if (!S || T.syncing || T.practice) return;
   if (!navigator.onLine) { T.syncError = 'offline'; paintSync(); return; }
@@ -188,9 +190,9 @@ async function sync() {
     }
     if (srv < CFG.SCHEMA_VER) throw Object.assign(new Error('The study workbook has not been upgraded yet. Your entries stay on this phone and are sent after the upgrade.'), { code: 409 });
     const pending = S.outbox.filter((c) => c.status === 'pending');
-    for (let i = 0; i < pending.length; i += 50) {
-      const batch = pending.slice(i, i + 50).map((c) => ({ cid: c.cid, tab: c.tab, rid: c.rid, create: c.create, values: c.values, base: c.base, by: c.by }));
-      const revs = {}; pending.slice(i, i + 50).forEach((c) => { revs[c.cid] = c.rev; });
+    for (let i = 0; i < pending.length; i += PUSH_BATCH) {
+      const batch = pending.slice(i, i + PUSH_BATCH).map((c) => ({ cid: c.cid, tab: c.tab, rid: c.rid, create: c.create, values: c.values, base: c.base, by: c.by }));
+      const revs = {}; pending.slice(i, i + PUSH_BATCH).forEach((c) => { revs[c.cid] = c.rev; });
       const res = await api({ op: 'push', token: S.cfg.token, schema: CFG.SCHEMA_VER, changes: batch }); still();
       if (!res.ok) throw Object.assign(new Error(res.error || 'the server refused'), { code: res.code });
       res.results.forEach((r) => {
@@ -203,7 +205,8 @@ async function sync() {
     }
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], at: Date.now() };
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], at: Date.now() };
+    if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
     S.cfg.role = pull.role; S.cfg.email = pull.email;
     S.lastSync = Date.now(); T.syncError = ''; T.revoked = false;
     await saveState();
@@ -936,6 +939,9 @@ function visitOpens(sid, v) {
   if (d0 === null || !w || t === null || t >= d0 + w[1]) return '';
   return isoOf_(d0 + w[1]);
 }
+// Spirometry is done only at Visit 5 and only once the Visit 5 smear is recorded as negative: it is not done on a smear-positive patient.
+function spiroOk(sid) { const v5 = find('VISITS', { study_id: sid, visit: 'V5' }); return !!v5 && s_(v5.smear_result) === 'N'; }
+const SPIRO_WHY = 'opens when the Visit 5 smear is recorded as negative (not done on a smear-positive patient)';
 function lockedRow(name, opens) { return el('div', { class: 'row locked', 'aria-disabled': 'true' }, el('div', { class: 'main' }, el('div', null, name), el('div', { class: 'sub' }, 'opens ' + opens)), el('span', { class: 'chip' }, 'not yet')); }
 function participant(p) {
   const sid = p.sid, out = derived(), e = find('S1_ENROL', { study_id: sid }); recordRecent(sid);
@@ -951,6 +957,7 @@ function participant(p) {
     const key = visit ? { study_id: sid, visit } : { study_id: sid };
     const opens = visitOpens(sid, curV);
     if (opens && tab !== 'END_STUDY' && !find(tab, key)) return lockedRow(NAMES[tab], opens);
+    if (tab === 'SPIRO' && !find(tab, key) && !spiroOk(sid)) return lockedRow(NAMES[tab], SPIRO_WHY.replace(/^opens /, ''));
     return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, NAMES[tab])), statusChip(find(tab, key)), el('span', { class: 'chev' }));
   };
   const visits = ['V1', 'V2', 'V3', 'V4', 'V5'].map((v) => {
@@ -1030,9 +1037,14 @@ function due() {
 // ---- query navigation: open the exact form, scroll to the field and flash it, with the query shown on top
 function fieldName(tab, k) { const d = defOf(tab), c = d && d.cols.filter((x) => x.key === k)[0]; return c ? c.label.split(' (')[0] : k; }
 // The enrolment has no screening line carrying its number: the fix is on the screening line, not on the enrolment.
+const SKIPPED_Q = /^Study number skipped/;   // the gap is explained in the paper linking log, which the PI keeps in the Link register
 const NO_SCREEN_Q = /^No screening line/, WAIT_ENROL_Q = /not yet enrolled|not yet in S1_ENROL/;   // the second wording is the older one, still on the workbook until its script is updated
 function openQuery(q) {
   const tab = q[1], keys = APP_KEYS[tab], query = q[4] + (q[5] ? ': ' + q[5] : '');
+  if (SKIPPED_Q.test(q[4])) {
+    if (role() === 'pi' && !T.practice) { if (T.reg) T.reg.list = null; go('register'); toast((q[0] || 'This number') + ' was skipped. Record what happened to it in the Link register.'); return; }
+    modal((q[0] || 'This number') + ' was skipped', [el('p', null, 'No screening line or enrolment uses this number. The PI explains the gap in the paper linking log.')], [['Close', null]]); return;
+  }
   if (NO_SCREEN_Q.test(q[4])) { go('screening'); toast('Open ' + (q[0] || 'the patient') + "'s screening line and enter " + (q[0] || 'the study number') + ' as its study number'); return; }
   if (WAIT_ENROL_Q.test(q[4]) && q[0]) { findPatient(q[0]); return; }   // screened and waiting: straight to the enrolment prompt
   if (!keys || !defOf(tab)) return q[0] ? go('participant', { sid: q[0] }) : go('screening');
@@ -1059,6 +1071,7 @@ function queries() {
   const qrow = (q) => el('button', { class: 'row qrow', onclick: () => openQuery(q) },
     el('div', { class: 'main' }, el('div', null, (NAMES[q[1]] || q[1]) + (q[3] ? ' · ' + q[3] : '')), el('div', { class: 'sub' }, q[4] + (q[5] ? ': ' + q[5] : '')),
       WAIT_ENROL_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, 'Opens at: Enrolment')
+        : SKIPPED_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, role() === 'pi' ? 'Opens at: Link register, to record what happened to the number' : 'The PI explains this in the paper linking log')
         : NO_SCREEN_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, "Opens at: Screening log, to add the number to the patient's line")
         : q[6] ? el('div', { class: 'sub qfield' }, 'Opens at: ' + fieldName(q[1], q[6])) : null), el('span', { class: 'chev' }));
   const block = (g) => {
@@ -1450,6 +1463,7 @@ async function saveForm() {
     const dup = APP_SERIAL[F.tab] ? null : find(F.tab, F.vals);
     if (dup) { toast('This record already exists. Opening it.'); T.form = null; T.nav[T.nav.length - 1].p.key = F.vals; render(); return; }
   }
+  if (F.tab === 'SPIRO' && !F.existing && !spiroOk(s_(F.vals.study_id))) { toast('Spirometry is not done yet: the Visit 5 smear must be recorded as negative first.'); return; }
   if (F.tab === 'EVENTS' && s_(F.vals.event_type) === 'E2') { const rt = rucamTotal_(F.vals); F.vals.e2_rucam_score = rt === '' ? '' : String(rt); }
   if (F.tab === 'R_SCORES' && s_(F.vals.cavity).toUpperCase() === 'N') F.vals.n_cavities = '0';
   const vals = {}; def.cols.forEach((c) => { if (APP_SERIAL[F.tab] !== c.key || s_(F.vals[c.key])) vals[c.key] = F.vals[c.key]; });
