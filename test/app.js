@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'fa139fd81244';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'bebf5b839446';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1294,7 +1294,8 @@ function settings() {
 function bioSettings() {
   if (T.bioOk === undefined) { T.bioOk = null; bioAvailable().then((v) => { T.bioOk = v; if (KEY && cur().name === 'settings') render(); }); }
   if (T.hasBio) return el('div', null, el('button', { class: 'btn block', id: 'bio-off', onclick: () => modal('Turn off Face ID and fingerprint?', [el('p', null, 'The app will open with the PIN only.')], [['Cancel', null], ['Turn off', async () => { await bioOff(); toast('Face ID and fingerprint unlock is off'); render(); }, 'primary']]) }, 'Face ID / fingerprint: on (turn off)'), el('p'));
-  if (!T.bioOk) return null;
+  if (T.bioOk === null) return el('p', { class: 'small muted' }, 'Checking whether this phone offers Face ID or fingerprint…');
+  if (!T.bioOk) return el('div', null, el('p', { class: 'small muted', id: 'bio-none' }, 'Face ID / fingerprint unlock is not offered here: this phone or browser does not report a built-in biometric for web apps' + (window.PublicKeyCredential ? '' : ' (it has no WebAuthn support at all)') + '. The PIN works as normal.'), el('p'));
   const ask = () => {
     const box = el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', id: 'bio-pin', placeholder: 'Your PIN' }), msg = el('div', { class: 'small', style: 'color:#b3261c' });
     modal('Turn on Face ID or fingerprint', [el('p', null, 'Type your PIN once. The phone will then ask for Face ID or your fingerprint. The PIN keeps working.'), box, msg],
