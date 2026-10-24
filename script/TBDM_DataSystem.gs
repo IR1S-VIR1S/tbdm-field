@@ -2720,10 +2720,15 @@ function scriptApi_(method, path, body) {
   return text ? JSON.parse(text) : {};
 }
 function scriptApiHelp_(code, text) {
-  if (/SERVICE_DISABLED|has not been used|is disabled|User has not enabled|Apps Script API/i.test(text) && code === 403)
-    return 'The Google Apps Script API is switched off for your account. Open https://script.google.com/home/usersettings , turn "Google Apps Script API" on, wait a minute, then run this again.';
-  if (code === 401 || code === 403) return 'Google refused permission to edit this script (' + code + '). The script needs the extra permissions listed in "how to update without re-inviting", step "one-time setup". ' + String(text).slice(0, 160);
-  return 'Google answered with error ' + code + ': ' + String(text).slice(0, 200);
+  const raw = '\n\nGoogle said: ' + String(text).replace(/\s+/g, ' ').slice(0, 300);
+  if (code === 403 && /User has not enabled the Apps Script API/i.test(text))
+    return 'The Google Apps Script API is switched off for your account. Open https://script.google.com/home/usersettings , turn "Google Apps Script API" on, wait a few minutes, then run this again.' + raw;
+  if (code === 403 && /SERVICE_DISABLED|has not been used in project|accessNotConfigured/i.test(text)) {
+    const m = /project[ =](\d+)/i.exec(text);
+    return 'The Apps Script API is not turned on inside the Google Cloud project behind this script' + (m ? ' (project ' + m[1] + ')' : '') + '. This is separate from your account setting. Send this message to Claude for the next step.' + raw;
+  }
+  if (code === 401 || code === 403) return 'Google refused permission to edit this script (' + code + '). Check the "oauthScopes" line in appsscript.json, then run this again and allow the permissions.' + raw;
+  return 'Google answered with error ' + code + '.' + raw;
 }
 function menuUpdateScript() {
   requirePI_();
