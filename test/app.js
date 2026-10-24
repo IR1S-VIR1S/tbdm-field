@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '50f0626d8f7a';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'b1b638b28af9';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1145,18 +1145,33 @@ function measureList() {
   return topBar('Measurements').concat([el('main', null, q, list)]);
 }
 // ---- PI: pick an enrolled participant, then open the confidential Link screen (same screen as from the participant page)
+function regMatch(rows, qq) {                              // search by study number, name, MRN or telephone (any way of writing it)
+  const q = s_(qq).trim().toUpperCase();
+  if (!q) return rows;
+  const dig = (v) => s_(v).replace(/\D/g, '').replace(/^(92|0)/, ''), qd = /^[\d\s+\-()]+$/.test(q) ? dig(q) : '';
+  return rows.filter((r) => [r.study_id, r.name, r.mrn].some((v) => s_(v).toUpperCase().indexOf(q) >= 0) || (qd.length >= 3 && dig(r.phone).indexOf(qd) >= 0) || s_(r.phone).replace(/\s/g, '').indexOf(q.replace(/\s/g, '')) >= 0
+    || (/^\d{1,3}$/.test(q) && s_(r.study_id).toUpperCase().replace(/\D/g, '').replace(/^0+/, '') === q.replace(/^0+/, '')));
+}
 function linkPick() {
   if (role() !== 'pi' || T.practice) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is for the PI only, and is not available in practice mode.'))]);
-  const q = el('input', { class: 'search', type: 'search', placeholder: 'Search study number', autocomplete: 'off' });
+  const q = el('input', { class: 'search', type: 'search', placeholder: 'Study number, name, MRN or telephone', autocomplete: 'off', value: T.cq || '' });
   const list = el('div', { class: 'list conf' });
+  const note = el('div', { class: 'card small muted', hidden: true });
   const fill = () => {
-    const f = s_(q.value).toUpperCase();
-    const rows = view('S1_ENROL').filter((r) => r.study_id && s_(r.study_id).toUpperCase().includes(f)).sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
-    list.replaceChildren(...(rows.length ? rows.map((r) => el('button', { class: 'row', onclick: () => go('link', { sid: r.study_id }) },
-      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, 'No participants match.')]));
+    T.cq = q.value;
+    const L = confAsList(), have = {};
+    const rows = L ? L.rows.slice() : [];
+    rows.forEach((r) => { have[s_(r.study_id).toUpperCase()] = true; });
+    view('S1_ENROL').forEach((r) => { const id = s_(r.study_id).toUpperCase(); if (id && !have[id]) { have[id] = true; rows.push({ study_id: r.study_id }); } });
+    rows.sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
+    const shown = regMatch(rows, q.value);
+    note.hidden = !!L; note.textContent = L ? '' : 'Names and telephones are not on this phone yet. Open this page once with a signal to load them. Only study numbers can be searched until then.';
+    list.replaceChildren(...(shown.length ? shown.slice(0, 100).map((r) => el('button', { class: 'row', onclick: () => go('link', { sid: r.study_id }) },
+      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : '', r.phone].filter(Boolean).join(' · ') || 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, 'No contact matches.')]));
   };
   q.addEventListener('input', fill); fill();
-  return topBar('Contact').concat([el('main', null, q, list)]);
+  if (!confCopy() && navigator.onLine && !T.cqLoading && !T.cqTried) { T.cqLoading = true; T.cqTried = true; confRefresh(() => {}).catch(() => {}).then(() => { T.cqLoading = false; if (KEY && cur().name === 'linkpick') { const old = $('.search'); T.cq = old ? old.value : T.cq; render(); } }); }
+  return topBar('Contact').concat([el('main', null, q, note, list)]);
 }
 function measureFor(p) {
   const sid = p.sid; recordRecent(sid);
