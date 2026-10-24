@@ -164,9 +164,12 @@ a.tel.big { color: var(--brand); font-weight: 700; text-decoration: none; margin
 .bn.on { color: var(--brand); } .bn.on::before { content: ""; position: absolute; top: 0; left: 22%; right: 22%; height: 3px; border-radius: 0 0 3px 3px; background: var(--brand); }
 .bn .badge { position: absolute; top: 4px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #b3261e; color: #fff; font-style: normal; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; }
 
-.lock .bio { margin-top: 14px; background: transparent; border: 1px solid rgba(255,255,255,.6); color: #fff; border-radius: 12px; padding: 12px 18px; font-size: 16px; font-weight: 600; }
+
 
 .bnav .bn { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .bnav.dragmode { scroll-snap-type: none; }
 .bnav.dragmode .bn:not(.dragging) { opacity: .6; transition: opacity .15s; }
 .bn.dragging { z-index: 7; background: #e6f1ef; border-radius: 12px; box-shadow: 0 4px 14px rgba(20,33,31,.25); }
+
+.lock .bio { margin-top: 14px; width: 64px; height: 64px; display: inline-flex; align-items: center; justify-content: center; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.55); color: #fff; border-radius: 18px; padding: 0; }
+.lock .bio .bioico, .lock .bio svg { width: 40px; height: 40px; display: block; }

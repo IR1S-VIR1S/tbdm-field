@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '84c2403985d5';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'a1006c73b849';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -107,6 +107,11 @@ async function openVault(pin) {
 // The PIN stays the master secret. At enrolment the PIN is encrypted under a key that the phone's own authenticator releases only after
 // a Face ID or fingerprint check (the WebAuthn PRF extension). Nothing the phone stores can open the vault without that check.
 // Where the phone or browser cannot do this, the option is not offered: a version that merely hides the PIN behind a button would be weaker than the PIN itself.
+function bioIcon() {                                       // a plain face-scan symbol: corner brackets, two eyes, a nose and a smile
+  const b = el('span', { class: 'bioico', 'aria-hidden': 'true' });
+  b.innerHTML = '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 17V12a6 6 0 0 1 6-6h5M31 6h5a6 6 0 0 1 6 6v5M42 31v5a6 6 0 0 1-6 6h-5M17 42h-5a6 6 0 0 1-6-6v-5"/><path d="M17.5 19v3M30.5 19v3M24 19.5v6.5h-2.2M17.5 31.5c3.8 3.6 9.2 3.6 13 0"/></svg>';
+  return b;
+}
 async function bioAvailable() {
   T.bioWhy = '';
   if (!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create)) { T.bioWhy = 'WebAuthn: not in this browser'; return false; }
@@ -438,7 +443,7 @@ function lockScreen() {
     el('p', null, T.join ? 'An invitation link was opened, but this phone is already set up. Unlock, then reset the phone in Settings to use it.' : 'Enter your PIN'),
     dots, el('div', { class: 'pad' }, keys.map((k) => el('button', { class: k.length > 1 ? 'txt' : '', 'aria-label': k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k, onclick: () => press(k) },
       k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k))), err,
-    T.hasBio && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', onclick: () => tryBio(false) }, 'Unlock with Face ID or fingerprint') : null);
+    T.hasBio && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', 'aria-label': 'Unlock with Face ID or fingerprint', title: 'Face ID or fingerprint', onclick: () => tryBio(false) }, bioIcon()) : null);
 }
 
 // ------------------------------------------------------------------ home and lists
