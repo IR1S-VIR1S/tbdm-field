@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'f81846f0a4fa';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'f3f01321171e';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -204,9 +204,9 @@ function queueSave(tab, existing, values) {
 }
 
 // ------------------------------------------------------------------ server
-async function api(body) {
+async function api(body, ms) {
   if (T.practice) throw new Error('practice mode: the app never contacts the study');
-  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 45000);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms || 45000);
   try {
     const r = await fetch(S ? S.cfg.api : T.join.api, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       signal: ctl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store' });
@@ -249,7 +249,7 @@ async function sync() {
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
     S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], at: Date.now() };
     if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
-    S.cfg.role = pull.role; S.cfg.email = pull.email;
+    T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email;
     S.lastSync = Date.now(); T.syncError = ''; T.revoked = false;
     await saveState();
     try { await confRefresh(still); } catch (e) { if (e.quiet || e.code === 401) throw e; }      // a failure here never fails the sync
@@ -275,7 +275,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
   else if (KEY && T.hiddenAt && Date.now() - T.hiddenAt > IDLE_LOCK_MS) lock();
 });
-window.addEventListener('online', () => { paintSync(); sync(); });
+window.addEventListener('online', () => { T.weak = false; paintSync(); sync(); });
 window.addEventListener('offline', paintSync);
 ['online', 'offline'].forEach((ev) => window.addEventListener(ev, () => { if (KEY && cur().name === 'home') render(); }));   // online-only tiles appear and disappear
 setInterval(() => { if (KEY && navigator.onLine && !T.syncing && S.outbox.some((c) => c.status === 'pending')) sync(); }, 120000);
@@ -630,6 +630,16 @@ const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']]
 // ---- the PI phone keeps an encrypted copy of the confidential register, so Link and Link register work with no signal.
 // It lives in the PIN-protected vault with the other study data, is refreshed at every sync, and is wiped when the confidential link is
 // switched off or this phone loses access. New numbers and changes made offline wait in S.confOut and are sent at the next sync.
+// A phone with one bar of signal reports "online" yet cannot finish a request. For the confidential screens a saved copy exists, so a request
+// that fails or takes longer than FAST_MS switches them to that copy (T.weak) instead of making the user wait, until the next request that succeeds.
+const FAST_MS = 7000;
+const linkUp = () => navigator.onLine && !(T.weak && Date.now() - T.weakAt < 60000 && confCopy());       // after a minute it tries the network again
+const netFail = (e) => !!e && (e.name === 'AbortError' || e.name === 'TypeError');
+async function confApi(body) {
+  if (!confCopy()) return api(body);                    // no saved copy to fall back on: wait as long as it takes
+  try { const r = await api(body, FAST_MS); T.weak = false; return r; }
+  catch (e) { if (netFail(e)) { T.weak = true; T.weakAt = Date.now(); } throw e; }
+}
 function confCopy() { return confRole() && !T.practice && S.conf && S.conf.rows ? S.conf : null; }
 async function confSave(res) {
   if (!confRole() || T.practice || !res || !res.ok) return;
@@ -671,22 +681,23 @@ function regState() { return T.reg || (T.reg = { list: null, loading: false, err
 async function regLoad() {
   const st = regState();
   st.err = '';
-  if (!navigator.onLine) { if (!confCopy()) st.err = 'No internet connection, and no copy of the register is saved on this phone yet. Open it once while online.'; render(); return; }
+  if (!linkUp()) { if (!confCopy()) st.err = 'No internet connection, and no copy of the register is saved on this phone yet. Open it once while online.'; render(); return; }
   st.loading = true; render();
   try {
-    const res = await api({ op: 'register_list', token: S.cfg.token });
+    const res = await confApi({ op: 'register_list', token: S.cfg.token });
     if (!res.ok) throw new Error(res.error || 'could not load');
     st.list = overlay(res); await confSave(res);
-  } catch (e) { st.err = 'Could not load the register. ' + e.message; }
+  } catch (e) {
+    if (T.weak && confCopy()) { st.list = confAsList(); st.loading = false; render(); return; } st.err = 'Could not load the register. ' + e.message; }
   st.loading = false; render();
 }
 async function regAssign() {
   const st = regState();
   if (st.busy) return;
-  if (!navigator.onLine && !confCopy()) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
+  if (!linkUp() && !confCopy()) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
   if (st.list && st.list.link && st.status !== 'S' && (!s_(st.name).trim() || !s_(st.mrn).trim() || !s_(st.phone).trim())) { st.err = 'Not assigned. The participant name, the record number and the telephone number are all required.'; render(); return; }
   st.pendingRid = st.pendingRid || rid();              // the same id on a retry, so a number is never assigned twice
-  if (!navigator.onLine) {                              // offline: kept on this phone, encrypted, and sent at the next sync
+  if (!linkUp()) {                              // offline: kept on this phone, encrypted, and sent at the next sync
     const first = ownFree()[0], sid = normId(st.sid) || (first ? idOf_(first) : '');
     if (!sid || !idOk_(sid)) { st.err = 'No spare number on this phone. Type the number from the patient card.'; render(); return; }
     if ((S.confOut || []).some((c) => c.kind === 'add' && s_(c.body.study_id).toUpperCase() === sid) || ((S.conf && S.conf.rows) || []).some((r) => s_(r.study_id).toUpperCase() === sid)) { st.err = sid + ' is already in the register.'; render(); return; }
@@ -699,11 +710,14 @@ async function regAssign() {
   const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, study_id: normId(st.sid) };
   st.busy = true; st.err = ''; st.done = ''; render();
   try {
-    const res = await api(body);
+    const res = await confApi(body);
     if (!res.ok) throw new Error(res.error || 'not assigned');
     st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id;
     st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.sid = ''; st.reason = ''; st.status = 'E';
-  } catch (e) { st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.'; }
+  } catch (e) {
+    if (T.weak && confCopy()) { st.busy = false; return regAssign(); }           // same request id, so a request that did get through is not repeated
+    st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.';
+  }
   st.busy = false;
   await regLoad();
 }
@@ -720,17 +734,17 @@ function regList(L) {
 }
 function registerScreen() {
   const st = regState();
-  if (!navigator.onLine && (st.list === null || st.list.cached) && confCopy()) st.list = confAsList();
-  else if (navigator.onLine && st.list && st.list.cached) st.list = null;
-  if (st.list === null && !st.loading && !st.err && navigator.onLine) { st.loading = true; setTimeout(() => regLoad(), 0); }   // never load inside a render
+  if (!linkUp() && (st.list === null || st.list.cached) && confCopy()) st.list = confAsList();
+  else if (linkUp() && st.list && st.list.cached) st.list = null;
+  if (st.list === null && !st.loading && !st.err && linkUp()) { st.loading = true; setTimeout(() => regLoad(), 0); }   // never load inside a render
   const L = st.list, queued = S.confOut || [];
   const seg = (opts, cur, set) => el('div', { class: 'seg' }, opts.map((o) => el('button', { type: 'button', class: cur === o[0] ? 'on' : '', onclick: () => { set(o[0]); render(); } }, o[1])));
   const spoiled = st.status === 'S', pend = identifiersPending(L);
-  const off = !navigator.onLine;
+  const off = !linkUp();
   return topBar('Link register').concat([el('main', null,
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('visits') }, el('div', { class: 'main' }, el('div', null, 'Visit checklist'), el('div', { class: 'sub' }, 'What to order and do at each visit')), el('span', { class: 'chev' }))),
     L && L.link ? null : el('div', { class: 'card small muted' }, 'Study numbers only. No names, addresses, telephone numbers or record numbers are entered or shown here. Those stay on paper in the locked cabinet.'),
-    off ? (L && L.cached ? el('div', { class: 'card warn' }, el('b', null, 'Offline. Showing the copy saved on this phone.'), el('div', { class: 'small' }, 'Updated ' + ago(L.at) + '. New numbers and changes are kept here and sent when you are back online.'))
+    off ? (L && L.cached ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.'), el('div', { class: 'small' }, 'Updated ' + ago(L.at) + '. New numbers and changes are kept here and sent when you are back online.'))
       : el('div', { class: 'card warn' }, el('b', null, 'No internet connection.'), el('div', { class: 'small' }, 'No copy of the register is saved on this phone yet. Open this page once while online.'))) : null,
     queued.length ? el('div', { class: 'card warn' }, el('b', null, queued.length + ' waiting to send'), queued.map((c) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', null, c.body.study_id + (c.kind === 'add' ? ' · new number' : ' · details changed')), c.err ? el('div', { class: 'sub' }, 'Not accepted: ' + c.err) : null),
       c.err ? el('button', { class: 'btn', type: 'button', onclick: () => { S.confOut.splice(S.confOut.indexOf(c), 1); saveState().then(render); } }, 'Discard') : null))) : null,
@@ -739,7 +753,7 @@ function registerScreen() {
     el('div', { class: 'card' },
       el('div', { class: 'muted small' }, L && L.cached ? 'Next number on this phone' : 'Next free number'),
       el('div', { style: 'font-size:28px;font-weight:700' }, L && L.cached ? (ownFree()[0] ? idOf_(ownFree()[0]) : 'type the card number') : L ? L.next : (st.loading ? 'loading…' : '–')),
-      el('button', { class: 'btn block', type: 'button', disabled: off || st.loading, onclick: () => regLoad() }, 'Refresh')),
+      el('button', { class: 'btn block', type: 'button', disabled: !navigator.onLine || st.loading, onclick: () => { T.weak = false; regLoad(); } }, 'Refresh')),
     pend.length ? el('div', { class: 'card warn' }, el('b', null, 'Enrolled, identifiers still to record (' + pend.length + ')'),
       el('div', { class: 'small' }, 'Tap a number to add the name, record number and telephone. Do this when you are back online.'),
       el('div', { class: 'list' }, pend.map((r) => el('button', { class: 'row', type: 'button', onclick: () => go('link', { sid: r.study_id }) }, el('div', { class: 'main' }, el('div', null, r.study_id)), el('span', { class: 'chev' }))))) : null,
@@ -772,36 +786,40 @@ function registerScreen() {
 async function linkLoad(sid) {
   const st = T.link = { sid: sid, data: null, err: '', msg: '', busy: true, edit: false };
   render();
-  if (!navigator.onLine) {
+  const fromCopy = () => {
     const L = confAsList(), r = L && L.rows.filter((x) => s_(x.study_id).toUpperCase() === s_(sid).toUpperCase())[0];
-    if (r) { st.data = { name: r.name || '', mrn: r.mrn || '', phone: r.phone || '', guardian: r.guardian || '', address: r.address || '', note: r.note || '', updated: r.updated || '' }; st.form = Object.assign({}, st.data); st.edit = !(r.name || r.mrn || r.phone); st.offline = true; }
-    else st.err = 'No internet connection, and no saved copy of this participant on this phone.';
-    st.busy = false; render(); return;
-  }
+    if (r) { st.data = { name: r.name || '', mrn: r.mrn || '', phone: r.phone || '', guardian: r.guardian || '', address: r.address || '', note: r.note || '', updated: r.updated || '' }; st.form = Object.assign({}, st.data); st.edit = !(r.name || r.mrn || r.phone); st.offline = true; st.err = ''; }
+    else st.err = 'No signal, and no saved copy of this participant on this phone.';
+    st.busy = false; render();
+  };
+  if (!linkUp()) { fromCopy(); return; }
   try {
-    const res = await api({ op: 'link_get', token: S.cfg.token, study_id: sid });
+    const res = await confApi({ op: 'link_get', token: S.cfg.token, study_id: sid });
     if (!res.ok) throw new Error(res.error || 'could not load');
     st.data = res; st.form = { name: res.name || '', mrn: res.mrn, phone: res.phone, guardian: res.guardian || '', address: res.address, note: res.note };
     st.edit = !(res.name || res.mrn || res.phone || res.guardian || res.address || res.note);
-  } catch (e) { st.err = e.message; }
+  } catch (e) { if (T.weak && confCopy()) { fromCopy(); return; } st.err = e.message; }
   st.busy = false; render();
 }
 async function linkSave() {
   const st = T.link;
-  if (!navigator.onLine && !confCopy()) { st.err = 'No internet connection. Nothing was saved.'; render(); return; }
+  if (!linkUp() && !confCopy()) { st.err = 'No internet connection. Nothing was saved.'; render(); return; }
   if (!s_((st.form || {}).mrn).trim() || !s_((st.form || {}).phone).trim()) { st.err = 'Not saved. The record number and the telephone number are both required.'; render(); return; }
-  if (!navigator.onLine) {
+  if (!linkUp()) {
     S.confOut = (S.confOut || []).filter((c) => !(c.kind === 'set' && c.body.study_id === st.sid));
     S.confOut.push({ id: rid(), kind: 'set', at: Date.now(), err: '', body: Object.assign({ study_id: st.sid }, st.form) });
     await saveState(); st.msg = 'Saved on this phone. It is sent when you are back online.'; st.edit = false; st.data = Object.assign({}, st.data, st.form); render(); return;
   }
   st.busy = true; st.err = ''; st.msg = ''; render();
   try {
-    const res = await api(Object.assign({ op: 'link_set', token: S.cfg.token, study_id: st.sid }, st.form));
+    const res = await confApi(Object.assign({ op: 'link_set', token: S.cfg.token, study_id: st.sid }, st.form));
     if (!res.ok) throw new Error(res.error || 'not saved');
     st.msg = 'Saved.'; st.busy = false; st.edit = false;
     st.data = Object.assign({}, st.data, st.form); render(); return;
-  } catch (e) { st.err = 'Not saved. ' + e.message; }
+  } catch (e) {
+    if (T.weak && confCopy()) { st.busy = false; return linkSave(); }           // the signal failed: keep it on the phone instead, to be sent later
+    st.err = 'Not saved. ' + e.message;
+  }
   st.busy = false; render();
 }
 function waDigits(ph) {                                   // 0300... becomes 92300..., for WhatsApp
@@ -812,14 +830,14 @@ function waDigits(ph) {                                   // 0300... becomes 923
 function linkScreen(p) {
   const sid = p.sid;
   if (!T.link || T.link.sid !== sid) { T.link = { sid: sid, data: null, err: '', msg: '', busy: true, edit: false }; setTimeout(() => linkLoad(sid), 0); }   // never load inside a render: the nested render would draw the page twice
-  const st = T.link || { busy: true }, off = !navigator.onLine, d = st.data, f = st.form || {};
+  const st = T.link || { busy: true }, off = !linkUp(), d = st.data, f = st.form || {};
   const field = (k, lab, ml) => el('div', { class: 'field' }, el('label', { class: 'lab' }, lab),
     el('input', { type: 'text', maxlength: String(ml), value: f[k] || '', inputmode: k === 'phone' ? 'tel' : 'text', oninput: (ev) => { f[k] = ev.target.value; } }));
   const show = (lab, v) => el('div', { class: 'card' }, el('div', { class: 'muted small' }, lab), el('div', null, v || '–'));
   const ph = d && d.phone;
   return topBar(sid + ' · Link').concat([el('main', null,
     el('div', { class: 'card small muted' }, confRole() ? 'Confidential. Only the PI and the DOTS incharge. This phone keeps an encrypted copy (locked with your PIN) so it works with no signal; every opening while online is logged.' : 'Confidential. Only the PI and the DOTS incharge, online only. Nothing here is saved on this phone, and every opening is logged.'),
-    off && st.offline ? el('div', { class: 'card warn' }, el('b', null, 'Offline. Showing the copy saved on this phone.')) : off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
+    off && st.offline ? el('div', { class: 'card warn' }, el('b', null, 'No signal or too weak. Showing the copy saved on this phone.')) : off ? el('div', { class: 'card warn' }, el('b', null, 'No internet connection.')) : null,
     st.err ? el('div', { class: 'card alert' }, st.err) : null,
     st.msg ? el('div', { class: 'card' }, el('b', null, st.msg)) : null,
     st.busy && !d ? el('div', { class: 'empty' }, 'Loading…') : null,
