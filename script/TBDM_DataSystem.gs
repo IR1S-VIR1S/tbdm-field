@@ -2068,6 +2068,56 @@ const NURSE_SCOPE = {
 };
 const NURSE_VISITS = ['V3', 'V5'];                    // follow-up visits at which the nurse measures
 function nurseCol_(tab, key) { const s = NURSE_SCOPE[tab]; return s !== undefined && (s === null || s.indexOf(key) >= 0); }
+// ---- Role access: what each role may do, set by the PI in the phone's Role manager (script property ACCESS).
+// The PI always has everything except scoring films; the two readers only score films (blinding). Both columns are fixed.
+// Every other role takes the defaults below until the PI changes a tick. The server enforces each tick on every request;
+// the phone only hides what the server would refuse anyway. 'view' is the full clinical data: the ticks marked need: 'view' cannot be on without it.
+const ACCESS_ROLES = ['data', 'qc', 'nurse', 'dots'];
+const ACCESS_ROLE_NAMES = { pi: 'PI', data: 'Data entry', qc: 'Verifier', nurse: 'Nurse', dots: 'DOTS incharge', reader: 'Readers' };
+const ACCESS_KEYS = [
+  { key: 'screen', label: 'Screen and enrol' },
+  { key: 'view', label: 'Participants, forms and summaries (full clinical data)' },
+  { key: 'forms', label: 'Enter clinical forms (exam, labs, PHQ-9, visits)', need: 'view' },
+  { key: 'measure', label: 'Enter measurements (height, weight, waist, arm)' },
+  { key: 'due', label: 'Due and overdue', need: 'view' },
+  { key: 'queries', label: 'Queries', need: 'view' },
+  { key: 'checklist', label: 'Visit checklist' },
+  { key: 'numbers', label: 'Give study numbers (Link register)' },
+  { key: 'ident', label: 'Names, MRN, telephone (in the Link register)', confidential: true },
+  { key: 'contacts', label: 'Call or WhatsApp participants (Contacts)', need: 'ident', confidential: true },
+  { key: 'verify', label: 'Verification log', need: 'view' },
+  { key: 'export', label: 'Export data', need: 'view' },
+  { key: 'photoTake', label: 'Take document photos' },
+  { key: 'photoView', label: 'Open document photos' }
+];
+const ACCESS_DEFAULT = {
+  data: { screen: true, view: true, forms: true, measure: true, due: true, queries: true, checklist: true, photoTake: true },
+  qc: { view: true, due: true, queries: true, checklist: true, verify: true, photoTake: true, photoView: true },
+  nurse: { screen: true, measure: true, photoTake: true },
+  dots: { numbers: true, ident: true, photoTake: true, photoView: true }
+};
+// One role's ticks: the defaults, overlaid with what the PI saved, with every tick that needs 'view' turned off when 'view' is off.
+function accessFor_(role, stored) {
+  const out = {};
+  if (role === 'pi') { ACCESS_KEYS.forEach(function (k) { out[k.key] = true; }); return out; }
+  if (ACCESS_ROLES.indexOf(role) < 0) { ACCESS_KEYS.forEach(function (k) { out[k.key] = false; }); return out; }   // readers and unknown roles
+  const d = ACCESS_DEFAULT[role] || {}, sv = stored && stored[role] ? stored[role] : null;
+  ACCESS_KEYS.forEach(function (k) { out[k.key] = sv && typeof sv[k.key] === 'boolean' ? sv[k.key] : !!d[k.key]; });
+  ACCESS_KEYS.forEach(function (k) { if (k.need && !out[k.need]) out[k.key] = false; });
+  return out;
+}
+// Can a role with these ticks write in this tab? Without 'forms' the measurement and enrolment tabs are limited to the NURSE_SCOPE columns.
+function accessWriteTab_(role, a, tab) {
+  if (role === 'pi') return tab !== 'R_SCORES';
+  if (role === 'reader1' || role === 'reader2') return tab === 'R_SCORES';
+  if (tab === 'R_SCORES') return false;
+  if (tab === 'QC_LOG') return !!a.verify;
+  if (tab === 'S0_SCREEN') return !!(a.screen || a.forms);
+  if (tab === 'S1_ENROL') return !!(a.screen || a.forms);
+  if (tab === 'S2_BASELINE' || tab === 'VISITS') return !!(a.forms || a.measure);
+  return !!a.forms;
+}
+function accessLimited_(role, a) { return role !== 'pi' && !/^reader/.test(role) && !a.forms; }   // writes limited to NURSE_SCOPE columns
 const APP_SERIAL = { S0_SCREEN: 'screen_no', EVENTS: 'event_no', QC_LOG: 'qc_no' };   // numbered by the server
 const APP_JOIN_DAYS = 7;
 
@@ -2093,14 +2143,9 @@ function appUser_(token) {                    // the token's owner, if they stil
   u.role = role;
   return u;
 }
-function canWriteTab_(role, tab) {
-  if (role === 'pi') return tab !== 'R_SCORES';
-  if (role === 'data') return tab !== 'QC_LOG' && tab !== 'R_SCORES';
-  if (role === 'qc') return tab === 'QC_LOG';
-  if (role === 'nurse') return NURSE_SCOPE[tab] !== undefined;
-  if (role === 'dots') return false;
-  return tab === 'R_SCORES';
-}
+function accessStored_() { try { const v = JSON.parse(props_().getProperty('ACCESS') || '{}'); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; } }
+function userAccess_(u) { return accessFor_(u ? u.role : '', accessStored_()); }
+function canWriteTab_(role, tab) { return accessWriteTab_(role, accessFor_(role, accessStored_()), tab); }   // kept for older callers
 function appTarget_(role, tab) {              // [spreadsheet, definition] the change goes to
   const P = props_();
   if (tab === 'R_SCORES') return [SpreadsheetApp.openById(P.getProperty(role === 'reader2' ? 'READER2_ID' : 'READER1_ID')), READER];
@@ -2133,6 +2178,7 @@ function doPost(e) {
     if (req.op === 'photo_get') return appJson_(photoGet_(u, req));
     if (req.op === 'photo_flag') return appJson_(photoFlag_(u, req));
     if (req.op === 'pull') return appJson_(appPull_(u));
+    if (req.op === 'access_set') return appJson_(accessSet_(u, req));
     if (req.op === 'push') {
       const theirs = req.schema === undefined ? 1 : Number(req.schema);   // apps older than the handshake send none
       if (theirs < CFG.SCHEMA_VER) return appJson_({ ok: false, error: 'This app is out of date. Close it and open it again while online.', code: 409 });
@@ -2167,12 +2213,17 @@ function appRows_(ss, def, cols) {
 }
 function appPull_(u) {
   const out = { ok: true, email: u.email, role: u.role, version: CFG.VERSION, schema: CFG.SCHEMA_VER, serverTime: Utilities.formatDate(new Date(), CFG.TZ, 'yyyy-MM-dd HH:mm'), today: todayIso_(), tabs: {}, photos: photosOn_() };
-  if (u.role === 'dots') return out;                     // the DOTS incharge sees the numbers register only
-  if (u.role === 'nurse') {                              // the nurse gets only her tabs and only her columns; the rest never leaves the server
-    const nss = dataSS_();
+  const acc = userAccess_(u);
+  out.access = acc;
+  if (u.role === 'pi') out.accessStored = accessStored_();           // the Role manager grid on the PI phone
+  if (!/^reader/.test(u.role) && !acc.view) {             // without the full clinical data: only the tabs its ticks need, and only their columns
+    const nss = dataSS_(), want = {};
+    if (acc.screen) { want.S0_SCREEN = 1; want.S1_ENROL = 1; }
+    if (acc.measure) { want.S1_ENROL = 1; want.S2_BASELINE = 1; want.VISITS = 1; }
+    if (acc.verify) want.QC_LOG = 1;
     SCHEMA.forEach(function (t) {
-      if (NURSE_SCOPE[t.tab] === undefined) return;
-      const cols = t.cols.map(function (c) { return c.key; }).filter(function (k) { return nurseCol_(t.tab, k); });
+      if (!want[t.tab]) return;
+      const cols = t.cols.map(function (c) { return c.key; }).filter(function (k) { return NURSE_SCOPE[t.tab] === undefined || nurseCol_(t.tab, k); });
       out.tabs[t.tab] = { cols: cols, rows: appRows_(nss, t, cols) };
     });
     return out;
@@ -2193,6 +2244,28 @@ function appPull_(u) {
   out.held = heldBlocks_();
   return out;
 }
+// The PI's Role manager: saves the ticks for the four adjustable roles. Unknown roles or keys are ignored, every value must be true or false,
+// and a tick that needs 'view' is saved off when 'view' is off. Each change is written to the audit log (role, tick, old and new value).
+function accessSet_(u, req) {
+  if (!u || u.role !== 'pi') return { ok: false, error: 'only the PI can change role access', code: 401 };
+  const inc = req.access && typeof req.access === 'object' ? req.access : null;
+  if (!inc) return { ok: false, error: 'nothing to save' };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const old = accessStored_(), next = {}, changes = [];
+    ACCESS_ROLES.forEach(function (r) {
+      const before = accessFor_(r, old), src = inc[r] && typeof inc[r] === 'object' ? inc[r] : {}, row = {};
+      ACCESS_KEYS.forEach(function (k) { row[k.key] = typeof src[k.key] === 'boolean' ? src[k.key] : before[k.key]; });
+      ACCESS_KEYS.forEach(function (k) { if (k.need && !row[k.need]) row[k.key] = false; });
+      next[r] = row;
+      ACCESS_KEYS.forEach(function (k) { if (row[k.key] !== before[k.key]) changes.push(r + ' ' + k.key + ' ' + (before[k.key] ? 'on' : 'off') + ' to ' + (row[k.key] ? 'on' : 'off')); });
+    });
+    props_().setProperty('ACCESS', JSON.stringify(next));
+    if (changes.length) logAudit_('ACCESS', '', '', '', '', 'role access changed: ' + changes.join('; '), u.email);
+    return { ok: true, accessStored: next, changed: changes.length };
+  } finally { lock.releaseLock(); }
+}
 function regNums_() {                                       // study numbers and outcome only, no names or contact details: lets Enrol offer a number the register has already given out
   try {
     if (!props_().getProperty('REGISTER_ID')) return [];
@@ -2209,7 +2282,8 @@ const REG_TAB = 'REGISTER';
 // (record number, telephone, father or husband, name, address, note), filled only while the link switch is on.
 const REG_COLS = ['study_id', 'assigned_date', 'assigned_by', 'status', 'reason', 'rid', 'mrn', 'phone', 'guardian', 'name', 'address', 'note', 'updated', 'updated_by'];
 const REG_STATUS = [['E', 'enrolled'], ['D', 'declined'], ['S', 'spoiled']];
-function regAllowed_(u) { return !!u && (u.role === 'pi' || u.role === 'dots'); }
+function regAllowed_(u) { if (!u) return false; if (u.role === 'pi') return true; const a = userAccess_(u); return !!(a.numbers || a.ident); }
+function identAllowed_(u) { return !!u && (u.role === 'pi' || !!userAccess_(u).ident); }
 function regSheet_() {
   const id = props_().getProperty('REGISTER_ID');
   if (!id) throw new Error('The numbers register is not set up yet.');
@@ -2293,7 +2367,7 @@ function blocksAllUsed_() {                              // every number in the 
   return used;
 }
 function numbersBlock_(u, req) {
-  if (!u || (u.role !== 'data' && u.role !== 'pi' && u.role !== 'nurse' && u.role !== 'dots')) return { ok: false, error: 'not authorised', code: 401 };
+  if (!u || (u.role !== 'pi' && !(userAccess_(u).screen || userAccess_(u).numbers))) return { ok: false, error: 'not authorised', code: 401 };
   const rid = str_(req.rid), dev = str_(req.dev);
   if (!/^[0-9a-f]{8,64}$/i.test(rid) || !/^[0-9a-f]{8,64}$/i.test(dev)) return { ok: false, error: 'the request has no id; try again' };
   const mine = function (all) { return all.filter(function (b) { return b.dev === dev; }).map(function (b) { return { from: b.from, to: b.to }; }); };
@@ -2318,7 +2392,7 @@ function numbersBlock_(u, req) {
 }
 function regList_(u) {
   if (!regAllowed_(u)) return { ok: false, error: 'not authorised', code: 401 };
-  const sh = regSheet_(), on = linkOn_();
+  const sh = regSheet_(), on = linkOn_() && identAllowed_(u);     // names, record numbers and telephones only to a role ticked for them
   const rows = regRows_(sh).map(function (r) {
     const o = { study_id: str_(r.study_id), assigned_date: regDate_(r.assigned_date), status: str_(r.status), reason: str_(r.reason) };
     if (on) { o.mrn = str_(r.mrn); o.phone = str_(r.phone); o.name = str_(r.name); o.guardian = str_(r.guardian); o.address = str_(r.address); o.note = str_(r.note); o.updated = regDate_(r.updated); }   // the PI phone keeps an encrypted copy for offline use
@@ -2337,7 +2411,8 @@ function regList_(u) {
   return { ok: true, rows: rows, next: idOf_(regNext_(regUsed_(sh))), today: todayIso_(), link: on };
 }
 function regAdd_(u, req) {
-  if (!regAllowed_(u)) return { ok: false, error: 'not authorised', code: 401 };
+  if (!u || (u.role !== 'pi' && !userAccess_(u).numbers)) return { ok: false, error: 'not authorised', code: 401 };
+  const lk = linkOn_() && identAllowed_(u);
   const status = code_(req.status), rid = str_(req.rid);
   const st = REG_STATUS.filter(function (p) { return p[0] === status; })[0];
   if (!st) return { ok: false, error: 'choose enrolled, declined or spoiled' };
@@ -2348,8 +2423,8 @@ function regAdd_(u, req) {
   const guardian = spoiled ? '' : str_(req.guardian).slice(0, 60), address = spoiled ? '' : str_(req.address).slice(0, 200);
   const wanted = code_(req.study_id);                     // the number printed on the patient's card; blank means the next free number
   if (wanted && !idOk_(wanted)) return { ok: false, error: 'the card number must look like ' + idOf_(7) + ' (' + idOf_(1) + ' to ' + idOf_(CFG.ID_MAX) + ')' };
-  if ((mrn || phone || name || guardian || address) && !linkOn_()) return { ok: false, error: 'name, record number and telephone can be saved only while the confidential link is switched on' };
-  if (!spoiled && linkOn_() && (!name.trim() || !mrn || !phone)) return { ok: false, error: 'the participant name, the record number and the telephone number are all required' };
+  if ((mrn || phone || name || guardian || address) && !lk) return { ok: false, error: linkOn_() ? 'your role cannot record names, record numbers or telephones' : 'name, record number and telephone can be saved only while the confidential link is switched on' };
+  if (!spoiled && lk && (!name.trim() || !mrn || !phone)) return { ok: false, error: 'the participant name, the record number and the telephone number are all required' };
   if (phone && !/^\+?\d{7,15}$/.test(phone)) return { ok: false, error: 'telephone: digits only, 7 to 15 of them, e.g. 03001234567' };
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -2399,7 +2474,7 @@ function regLinkWrite_(sh, row, l, by) {                  // the link columns of
   sh.getRange(row, 7, 1, 8).setValues([[l.mrn, l.phone, l.guardian, l.name, l.address, l.note, todayIso_(), by]]);
 }
 function linkCheck_(u, req) {
-  if (!regAllowed_(u)) return { ok: false, error: 'not authorised', code: 401 };
+  if (!identAllowed_(u)) return { ok: false, error: 'not authorised', code: 401 };
   if (!linkOn_()) return { ok: false, error: 'The confidential link is switched off.' };
   const sid = code_(req.study_id);
   if (!idOk_(sid)) return { ok: false, error: 'not a valid study number' };
@@ -2452,8 +2527,8 @@ const PHOTO_COLS = ['photo_id', 'study_id', 'doc', 'visit', 'covered', 'file_id'
 const PHOTO_DOCS = { CONSENT: 'consent form', CORE: 'Core Per-Patient File', EXAM: 'examination sheet', SMEAR: 'sputum smear report', LAB_CBC: 'lab report: blood count', LAB_LFT: 'lab report: liver tests', LAB_HBA1C: 'lab report: HbA1c', LAB_LIPID: 'lab report: lipid profile', LAB_FPG: 'lab report: fasting glucose', LAB_HEP: 'lab report: viral serology (HBsAg, anti-HCV)', LAB_HIV: 'lab report: HIV', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
 const PHOTO_MAX = 4000000;                                // base64 characters, about 3 MB of image
 function photosOn_() { return props_().getProperty('PHOTOS_ENABLED') === 'Y'; }
-function photoTakeRole_(u) { return !!u && ['pi', 'data', 'qc', 'nurse', 'dots'].indexOf(u.role) >= 0; }
-function photoViewRole_(u) { return !!u && ['pi', 'qc', 'dots'].indexOf(u.role) >= 0; }
+function photoTakeRole_(u) { return !!u && (u.role === 'pi' || !!userAccess_(u).photoTake); }
+function photoViewRole_(u) { return !!u && (u.role === 'pi' || !!userAccess_(u).photoView); }
 function photoReader_(u) { return !!u && (u.role === 'reader1' || u.role === 'reader2'); }
 function photoSheet_() {
   const id = props_().getProperty('REGISTER_ID');
@@ -2656,11 +2731,12 @@ function screenDerive_(m, vals) {
 }
 function appApply_(u, ch, ss, today, keysSheet, touched) {
   const tab = str_(ch.tab), keys = APP_KEYS[tab];
-  if (!keys || !canWriteTab_(u.role, tab)) return { cid: ch.cid, status: 'rejected', errors: { _: 'your role cannot write in ' + tab } };
+  const acc = userAccess_(u);
+  if (!keys || !accessWriteTab_(u.role, acc, tab)) return { cid: ch.cid, status: 'rejected', errors: { _: 'your role cannot write in ' + tab } };
   const tgt = appTarget_(u.role, tab), file = tgt[0], def = tgt[1], sh = file.getSheetByName(def.tab);
   const colKeys = def.cols.map(function (c) { return c.key; });
   const vals = ch.values || {}, base = ch.base || {};
-  if (u.role === 'nurse') {                                     // enforced here, whatever the phone sends
+  if (accessLimited_(u.role, acc) && (tab === 'S1_ENROL' || tab === 'S2_BASELINE' || tab === 'VISITS')) {   // without 'forms' only the measurement columns; enforced here, whatever the phone sends
     const outside = Object.keys(vals).filter(function (k) { return k[0] !== '_' && !nurseCol_(tab, k); });
     if (outside.length) return { cid: ch.cid, status: 'rejected', errors: { _: 'your role cannot enter ' + outside.join(', ') + ' in ' + tab } };
     if (tab === 'VISITS' && NURSE_VISITS.indexOf(str_(vals.visit).toUpperCase()) < 0) return { cid: ch.cid, status: 'rejected', errors: { _: 'your role can enter measurements at ' + NURSE_VISITS.join(' and ') + ' only' } };
