@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'c5157c27e2ec';                 // replaced by build.js with the build's hash
+const BUILD_ID = '528178ebc9f1';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -373,7 +373,7 @@ function render() {
   app.style.minHeight = hasNav && sa ? (Math.max(screen.height || 0, innerHeight) + 1) + 'px' : '';
 }
 // Roles that use the visit checklist (not the nurse, the DOTS incharge or the radiology readers).
-function hasGuide() { return ['nurse', 'dots', 'reader1', 'reader2'].indexOf(role()) < 0; }
+function hasGuide() { return can('checklist'); }                 // the per-visit checklist follows the Visit checklist tick
 function topBar(title, opts) {
   opts = opts || {};
   const bar = el('header', { class: 'top' },          // the title is centred between the left (Back) and right (Lock) slots
