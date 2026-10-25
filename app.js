@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'f1bf71dc1990';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'eb0db2525594';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1263,13 +1263,19 @@ function participant(p) {
   const usedU = view('LABS').filter((r) => r.study_id === sid && /^U/.test(r.visit)).map((r) => r.visit);
   const nextU = ['U1', 'U2', 'U3', 'U4', 'U5'].filter((u) => usedU.indexOf(u) < 0)[0];
   const evs = view('EVENTS').filter((r) => r.study_id === sid);
-  const facts = [['Day today', d0 !== null ? today - d0 : '?'], ['Diabetes', ({ K: 'known', N: 'new', 0: 'no' }[e.dm_status] || 'not recorded')],
-    ['BMI V1', D.bmi_v1], ['TBscore V1', D.tbscore_v1_p90], ['NLR V1', (out.labs.filter((r) => r[0] === sid && r[1] === 'V1')[0] || [])[5]],
-    ['Timika', D.timika_final], ['PHQ-9 V1', D.phq9_v1], ['Item 9 positive', D.item9_positive || 'no']];
+  // Key variables of the five studies, four to a row: what each study measures, as soon as the values exist
+  const lk = DERIVED.DERIVED_LABS.map((x) => x[0]), L = (r, k) => r[lk.indexOf(k)], mine = out.labs.filter((r) => r[0] === sid), v1 = mine.filter((r) => r[1] === 'V1')[0] || [];
+  const altMax = mine.map((r) => Number(L(r, 'alt_x_uln'))).filter((x) => x > 0), dili = mine.some((r) => /^MET/.test(s_(L(r, 'dili'))));
+  const word = (v, m) => (v === '' || v === undefined ? '' : (m[v] || v));
+  const facts = [['Day', d0 !== null ? today - d0 : '?'], ['Diabetes', word(e.dm_status, { K: 'known', N: 'new', 0: 'no' }) || 'not set'], ['BMI V1', D.bmi_v1], ['VAI V1', D.vai_v1],
+    ['NLR V1', L(v1, 'nlr')], ['PLR V1', L(v1, 'plr')], ['SII V1', L(v1, 'sii') === '' || L(v1, 'sii') === undefined ? '' : Math.round(Number(L(v1, 'sii')))], ['TBscore', D.tbscore_v1_p90],
+    ['Timika', D.timika_final], ['Cavity', word(D.cavity_final, { Y: 'yes', N: 'no' })], ['ALT max', altMax.length ? Math.max.apply(null, altMax) + '×' : ''], ['DILI', mine.length ? (dili ? 'met' : 'no') : ''],
+    ['PHQ-9', D.phq9_v1], ['GAD-7', D.gad7_v1], ['Item 9', D.item9_positive === 'Y' ? 'yes' : 'no'], ['DM M3', word(D.dm_class_v4, { P: 'persistent', T: 'transient', K: 'known', X: 'new', 0: 'no' })]];
+  const hot = (f) => (f[0] === 'Item 9' && f[1] === 'yes') || (f[0] === 'DILI' && f[1] === 'met');
   const main = el('main', null,
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), docPill(sid, 'S1_ENROL', '', e), statusChip(e), el('span', { class: 'chev' }))),
-    el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
+    el('div', { class: 'facts4' }, facts.map((f) => el('div', { class: hot(f) ? 'bad' : '' }, el('span', null, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
     (() => {                                                   // confidential blocks side by side: Contact (PI) and Photos (PI, verifier)
       const t = [
         role() === 'pi' && !T.practice ? contactTile(sid) : null,
@@ -2080,8 +2086,8 @@ function exportAsk() {
 // A photo is shrunk, encrypted with the PIN key and kept on this phone until the next sync, then sent and deleted here.
 // Phones that take photos cannot view them; the PI, the verifier and the DOTS incharge can; radiograph readers see only
 // radiographs whose name label was covered on the phone. Nothing is written to the phone's gallery.
-const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File', EXAM: 'Examination sheet', VISIT: 'Visit sheet', PHQ: 'PHQ-9 and GAD-7 sheet', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
-const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'CORE'], S2_BASELINE: ['EXAM'], VISITS: ['VISIT'], PHQ_GAD: ['PHQ'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
+const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File', EXAM: 'Examination sheet', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
+const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'CORE'], S2_BASELINE: ['EXAM'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
 const PHOTO_MAX_PX = 2000;
 function photosOn() { return !T.practice && !!(S && S.server && S.server.photos); }
 function photoTaker() { return ['pi', 'data', 'qc', 'nurse', 'dots'].indexOf(role()) >= 0; }
@@ -2231,7 +2237,7 @@ function contactTile(sid) {                                // the block opens th
 }
 // The documents this participant's records call for, against the photos received: shows what is still missing.
 function photoNeeds(sid) {                                 // one document per open form: consent, then each visit's forms once the visit window has opened
-  const need = [['CONSENT', '', 'consent']], label = { EXAM: 'examination', VISIT: 'visit sheet', PHQ: 'PHQ-9 sheet', LAB: 'lab', CXR: 'radiograph', SPIRO: 'spirometry' };
+  const need = [['CONSENT', '', 'consent']], label = { EXAM: 'examination', LAB: 'lab', CXR: 'radiograph', SPIRO: 'spirometry' };
   Object.keys(VISIT_FORMS).forEach((v) => {
     if (visitOpens(sid, v)) return;
     VISIT_FORMS[v].forEach((f) => { const d = DOC_FOR[f[0]]; if (d && label[d] && (f[0] !== 'SPIRO' || find('SPIRO', { study_id: sid }) || spiroOk(sid))) need.push([d, f[1] || '', label[d] + (f[1] ? ' ' + f[1] : '')]); });
@@ -2259,7 +2265,7 @@ function photoFetch(sid, after) {
   }, 0);
 }
 // "No document" pill beside a form's status pill on the participant page, for every form whose visit is open: its source document has not reached the server.
-const DOC_FOR = { S1_ENROL: 'CONSENT', S2_BASELINE: 'EXAM', VISITS: 'VISIT', PHQ_GAD: 'PHQ', LABS: 'LAB', S3_CXR: 'CXR', SPIRO: 'SPIRO', END_STUDY: 'WITHDRAW' };
+const DOC_FOR = { S1_ENROL: 'CONSENT', S2_BASELINE: 'EXAM', LABS: 'LAB', S3_CXR: 'CXR', SPIRO: 'SPIRO', END_STUDY: 'WITHDRAW' };
 function docPill(sid, tab, visit, row) {
   const doc = DOC_FOR[tab], c = T.phc && T.phc[sid];
   if (!doc || !c || !photosOn() || !photoTaker()) return null;          // shown for every open form, entered or not

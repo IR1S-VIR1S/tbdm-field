@@ -319,3 +319,10 @@ div.ctile { cursor: pointer; }
 .chip.docmiss { background: #ece6fb; color: #3b2a6b; border: 0; margin-right: 6px; font-size: 11px; padding: 3px 7px; }
 .photocard.flash { animation: qflash 2.5s ease-out; }
 @media (prefers-color-scheme: dark) { .chip.docmiss { background: #3a2f5e; color: #ece6fb; } }
+
+/* Participant page: key variables, four to a row */
+.facts4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 12px; }
+.facts4 > div { background: var(--brand-soft); border-radius: 10px; padding: 7px 6px; min-width: 0; text-align: center; }
+.facts4 span { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.facts4 b { display: block; font-size: 15px; line-height: 1.25; margin-top: 2px; overflow-wrap: anywhere; }
+.facts4 .bad { background: var(--bad-soft); color: var(--bad-ink); } .facts4 .bad span { color: var(--bad-ink); }
