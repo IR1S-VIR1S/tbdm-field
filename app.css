@@ -234,3 +234,5 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
 .duec .notel { white-space: nowrap; font-size: 13px; }
 .winline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 3px; }
 .modal .card, #modal .card { margin: 0 0 8px; }
+.duec .side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+#modal .tel.big { color: var(--brand-ink); font-weight: 700; font-size: 22px; margin: 2px 0 4px; }

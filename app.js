@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'be2264db0a69';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'c25ac4d68fe3';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1274,8 +1274,10 @@ function linkPick() {
       const c = byId[s_(r[0]).toUpperCase()] || {}, ph = s_(c.phone);
       return el('div', { class: 'row' },
         el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r[0] }) }, el('div', null, dueLabel(r)), c.name ? el('div', { class: 'sub' }, c.name) : null,
-          el('div', { class: 'sub winline' }, winTxt(r), ' ', el('span', { class: 'chip ' + (r[5] === 'overdue' ? 'bad' : r[5] === 'due now' ? 'warn' : '') }, r[5]))),
-        ph ? el('button', { class: 'tel', type: 'button', onclick: () => contactAct(r[0], c) }, ph) : el('span', { class: 'sub notel' }, L ? 'no number yet' : 'not loaded'));
+          el('div', { class: 'sub winline' }, winTxt(r))),
+        el('div', { class: 'side' },
+          ph ? el('button', { class: 'tel', type: 'button', onclick: () => contactAct(r[0], c) }, ph) : el('span', { class: 'sub notel' }, L ? 'no number yet' : 'not loaded'),
+          el('span', { class: 'chip ' + (r[5] === 'overdue' ? 'bad' : r[5] === 'due now' ? 'warn' : '') }, r[5])));
     })));
   };
   const fill = () => {
