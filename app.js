@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'ffb4bbbc7e73';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'e33fa8ee747b';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -377,12 +377,17 @@ function render() {
 }
 // Roles that use the visit checklist (not the nurse, the DOTS incharge or the radiology readers).
 function hasGuide() { return can('checklist'); }                 // the per-visit checklist follows the Visit checklist tick
+// Home's title: the salam, with the person's role and today's date underneath (every role, the same way).
+function homeTop() {
+  const who = T.preview ? previewName(T.preview) : (S.server && S.server.roleName) || ACCESS_ROLE_NAMES[role()] || (isReader() ? 'Radiograph reader' : role());
+  return topBar(el('span', { class: 'salam', lang: 'ar', dir: 'rtl' }, 'السَّلاَمُ عَلَيْكُمْ وَرَحْمَةُ اللهِ وَبَرَكَاتُهُ'), { sub: who + ' · ' + new Date().toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) });
+}
 function topBar(title, opts) {
   opts = opts || {};
   const bar = el('header', { class: 'top' },          // the title is centred between the left (Back) and right (Lock) slots
     el('div', { class: 'tl' }, T.nav.length ? el('button', { class: 'back', 'aria-label': 'Back', onclick: () => confirmLeave(back) }, '‹ Back') : null),
     // "Laboratory results · TBDM-001" is shown on two lines so a centred title never hides the study number
-    el('h1', null, ...(/ · TBDM-\d+/.test(s_(title)) ? [s_(title).replace(/ · (TBDM-\d+.*)$/, ''), el('small', null, s_(title).replace(/^.* · (TBDM-\d+.*)$/, '$1'))] : [title])),
+    el('h1', null, ...(opts.sub ? [title, el('small', null, opts.sub)] : / · TBDM-\d+/.test(s_(title)) ? [s_(title).replace(/ · (TBDM-\d+.*)$/, ''), el('small', null, s_(title).replace(/^.* · (TBDM-\d+.*)$/, '$1'))] : [title])),
     el('div', { class: 'tr' }, opts.noMenu ? null : el('button', { class: 'icon lockbtn', 'aria-label': 'Lock', title: 'Lock', onclick: (ev) => { const b = ev.currentTarget; confirmLeave(() => { b.classList.add('locking'); setTimeout(lock, 420); }); } }, icon('padlock'))));
   return [bar, el('div', { id: 'syncbar' }, syncBar())];
 }
@@ -806,7 +811,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
     confQueue(),
     idp.length ? feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: 'Name, record number and telephone not recorded', go: () => { if (T.reg) T.reg.list = null; go('register'); } })), () => { if (T.reg) T.reg.list = null; go('register'); }, '') : null,
     recentBlock(waiting.length ? waiting.length + ' waiting to send' : 'All entries sent'));
-  return topBar('TBDM Field').concat([main]);
+  return homeTop().concat([main]);
 }
 function toRegister() { if (T.reg) T.reg.list = null; go('register'); }
 function assignTile() {
@@ -819,7 +824,7 @@ function confQueue() {
 }
 // A role with no study data on this phone (by default the DOTS incharge): the home lists the register work, if it has any.
 function dotsHome() {
-  if (!confRole()) return topBar('TBDM Field').concat([el('main', { class: 'pihome' }, el('div', { class: 'card' }, el('b', null, 'Nothing to do on this phone yet.'), el('div', { class: 'small' }, 'Your role has no tasks switched on. The PI sets them in the Role manager.')))]);
+  if (!confRole()) return homeTop().concat([el('main', { class: 'pihome' }, el('div', { class: 'card' }, el('b', null, 'Nothing to do on this phone yet.'), el('div', { class: 'small' }, 'Your role has no tasks switched on. The PI sets them in the Role manager.')))]);
   const L = T.reg && T.reg.list && !T.reg.list.cached && linkUp() ? T.reg.list : confAsList(), idp = identifiersPending(L), q = S.confOut || [];
   const main = el('main', { class: 'pihome' },
     can('numbers') ? el('div', { class: 'homerow solo' }, assignTile()) : null,
@@ -828,7 +833,7 @@ function dotsHome() {
     el('h2', null, 'Recent activity'),
     el('div', { class: 'card feedcard' }, el('div', { class: 'small muted' }, L && L.at ? 'Register copy saved ' + new Date(L.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : L ? 'Register up to date' : 'No copy of the register on this phone yet'),
       el('div', { class: 'small muted fsent' }, q.length ? q.length + ' waiting to send' : 'All entries sent')));
-  return topBar('TBDM Field').concat([main]);
+  return homeTop().concat([main]);
 }
 // Radiograph readers: films to score first, then what they have scored. Nothing clinical is held on this phone.
 function filmLists() {
@@ -849,7 +854,7 @@ function readerHome(bad, waiting, oldest) {
     el('h2', null, 'Recent activity'),
     el('div', { class: 'card feedcard' }, el('div', { class: 'small muted' }, 'Score each film from the image alone. You see no clinical or group information, and nobody but you and the PI sees your scores.'),
       el('div', { class: 'small muted fsent' }, waiting.length ? waiting.length + ' waiting to send' : 'All entries sent')));
-  return topBar('TBDM Field').concat([main]);
+  return homeTop().concat([main]);
 }
 function toolRow(title, sub, fn) { return el('button', { class: 'row', onclick: fn }, el('div', { class: 'main' }, el('div', null, title), el('div', { class: 'sub' }, sub)), el('span', { class: 'chev' })); }
 function tools() {
@@ -861,7 +866,7 @@ function tools() {
 }
 function home() {
   if (!isReader() && !can('view') && !can('screen') && !can('measure')) return dotsHome();      // a role with no study data on this phone (the register only, or nothing)
-  if (!S.server) return topBar('TBDM Field').concat([el('main', null, el('div', { class: 'card' }, navigator.onLine ? 'Fetching the study data…' : 'Connect to the internet once to fetch the study data.'))]);
+  if (!S.server) return homeTop().concat([el('main', null, el('div', { class: 'card' }, navigator.onLine ? 'Fetching the study data…' : 'Connect to the internet once to fetch the study data.'))]);
   const out = !can('view') ? { schedule: [], queries: [] } : derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
   const oldest = waiting.reduce((m, c) => Math.min(m, c.at), Infinity);
   if (role() === 'reader1' || role() === 'reader2') return readerHome(bad, waiting, oldest);

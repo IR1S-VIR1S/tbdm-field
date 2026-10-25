@@ -404,3 +404,6 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .method b { display: block; margin-bottom: 2px; }
 .qexact { display: flex; } .qexact .btn { flex: 0 0 auto; min-width: 88px; }
 .bnav .badge.blue { background: #1e63a3; color: #fff; }
+.top h1 .salam { display: block; font-size: 17px; line-height: 1.35; font-family: "Noto Naskh Arabic", "Geeza Pro", "Segoe UI", Arial, serif; }
+.top h1 .salam { white-space: nowrap; overflow: visible; text-overflow: clip; font-size: 13.5px; }
+.top h1:has(.salam) { white-space: normal; overflow: visible; }
