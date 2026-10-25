@@ -269,7 +269,7 @@ main h2 { background: var(--brand-soft); color: var(--brand-ink); padding: 8px 1
 .top .icon.lockbtn { display: inline-flex; align-items: center; justify-content: center; }
 .top .icon .ico, .sync .syncbtn .ico { width: 22px; height: 22px; display: block; } .top .icon .ico svg, .sync .syncbtn .ico svg { width: 22px; height: 22px; display: block; }
 .sync .syncbtn { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 36px; padding: 0 10px; }
-@keyframes spinr { to { transform: rotate(360deg); } }
+@keyframes spinr { to { transform: rotate(-360deg); } }   /* the arrows run anticlockwise */
 .sync .syncbtn.spin .ico { animation: spinr .8s linear infinite; }
 @keyframes shackle { 0% { transform: translateY(-3.5px); } 60% { transform: translateY(1px); } 100% { transform: translateY(0); } }
 @keyframes padpulse { 0%, 100% { transform: scale(1); } 60% { transform: scale(1.12); } }
