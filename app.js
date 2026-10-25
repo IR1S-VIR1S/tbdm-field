@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '996c5359b9e9';                 // replaced by build.js with the build's hash
+const BUILD_ID = '1e9262a7f8a3';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1264,7 +1264,7 @@ function cRecent() { try { return JSON.parse(localStorage.getItem('tbdm_crecent'
 function cRemember(sid) { T.cq = ''; try { localStorage.setItem('tbdm_crecent', JSON.stringify([sid].concat(cRecent().filter((x) => x !== sid)).slice(0, 5))); } catch (e) { /* no storage: skip */ } }
 function linkPick() {
   if (role() !== 'pi' || T.practice) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is for the PI only, and is not available in practice mode.'))]);
-  const q = el('input', { class: 'search', type: 'search', placeholder: 'Study number, name, MRN or telephone', autocomplete: 'off', value: T.cq || '' });
+  const q = el('input', { class: 'search', type: 'search', placeholder: 'Study Number, MRN, Name or Telephone', autocomplete: 'off', value: T.cq || '' });
   const list = el('div', { class: 'list conf' });
   const note = el('div', { class: 'card small muted', hidden: true });
   // Who is due or overdue now, each with the telephone number on the register copy; tapping the number asks Call or WhatsApp.
