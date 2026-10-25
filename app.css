@@ -403,3 +403,4 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .qcell:disabled { opacity: 1; }
 .method b { display: block; margin-bottom: 2px; }
 .qexact { display: flex; } .qexact .btn { flex: 0 0 auto; min-width: 88px; }
+.bnav .badge.blue { background: #1e63a3; color: #fff; }
