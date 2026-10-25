@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'c3e86e4cfbdb';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'd3651b857c6a';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -366,7 +366,7 @@ function render() {
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
   const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
-    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen };
+    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen, photos: photosScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
   const hasNav = !!(S && S.server) && navIds().concat(c.name === 'tools' ? ['tools'] : []).indexOf(c.name) >= 0;
@@ -603,6 +603,7 @@ function findBox(short) {
 }
 // ---- PI home: a feed of what needs attention, with a bottom bar. Other roles keep the tile home.
 const ICONS = {
+  records: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><rect x="8.5" y="11" width="8" height="6.5" rx="1"/><path d="m8.5 16 2.5-2.5 2 2 1.5-1.5 2 2"/>',
   ruler: '<rect x="3" y="8" width="18" height="8" rx="1.5"/><path d="M7 8v3M11 8v4M15 8v3M19 8v4"/>',
   home: '<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.4"/><path d="M16.5 14.6c2.7.2 4.5 2 4.5 4.9"/>',
@@ -1272,8 +1273,12 @@ function participant(p) {
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
-    role() === 'pi' && !T.practice ? el('div', { class: 'list conf' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Contact'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : null,
-    role() === 'pi' || role() === 'qc' ? photoViewCard(sid) : null,
+    (() => {                                                   // confidential blocks side by side: Contact (PI) and Photos (PI, verifier)
+      const t = [
+        role() === 'pi' && !T.practice ? el('button', { class: 'ctile', id: 'tile-contact', 'aria-label': 'Contact: telephone, call, WhatsApp', title: 'Contact', onclick: () => go('link', { sid: sid }) }, icon('phone')) : null,
+        (role() === 'pi' || role() === 'qc') && photosOn() ? el('button', { class: 'ctile', id: 'tile-photos', 'aria-label': 'Photos of the paper record', title: 'Photos of the paper record', onclick: () => go('photos', { sid: sid }) }, icon('records')) : null].filter(Boolean);
+      return t.length ? el('div', { class: 'ctiles' + (t.length === 1 ? ' solo' : '') }, t) : null;
+    })(),
     visits,
     el('h2', null, 'Unscheduled and events'),
     el('div', { class: 'list' },
@@ -2216,6 +2221,11 @@ function photoViewCard(sid) {
   };
   box.append(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Photos of the paper record'), el('button', { class: 'btn block', type: 'button', id: 'photo-show', onclick: load }, 'Show photos'));
   return box;
+}
+function photosScreen(p) {                                  // the participant's photos, loaded straight away (online only)
+  const card = photoViewCard(p.sid);
+  if (card) setTimeout(() => { const b = $('#photo-show'); if (b) b.click(); }, 0);
+  return topBar('Photos · ' + p.sid).concat([el('main', null, card || el('div', { class: 'card' }, 'Photos are not available on this phone.'))]);
 }
 async function photoOpen(ph) {
   const ov = el('div', { class: 'photo-full', role: 'dialog', 'aria-label': 'Photo' }, el('div', { class: 'small' }, 'Loading…'));

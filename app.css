@@ -306,3 +306,9 @@ main h2 { background: var(--brand-soft); color: var(--brand-ink); padding: 8px 1
 /* Visit header: the checklist for that visit opens from the icon on the right */
 main h2.vhead { display: flex; align-items: center; gap: 8px; } main h2.vhead .vguide { margin-left: auto; background: var(--card); color: var(--brand-ink); border: 1px solid var(--line); border-radius: 10px; width: 40px; height: 36px; display: inline-flex; align-items: center; justify-content: center; }
 main h2.vhead .vguide .ico, main h2.vhead .vguide svg { width: 22px; height: 22px; display: block; }
+
+/* Participant page: confidential blocks in a lighter purple, side by side */
+.ctiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; } .ctiles.solo { grid-template-columns: 1fr; }
+.ctile { background: #6c58ad; color: #fff; border: 0; border-radius: var(--r); padding: 14px; display: flex; align-items: center; justify-content: center; min-height: 68px; box-shadow: 0 1px 2px rgba(20,33,31,.08); }
+.ctile .ico, .ctile .ico svg { width: 32px; height: 32px; display: block; }
+.ctile b { font-size: 17px; } .ctile span { font-size: 13px; color: #ece6fb; }
