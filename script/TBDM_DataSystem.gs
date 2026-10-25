@@ -2205,6 +2205,7 @@ function doPost(e) {
     if (req.op === 'photo_flag') return appJson_(photoFlag_(u, req));
     if (req.op === 'pull') return appJson_(appPull_(u));
     if (req.op === 'access_set') return appJson_(accessSet_(u, req));
+    if (req.op === 'nav_set') return appJson_(navSet_(u, req));
     if (req.op === 'push') {
       const theirs = req.schema === undefined ? 1 : Number(req.schema);   // apps older than the handshake send none
       if (theirs < CFG.SCHEMA_VER) return appJson_({ ok: false, error: 'This app is out of date. Close it and open it again while online.', code: 409 });
@@ -2243,6 +2244,7 @@ function appPull_(u) {
   out.access = acc;
   if (u.role === 'pi') out.accessStored = accessStored_();           // the Role manager grid on the PI phone
   out.roleName = accessRoleName_(u.role, accessStored_());
+  { const no = navOrders_(); out.navOrder = no[navKey_(u.role)] || null; if (u.role === 'pi') out.navOrders = no; }
   if (!/^reader/.test(u.role) && !acc.view) {             // without the full clinical data: only the tabs its ticks need, and only their columns
     const nss = dataSS_(), want = {};
     if (acc.screen) { want.S0_SCREEN = 1; want.S1_ENROL = 1; }
@@ -2322,6 +2324,26 @@ function accessSet_(u, req) {
     props_().setProperty('ACCESS', JSON.stringify(next));
     if (changes.length) logAudit_('ACCESS', '', '', '', '', 'role access changed: ' + changes.join('; '), u.email);
     return { ok: true, accessStored: next, changed: changes.length };
+  } finally { lock.releaseLock(); }
+}
+// Default order of the bottom bar for each role, set by the PI by dragging the tabs while in Surveillance or Debugging as that role.
+// A person who rearranges their own bar after that keeps their own order; the next change by the PI applies again.
+const NAV_IDS = ['home', 'participants', 'measure', 'due', 'queries', 'visits', 'films', 'linkpick', 'register', 'settings'];
+function navKey_(role) { return /^reader/.test(String(role || '')) ? 'reader' : String(role || ''); }
+function navOrders_() { try { const v = JSON.parse(props_().getProperty('NAV_ORDER') || '{}'); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; } }
+function navSet_(u, req) {
+  if (!u || u.role !== 'pi') return { ok: false, error: 'only the PI can set the bar order', code: 401 };
+  const key = navKey_(req.role);
+  if (!(ACCESS_ROLES.indexOf(key) >= 0 || key === 'reader' || (isCustomRole_(key) && (accessStored_().custom || {})[key]))) return { ok: false, error: 'unknown role' };
+  const order = (Array.isArray(req.order) ? req.order : []).map(function (x) { return String(x); });
+  if (!order.length || order.length > NAV_IDS.length || order.some(function (x, i) { return NAV_IDS.indexOf(x) < 0 || order.indexOf(x) !== i; })) return { ok: false, error: 'not a valid bar order' };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const all = navOrders_(); all[key] = { order: order, at: new Date().getTime() };
+    props_().setProperty('NAV_ORDER', JSON.stringify(all));
+    logAudit_('ACCESS', '', '', '', '', 'bar order for ' + accessRoleName_(key === 'reader' ? 'reader1' : key, accessStored_()) + ': ' + order.join(', '), u.email);
+    return { ok: true, navOrders: all };
   } finally { lock.releaseLock(); }
 }
 function regNums_() {                                       // study numbers and outcome only, no names or contact details: lets Enrol offer a number the register has already given out
