@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'c27a033c6b1f';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'f1bf71dc1990';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -2080,8 +2080,8 @@ function exportAsk() {
 // A photo is shrunk, encrypted with the PIN key and kept on this phone until the next sync, then sent and deleted here.
 // Phones that take photos cannot view them; the PI, the verifier and the DOTS incharge can; radiograph readers see only
 // radiographs whose name label was covered on the phone. Nothing is written to the phone's gallery.
-const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
-const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'CORE'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
+const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File', EXAM: 'Examination sheet', VISIT: 'Visit sheet', PHQ: 'PHQ-9 and GAD-7 sheet', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
+const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'CORE'], S2_BASELINE: ['EXAM'], VISITS: ['VISIT'], PHQ_GAD: ['PHQ'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
 const PHOTO_MAX_PX = 2000;
 function photosOn() { return !T.practice && !!(S && S.server && S.server.photos); }
 function photoTaker() { return ['pi', 'data', 'qc', 'nurse', 'dots'].indexOf(role()) >= 0; }
@@ -2230,11 +2230,12 @@ function contactTile(sid) {                                // the block opens th
     ph ? el('button', { class: 'telpill', type: 'button', id: 'tile-tel', 'aria-label': 'Call or WhatsApp ' + ph, onclick: (e) => { e.stopPropagation(); contactAct(sid, r); } }, ph) : null);
 }
 // The documents this participant's records call for, against the photos received: shows what is still missing.
-function photoNeeds(sid) {
-  const need = [['CONSENT', '', 'consent']];
-  view('LABS').filter((r) => r.study_id === sid && r.visit).forEach((r) => need.push(['LAB', r.visit, 'lab ' + r.visit]));
-  if (view('S3_CXR').some((r) => r.study_id === sid)) need.push(['CXR', '', 'radiograph']);
-  if (view('SPIRO').some((r) => r.study_id === sid)) need.push(['SPIRO', '', 'spirometry']);
+function photoNeeds(sid) {                                 // one document per open form: consent, then each visit's forms once the visit window has opened
+  const need = [['CONSENT', '', 'consent']], label = { EXAM: 'examination', VISIT: 'visit sheet', PHQ: 'PHQ-9 sheet', LAB: 'lab', CXR: 'radiograph', SPIRO: 'spirometry' };
+  Object.keys(VISIT_FORMS).forEach((v) => {
+    if (visitOpens(sid, v)) return;
+    VISIT_FORMS[v].forEach((f) => { const d = DOC_FOR[f[0]]; if (d && label[d] && (f[0] !== 'SPIRO' || find('SPIRO', { study_id: sid }) || spiroOk(sid))) need.push([d, f[1] || '', label[d] + (f[1] ? ' ' + f[1] : '')]); });
+  });
   if (view('END_STUDY').some((r) => r.study_id === sid && r.status === 'W')) need.push(['WITHDRAW', '', 'withdrawal record']);
   return need;
 }
@@ -2257,16 +2258,16 @@ function photoFetch(sid, after) {
     T.phcBusy = '';
   }, 0);
 }
-// "No document" pill beside a record's status pill: the record exists, but the photo of its source document has not reached the server.
-const DOC_FOR = { S1_ENROL: 'CONSENT', LABS: 'LAB', S3_CXR: 'CXR', SPIRO: 'SPIRO', END_STUDY: 'WITHDRAW' };
+// "No document" pill beside a form's status pill on the participant page, for every form whose visit is open: its source document has not reached the server.
+const DOC_FOR = { S1_ENROL: 'CONSENT', S2_BASELINE: 'EXAM', VISITS: 'VISIT', PHQ_GAD: 'PHQ', LABS: 'LAB', S3_CXR: 'CXR', SPIRO: 'SPIRO', END_STUDY: 'WITHDRAW' };
 function docPill(sid, tab, visit, row) {
   const doc = DOC_FOR[tab], c = T.phc && T.phc[sid];
-  if (!doc || !row || !c || !photosOn() || !photoTaker()) return null;
-  if (tab === 'END_STUDY' && row.status !== 'W') return null;
+  if (!doc || !c || !photosOn() || !photoTaker()) return null;          // shown for every open form, entered or not
+  if (tab === 'END_STUDY' && !(row && row.status === 'W')) return null;
   const queued = (S.photoOut || []).some((x) => x.sid === sid && x.doc === doc && (!visit || x.visit === visit));
   if (queued || c.list.some((ph) => ph.doc === doc && (!visit || ph.visit === visit))) return null;
   const key = visit ? { study_id: sid, visit } : { study_id: sid };
-  return el('button', { class: 'chip docmiss', type: 'button', onclick: (e) => { e.stopPropagation(); go('form', { tab, key, docFocus: true }); } }, 'no document');
+  return el('button', { class: 'chip docmiss', type: 'button', onclick: (e) => { e.stopPropagation(); go('form', { tab, key, docFocus: true }); } }, 'no doc');
 }
 function photosTile(sid) {
   T.phc = T.phc || {};
