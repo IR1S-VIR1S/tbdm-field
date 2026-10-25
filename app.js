@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'e74cb5ab651b';                 // replaced by build.js with the build's hash
+const BUILD_ID = '8754a769a5e7';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1162,7 +1162,7 @@ const VISIT_GUIDE = {
     do: ['Treatment status and adherence', 'Sputum conversion: Y, N or U. Never leave it blank'],
     enter: ['Visit form (V3), with the sputum smear date and result', 'Laboratory results when they return', 'Check the liver injury definition'] },
   V4: { name: 'Visit 4 · Month 3', when: 'Day 77 to 98', measure: [], examine: [], symptoms: [S_HEP],
-    order: [['HbA1c, blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', 'Enter the HbA1c with its unit']],
+    order: [['HbA1c, blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', 'Enter the HbA1c with its unit'], ['Sputum smear, only if the V3 smear was not negative', 'Repeat the smear at each visit until a negative smear is documented']],
     do: ['Treatment status and adherence', 'New diabetes found: refer for diabetes care and record it'],
     enter: ['Visit form (V4)', 'Laboratory results when they return'] },
   V5: { name: 'Visit 5 · Month 6', when: 'Day 154 to 182 · treatment completion', measure: M_ALL, examine: E_ALL, symptoms: [S_TB, S_HEP],
@@ -1189,6 +1189,7 @@ function guideDocs(v) {
     if (f[0] === 'LABS' && docs.length) out.push('Lab report pages: ' + docs.map((d) => LAB_PAGES[d.slice(4)].replace(/ \(.*\)$/, '')).join(', '));
     else docs.forEach((d) => out.push(PHOTO_DOC_NAMES[d] + (f[0] === 'SPIRO' ? ' (if done)' : '')));
   });
+  if (v === 'V4') out.push('Sputum smear report, only if the V3 smear was not negative');
   if (v === 'V5') out.push('Withdrawal Deletion Record, only for a participant who withdrew');
   return out;
 }
@@ -1585,7 +1586,8 @@ function visible(tab, c, v, vals) {
   if (isNurse() && !nurseCol_(tab, c.key)) return false;
   const visit = s_(vals.visit);
   if (tab === 'VISITS') {
-    if (/\(V3, V5\)$/.test(c.label) || c.key === 'smear_date' || c.key === 'smear_result') return visit === 'V3' || visit === 'V5';
+    if (c.key === 'smear_date' || c.key === 'smear_result') return smearDue_(visit, (find('VISITS', { study_id: s_(vals.study_id), visit: 'V3' }) || {}).smear_result);   // V4 too while the V3 smear is not negative
+    if (/\(V3, V5\)$/.test(c.label)) return visit === 'V3' || visit === 'V5';
     if (c.key === 'conversion') return visit === 'V3';
     if (c.key === 'dm_referred') return visit === 'V4';
     if (c.key === 'outcome') return visit === 'V5';
@@ -2109,16 +2111,16 @@ const LAB_PAGES = { CBC: 'Blood count (CBC)', LFT: 'Liver tests (LFT)', HBA1C: '
 const LAB_PAGES_FOR = { V1: ['CBC', 'LFT', 'HBA1C', 'LIPID', 'FPG', 'HEP', 'HIV'], V2: ['LFT'], V3: ['CBC', 'LFT'], V4: ['HBA1C', 'CBC', 'LFT'], V5: ['CBC', 'LFT'], U: ['LFT'] };
 Object.keys(LAB_PAGES).forEach((k) => { PHOTO_DOC_NAMES['LAB_' + k] = LAB_PAGES[k]; });
 function labDocs(visit) { const v = s_(visit).toUpperCase(); return (LAB_PAGES_FOR[/^U/.test(v) ? 'U' : v] || []).map((k) => 'LAB_' + k); }
-function smearVisit(visit) { return /^V[35]$/.test(s_(visit).toUpperCase()); }          // follow-up smears are taken at V3 and V5
-function docsFor(tab, visit) {                                // the documents a form offers to photograph
+function smearVisit(visit, sid) { const v = s_(visit).toUpperCase(); return smearDue_(v, sid ? (find('VISITS', { study_id: sid, visit: 'V3' }) || {}).smear_result : 'N'); }   // V3 and V5; V4 while the V3 smear is not negative
+function docsFor(tab, visit, sid) {                           // the documents a form offers to photograph
   if (tab === 'LABS') return labDocs(visit);
-  if (tab === 'VISITS') return smearVisit(visit) ? ['SMEAR'] : [];
+  if (tab === 'VISITS') return smearVisit(visit, sid) ? ['SMEAR'] : [];
   return PHOTO_DOCS_FOR[tab] || [];
 }
-function requiredDocs(tab, visit) {                           // the documents a form must have before it shows as complete (the Core File stays optional)
+function requiredDocs(tab, visit, sid) {                           // the documents a form must have before it shows as complete (the Core File stays optional)
   if (tab === 'S1_ENROL') return ['CONSENT', 'SMEAR'];         // consent and the diagnostic smear report (or NTP card)
   if (tab === 'END_STUDY') return ['WITHDRAW'];
-  return docsFor(tab, visit);
+  return docsFor(tab, visit, sid);
 }
 // Where each document stands for one participant and visit: on the server (from the cached list or this phone's sent log), waiting on this phone, or missing.
 function docState(sid, doc, visit) {
@@ -2216,7 +2218,7 @@ async function photoTake(file, F, doc) {
   finish();
 }
 function photoCard(F) {
-  const docs = docsFor(F.tab, F.vals.visit);
+  const docs = docsFor(F.tab, F.vals.visit, s_(F.vals.study_id).toUpperCase());
   if (!docs.length || !photosOn() || !photoTaker() || F.ro) return null;
   const box = el('div', { class: 'card photocard', id: 'photocard' });
   T.photoF = F;
@@ -2234,7 +2236,7 @@ function paintPhotoCard(target) {
     inp.addEventListener('change', () => { const f = inp.files && inp.files[0]; inp.value = ''; if (f) photoTake(f, F, doc); });
     return inp;
   };
-  const v = /^(V|U)\d$/.test(visit) ? visit : '', docs = docsFor(F.tab, F.vals.visit), states = docs.map((d) => docState(sid, d, v));
+  const v = /^(V|U)\d$/.test(visit) ? visit : '', docs = docsFor(F.tab, F.vals.visit, sid), states = docs.map((d) => docState(sid, d, v));
   const done = states.filter((x) => x !== 'missing').length;
   const mark = (st) => el('span', { class: 'dmark ' + st, 'aria-label': st === 'sent' ? 'sent' : st === 'waiting' ? 'waiting to send' : 'not attached yet' }, st === 'missing' ? '' : '✓');
   box.replaceChildren(el('b', null, 'Source documents'),
@@ -2283,7 +2285,7 @@ function photoNeeds(sid) {                                 // every required doc
     if (visitOpens(sid, v)) return;
     VISIT_FORMS[v].forEach((f) => {
       if (f[0] === 'END_STUDY' || (f[0] === 'SPIRO' && !find('SPIRO', { study_id: sid }) && !spiroOk(sid))) return;
-      requiredDocs(f[0], f[1]).forEach((d) => need.push([d, f[1] || '', /^LAB_/.test(d) ? 'lab ' + f[1] + ' ' + lab(d) : d === 'SMEAR' ? 'smear ' + f[1] : lab(d) + (f[1] ? ' ' + f[1] : '')]));
+      requiredDocs(f[0], f[1], sid).forEach((d) => need.push([d, f[1] || '', /^LAB_/.test(d) ? 'lab ' + f[1] + ' ' + lab(d) : d === 'SMEAR' ? 'smear ' + f[1] : lab(d) + (f[1] ? ' ' + f[1] : '')]));
     });
   });
   if (view('END_STUDY').some((r) => r.study_id === sid && r.status === 'W')) need.push(['WITHDRAW', '', 'withdrawal record']);
@@ -2315,7 +2317,7 @@ function photoFetch(sid, after) {
 const DOC_FOR = { S1_ENROL: 'CONSENT', S2_BASELINE: 'EXAM', LABS: 'LAB', S3_CXR: 'CXR', SPIRO: 'SPIRO', END_STUDY: 'WITHDRAW' };
 function docPill(sid, tab, visit, row) {
   const c = T.phc && T.phc[sid];
-  const docs = requiredDocs(tab, visit);
+  const docs = requiredDocs(tab, visit, sid);
   if (!docs.length || !c || !photosOn() || !photoTaker()) return null;          // shown for every open form, entered or not
   if (tab === 'END_STUDY' && !(row && row.status === 'W')) return null;
   const have = docs.filter((d) => docState(sid, d, visit || '') !== 'missing').length;

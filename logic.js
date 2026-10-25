@@ -240,8 +240,8 @@ const SCHEMA = [
     col('waist_cm', 'Waist in cm (V3, V5)', 'num', { min: 40, max: 200 }),
     col('muac_mm', 'Mid-upper arm circumference in mm (V3, V5)', 'int', { min: 100, max: 500 })]
     .concat(signs_(' (V3, V5)')).concat(tbSymptoms_(' (V3, V5)')).concat([
-    col('smear_date', 'Sputum smear date (V3, V5)', 'date'),
-    col('smear_result', 'Sputum smear result (V3, V5)', 'list', { codes: SMEAR.concat([['X', 'not done']]) }),
+    col('smear_date', 'Sputum smear date (V3 and V5; also V4 while the V3 smear is not negative)', 'date'),
+    col('smear_result', 'Sputum smear result (V3 and V5; also V4 while the V3 smear is not negative)', 'list', { codes: SMEAR.concat([['X', 'not done']]) }),
     col('conversion', 'Sputum conversion at V3: never leave blank at V3', 'list', { codes: [['Y', 'converted'], ['N', 'still positive'], ['U', 'cannot assess']] }),
     col('dm_referred', 'Referred for diabetes care (V4)', 'list', { codes: [['Y', 'yes'], ['N', 'no'], ['NA', 'not applicable']] }),
     col('outcome', 'Treatment outcome (V5)', 'list', { codes: [['C', 'cured'], ['T', 'treatment completed'], ['F', 'failed'], ['D', 'died'], ['L', 'lost to follow-up'], ['X', 'transferred out'], ['E', 'not evaluated']] }),
@@ -451,6 +451,8 @@ function vai_(sex, waist, w, h, tg, hdl, unit) {
   const v = sx === 'M' ? (wc / (39.68 + 1.88 * bmi)) * (tgm / 1.03) * (1.31 / hdm) : (wc / (36.58 + 1.89 * bmi)) * (tgm / 0.81) * (1.52 / hdm);
   return round_(v, 2);
 }
+// Follow-up smears are taken at V3 and V5; while the V3 smear is not negative, it is repeated at V4 too (PI's rule: repeat until a negative smear is documented).
+function smearDue_(v, v3result) { return v === 'V3' || v === 'V5' || (v === 'V4' && code_(v3result) !== 'N'); }
 function bmi_(w, h) { const kg = num_(w), cm = num_(h); if (kg === null || cm === null || cm <= 0) return ''; return round_(kg / Math.pow(cm / 100, 2), 1); }
 function ratio_(a, b) { const x = num_(a), y = num_(b); return x === null || y === null || y <= 0 ? '' : round_(x / y, 2); }
 function timika_(pct, cavity) { const p = num_(pct), c = code_(cavity); if (p === null || (c !== 'Y' && c !== 'N')) return ''; return p + (c === 'Y' ? 40 : 0); }
@@ -573,7 +575,7 @@ const QUERY_FIELD = [
   [/HIV reactive/, 'hiv'], [/Hepatitis B or C/, 'hbsag'], [/Raised liver tests|ALT or AST above 3/, 'alt'], [/examination outside/, 'exam_date'], [/^BMI outside|Weight changed|Weight missing/, 'weight_kg'],
   [/Waist changed/, 'waist_cm'], [/MUAC changed/, 'muac_mm'], [/Attendance not recorded|not attended/, 'attended'],
   [/Visit date missing|Visit outside its window|dated before the previous|Visit date before ATT|No laboratory row for this visit|visit not recorded/, 'visit_date'],
-  [/Hepatotoxicity symptom enquiry|Liver symptoms recorded/, 'hep_nausea'], [/conversion|Conversion/, 'conversion'], [/Smear result without/, 'smear_date'], [/Smear date without/, 'smear_result'],
+  [/Hepatotoxicity symptom enquiry|Liver symptoms recorded/, 'hep_nausea'], [/repeat the smear at V4/, 'smear_result'], [/conversion|Conversion/, 'conversion'], [/Smear result without/, 'smear_date'], [/Smear date without/, 'smear_result'],
   [/V5 smear positive|Outcome cured|Outcome failed|Treatment completed, but|Treatment outcome|outcome died|still ongoing/, 'outcome'],
   [/laboratory status|Laboratory status/, 'lab_status'], [/Symptom status missing/, 'symptomatic'], [/Sample outside/, 'sample_date'],
   [/Neutrophil and lymphocyte percentages|Neutrophil percentage/, 'neut_pct'], [/Lymphocyte percentage/, 'lymph_pct'], [/Absolute counts exceed/, 'tlc'], [/Absolute neutrophil/, 'neut_abs'],
@@ -901,7 +903,9 @@ function computeDerived_(data, today, held) {
         if (m0 !== null && m1 !== null && Math.abs(m1 - m0) > 50) vt('MUAC changed by more than 50 mm since the last measurement', m0 + ' to ' + m1 + ' mm: check the value');
       }
       if (has(r.weight_kg)) prev = { weight_kg: r.weight_kg, waist_cm: r.waist_cm, muac_mm: r.muac_mm };
-      if ((v === 'V3' || v === 'V5') && has(r.smear_result) && r.smear_result !== 'X' && !has(r.smear_date)) vt('Smear result without a smear date', '');
+      const v3s = (visits[sid + '|V3'] || {}).smear_result;
+      if (smearDue_(v, v3s) && has(r.smear_result) && r.smear_result !== 'X' && !has(r.smear_date)) vt('Smear result without a smear date', '');
+      if (v === 'V4' && smearDue_(v, v3s) && !has(r.smear_result)) vt('V3 smear not negative: repeat the smear at V4', 'repeat the smear at each visit until a negative smear is documented');
       if (has(r.smear_date) && !has(r.smear_result)) vt('Smear date without a result', '');
       // liver symptoms need liver tests the same day (manual 4.3); the next day is accepted
       if (hepAny_(r) === true) {
@@ -1046,6 +1050,7 @@ function computeDerived_(data, today, held) {
       if (v === 'V3' || v === 'V5') kv = kv.concat(['waist_cm', 'muac_mm', 'temp_c', 'pulse_min', 'pallor', 'auscultation', 'tb_cough', 'tb_haemoptysis', 'tb_dyspnoea', 'tb_chest_pain', 'tb_night_sweats', 'smear_result']);
       if ((v === 'V3' || v === 'V5') && r.smear_result !== 'X') kv.push('smear_date');
       if (v === 'V4') kv.push('dm_referred');
+      if (v === 'V4' && smearDue_(v, (visits[sid + '|V3'] || {}).smear_result) && !already(sid, 'VISITS', v, /repeat the smear at V4/)) { kv.push('smear_result'); if (r.smear_result !== 'X') kv.push('smear_date'); }
       const mv = blanks(r, kv).filter(function (k) { return !(k === 'smear_date' && already(sid, 'VISITS', v, /Smear result without/)); });
       if (mv.length) R('VISITS', r._row, v, 'visit fields blank', mv.join(', '));
     });
