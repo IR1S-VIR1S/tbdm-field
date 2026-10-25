@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '1e9262a7f8a3';                 // replaced by build.js with the build's hash
+const BUILD_ID = '46a419a93266';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -584,6 +584,7 @@ const ICONS = {
   logs: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/>',
   list: '<rect x="4.5" y="3.5" width="15" height="17" rx="2"/><path d="m8 9 1.6 1.6L12.5 7.5M8 15.5h8M14 10h2.5"/>',
   phone: '<path d="M6.5 3.5h3l1.5 4-2 1.3a11 11 0 0 0 6.2 6.2l1.3-2 4 1.5v3a2 2 0 0 1-2 2A15.5 15.5 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5M12 14.5v2.5"/>',
   sync: '<path d="M20 11a8 8 0 0 0-14.3-4.6L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.3 4.6l1.7-2.1M20 20v-4.5h-4.5"/>',
   export: '<path d="M12 14.5v-11M7.5 8 12 3.5 16.5 8M4.5 16.5v2a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2"/>',
@@ -594,7 +595,7 @@ const ICONS = {
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
 };
 function icon(k) { const s = el('span', { class: 'ico', 'aria-hidden': 'true' }); s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICONS[k] + '</svg>'; return s; }
-const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['queries', 'Queries', 'query'], ['visits', 'Checklist', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'lock'], ['settings', 'Settings', 'settings']];
+const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['queries', 'Queries', 'query'], ['visits', 'Checklist', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'link'], ['settings', 'Settings', 'settings']];
 function tabTo(name) { confirmLeave(() => { resetNav(); if (name === 'register' && T.reg) T.reg.list = null; if (name !== 'home') go(name); else { T.form = null; render(); window.scrollTo(0, 0); } }); }
 // The bar can be rearranged: hold a tab for a moment, then slide it left or right. The order is kept on this phone (not sensitive, not sent anywhere).
 const NAVKEY = 'tbdm-nav';
