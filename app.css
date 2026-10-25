@@ -232,3 +232,5 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
 .list.duec .row .main { text-align: left; background: none; border: 0; color: inherit; padding: 0; min-width: 0; flex: 1; }
 .row button.tel { font-size: 15px; color: var(--brand-ink); font-weight: 700; padding: 10px 10px; border: 0; border-radius: 10px; background: var(--brand-soft); white-space: nowrap; }
 .duec .notel { white-space: nowrap; font-size: 13px; }
+.winline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 3px; }
+.modal .card, #modal .card { margin: 0 0 8px; }

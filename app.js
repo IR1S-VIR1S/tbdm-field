@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '6df6f31f82fd';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'be2264db0a69';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -674,7 +674,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
       canData() ? enrolTile() : null),
     el('h2', null, 'Needs attention'),
     feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
-      due.map((r) => ({ main: dueLabel(r), sub: 'window ' + r[3] + ' to ' + r[4], chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due'),
+      due.map((r) => ({ main: dueLabel(r), sub: winTxt(r), chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due'),
     feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
       qkeys.map((g) => ({ main: g, sub: group[g][0][4] + (group[g].length > 1 ? ' and ' + (group[g].length - 1) + ' more' : ''), chip: String(group[g].length), chipCls: 'bad', go: () => openQuery(group[g][0]) })), () => go('queries'), 'No queries'),
     w.length ? feedCard('wait', 'Waiting to enrol', w.length, w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => findPatient(id) })), () => go('form', { tab: 'S1_ENROL', key: {} }), '') : null,
@@ -1095,6 +1095,8 @@ const E_ALL = ['Temperature (axillary)', 'Pulse, counted for a full minute', 'Co
 const S_TB = 'TBscore symptoms: cough, haemoptysis, breathlessness, chest pain, night sweats';
 const S_HEP = 'Liver symptoms: nausea, vomiting, loss of appetite, abdominal pain, dark urine, yellow eyes or skin, unexplained tiredness';
 // "TBDM-001 | Visit 1 | Baseline": the study number and the visit as the checklist names it
+function dmy(d) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s_(d)); return m ? m[3] + '-' + m[2] + '-' + m[1].slice(2) : s_(d); }   // 2026-10-25 -> 25-10-26
+function winTxt(r) { return 'window ' + dmy(r[3]) + ' to ' + dmy(r[4]); }
 function dueLabel(r) { const g = VISIT_GUIDE[r[1]]; return r[0] + ' | ' + (g ? g.name.replace(' · ', ' | ') : r[1]); }
 const VISIT_GUIDE = {
   V1: { name: 'Visit 1 · Baseline', when: 'Day 0 to 7 after ATT started', measure: M_V1, examine: E_ALL, symptoms: [S_TB, 'How many weeks the symptoms have lasted', S_HEP],
@@ -1202,7 +1204,7 @@ function participant(p) {
     return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, NAMES[tab])), statusChip(find(tab, key)), el('span', { class: 'chev' }));
   };
   const visits = ['V1', 'V2', 'V3', 'V4', 'V5'].map((v) => {
-    const w = CFG.WINDOWS[v], range = d0 !== null ? isoOf_(d0 + w[1]) + ' to ' + isoOf_(d0 + w[2]) : 'set the date ATT started';
+    const w = CFG.WINDOWS[v], range = d0 !== null ? dmy(isoOf_(d0 + w[1])) + ' to ' + dmy(isoOf_(d0 + w[2])) : 'set the date ATT started';
     const st = sched[v];
     return [el('h2', null, v + ' · ' + (v === 'V1' ? 'baseline' : 'month ' + ({ V2: 1, V3: 2, V4: 3, V5: 6 })[v]) + ' ', st ? el('span', { class: 'chip ' + (st === 'overdue' ? 'bad' : st === 'due now' ? 'warn' : '') }, st) : null),
       el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)), (curV = v, VISIT_FORMS[v].map((f) => formRow(f[0], f[1]))))];
@@ -1252,9 +1254,10 @@ function regMatch(rows, qq) {                              // search by study nu
 // Tap a telephone number: choose Call or WhatsApp.
 function contactAct(sid, c) {
   const ph = s_(c.phone), done = () => setTimeout(() => { const m = $('#modal'); m.hidden = true; m.replaceChildren(); }, 400);
-  modal(sid + (c.name ? ' · ' + c.name : ''), el('div', null, el('p', { style: 'font-size:20px;font-weight:700' }, ph),
-    el('a', { class: 'btn primary block', id: 'act-call', href: 'tel:' + ph.replace(/[^\d+]/g, ''), onclick: done }, 'Call'), el('p'),
-    el('a', { class: 'btn block', id: 'act-wa', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer', onclick: done }, 'WhatsApp')), [['Cancel', null]]);
+  modal(sid + (c.name ? ' · ' + c.name : ''), el('div', { class: 'card' }, el('div', { class: 'muted small' }, 'Telephone'), el('div', { class: 'tel big' }, ph),
+    el('div', { class: 'row2' },
+      el('a', { class: 'btn block', id: 'act-call', href: 'tel:' + ph.replace(/[^\d+]/g, ''), onclick: done }, 'Call'),
+      el('a', { class: 'btn block', id: 'act-wa', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer', onclick: done }, 'WhatsApp'))), [['Cancel', null]]);
 }
 function linkPick() {
   if (role() !== 'pi' || T.practice) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is for the PI only, and is not available in practice mode.'))]);
@@ -1270,7 +1273,8 @@ function linkPick() {
     dueBox.replaceChildren(el('h2', null, 'Due and overdue'), el('div', { class: 'list duec' }, rows.map((r) => {
       const c = byId[s_(r[0]).toUpperCase()] || {}, ph = s_(c.phone);
       return el('div', { class: 'row' },
-        el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r[0] }) }, el('div', null, dueLabel(r)), el('div', { class: 'sub' }, [c.name, 'window ' + r[3] + ' to ' + r[4], r[5]].filter(Boolean).join(' · '))),
+        el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r[0] }) }, el('div', null, dueLabel(r)), c.name ? el('div', { class: 'sub' }, c.name) : null,
+          el('div', { class: 'sub winline' }, winTxt(r), ' ', el('span', { class: 'chip ' + (r[5] === 'overdue' ? 'bad' : r[5] === 'due now' ? 'warn' : '') }, r[5]))),
         ph ? el('button', { class: 'tel', type: 'button', onclick: () => contactAct(r[0], c) }, ph) : el('span', { class: 'sub notel' }, L ? 'no number yet' : 'not loaded'));
     })));
   };
@@ -1307,7 +1311,7 @@ function due() {
   const out = derived();
   const rows = out.schedule.filter((r) => r[5] !== 'upcoming').concat(out.schedule.filter((r) => r[5] === 'upcoming'));
   return topBar('Due and overdue').concat([el('main', null, el('div', { class: 'list' }, rows.length ? rows.map((r) => el('button', { class: 'row', onclick: () => go('participant', { sid: r[0] }) },
-    el('div', { class: 'main' }, el('div', null, dueLabel(r)), el('div', { class: 'sub' }, 'window ' + r[3] + ' to ' + r[4])),
+    el('div', { class: 'main' }, el('div', null, dueLabel(r)), el('div', { class: 'sub' }, winTxt(r))),
     el('span', { class: 'chip ' + (r[5] === 'overdue' ? 'bad' : r[5] === 'due now' ? 'warn' : '') }, r[5]), el('span', { class: 'chev' }))) : el('div', { class: 'empty' }, 'Nothing due')))]);
 }
 // ---- query navigation: open the exact form, scroll to the field and flash it, with the query shown on top
