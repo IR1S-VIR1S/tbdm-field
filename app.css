@@ -340,3 +340,22 @@ div.ctile { cursor: pointer; }
 
 /* recent activity: the line about what is sent */
 .fsent { margin-top: 8px; }
+
+/* Role manager grid: task names on the left, one tick per role; fixed columns are greyed */
+.card.ok { border-color: var(--ok); background: var(--ok-soft); }
+.accwrap { overflow-x: auto; margin-bottom: 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); }
+.accgrid { border-collapse: collapse; width: 100%; font-size: 13px; }
+.accgrid th, .accgrid td { border-top: 1px solid var(--line); padding: 6px 2px; text-align: center; vertical-align: middle; }
+.accgrid thead th { border-top: 0; font-size: 11.5px; color: var(--muted); font-weight: 700; padding: 8px 2px; }
+.accgrid th.task { text-align: left; font-weight: 600; padding: 8px 8px 8px 10px; min-width: 128px; color: var(--ink); }
+.accgrid thead th.task { color: var(--muted); }
+.accgrid th.task small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; margin-top: 1px; }
+.accgrid tr.conf th.task { color: var(--conf, #4b3a8c); }
+.accgrid td.acc { width: 38px; }
+.tick { display: inline-block; width: 26px; height: 26px; border-radius: 7px; border: 2px solid var(--line); background: var(--card); position: relative; padding: 0; vertical-align: middle; }
+button.tick { cursor: pointer; }
+.tick.on { background: var(--brand); border-color: var(--brand); }
+.tick.on::after { content: ''; position: absolute; left: 7px; top: 2px; width: 7px; height: 13px; border: solid #fff; border-width: 0 3px 3px 0; transform: rotate(45deg); }
+td.fixed .tick { opacity: .45; }
+.accgrid tr.fixedrow th.task { color: var(--muted); }
+button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }

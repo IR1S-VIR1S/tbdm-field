@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '41d271c1094e';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'c5157c27e2ec';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -281,7 +281,7 @@ async function sync() {
     if (S.server && S.server.photos && (S.photoOut || []).length) await pushPhotos(still);
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, at: Date.now() };
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, at: Date.now() };
     if (pull.photos && (S.photoOut || []).length) await pushPhotos(still);          // photos taken before the feature reached this phone
     if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
     T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email;
@@ -304,7 +304,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) { T.idle = setTimeout(lock, IDLE_LOCK_MS); sessTouch(); } }
-function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
+function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.roles = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -362,7 +362,7 @@ function render() {
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
   const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
-    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen, photos: photosScreen };
+    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen, photos: photosScreen, roles: rolesScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
   const hasNav = !!(S && S.server) && navIds().concat(c.name === 'tools' ? ['tools'] : []).indexOf(c.name) >= 0;
@@ -491,9 +491,15 @@ function lockScreen() {
 
 // ------------------------------------------------------------------ home and lists
 function role() { return S.cfg.role || 'data'; }
-const confRole = () => role() === 'pi' || role() === 'dots';
-const canData = () => role() === 'data' || role() === 'pi' || role() === 'nurse';
-const isNurse = () => role() === 'nurse';
+// What this phone's role may do: the ticks the PI set in the Role manager, sent with every pull (the workbook enforces them).
+// An older workbook sends none: then the defaults apply, which match the access every role had before the Role manager.
+function acc() { const src = (T.real && T.real.server) || (S && S.server); return src && src.access ? src.access : accessFor_(role(), null); }
+const can = (k) => !!acc()[k];
+const isReader = () => role() === 'reader1' || role() === 'reader2';
+const limited = () => !isReader() && role() !== 'pi' && !can('view');        // holds only the tabs and columns its ticks need
+const confRole = () => can('numbers') || can('ident');
+const canData = () => can('screen');
+const isNurse = () => limited() && can('measure');                // the measurement view: Measure tab and the short participant page
 // The next study number, from this phone's enrolments and screening lines (including ones not yet sent).
 // Enrolment first offers a number already given on a screening line (enrolled = Y) that has no enrolment record yet.
 function nextId(tab) {
@@ -524,7 +530,7 @@ function ownFree() {
   return out.sort((a, b) => a - b);
 }
 async function topUpNumbers(mine, still) {              // called by sync() once the pull has succeeded; a failure here never fails the sync
-  if (T.practice || !(canData() || role() === 'dots')) return;
+  if (T.practice || !(canData() || can('numbers'))) return;
   const N = S.nums || (S.nums = { dev: '', blocks: [], got: false, old: false, pend: '', err: '' });
   if (!N.dev) N.dev = rid();
   if (N.got && !N.old && ownFree().length > CFG.BLOCK_LOW) return;
@@ -565,7 +571,7 @@ function findPatient(raw) {
   if (!idOk_(sid)) { toast('Not a study number. Type it as on the card, for example ' + idOf_(7)); return; }
   recordRecent(sid);
   const e = find('S1_ENROL', { study_id: sid }), sc = view('S0_SCREEN').filter((r) => code_(r.study_id) === sid)[0];
-  if (e) { go(isNurse() ? 'measurefor' : 'participant', { sid }); return; }
+  if (e) { if (can('view')) go('participant', { sid }); else if (can('measure')) go('measurefor', { sid }); else toast(sid + ' is enrolled.'); return; }
   if (sc && sc.eligible === 'Y' && sc.enrolled === 'Y') {
     modal(sid + ' is screened and waiting', [el('p', null, 'Eligible and agreed, not enrolled yet.')],
       [['Close', null], ['Enrol', () => go('form', { tab: 'S1_ENROL', key: {}, preset: { study_id: sid, age_years: sc.age, sex: sc.sex }, carried: ['age_years', 'sex'] }), 'primary']]);
@@ -617,18 +623,22 @@ const ICONS = {
   face: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.2 15.6a4 4 0 0 0 5.6 0"/>',
   practice: '<path d="M2.5 9 12 4.5 21.5 9 12 13.5z"/><path d="M6.5 11v4.5c0 1.5 2.5 3 5.5 3s5.5-1.5 5.5-3V11M21.5 9v5"/>',
   check: '<path d="M9 3.5h6l1 2h2.5a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1H8z"/><path d="m8.5 13 2.4 2.4 4.6-4.8"/>',
+  roles: '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 3.5v17"/><path d="m12.2 12 1.3 1.3 2.6-2.6"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
 };
 const ICON_DETAIL = { due: [1], query: [1], list: [1], ruler: [1] };   // inner strokes that must stay visible when the bar icon is filled
 function icon(k) { const s = el('span', { class: 'ico', 'aria-hidden': 'true' }); s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICONS[k] + '</svg>'; { (ICON_DETAIL[k] || []).forEach((i) => { const c = s.querySelector('svg').children[i]; if (c) c.setAttribute('class', 'd'); }); } return s; }
 // Every role gets the bar; the roles differ only in which tabs appear.
 function navIds() {
-  const r = role();
-  if (r === 'pi') return ['home', 'participants', 'due', 'queries', 'visits', 'linkpick', 'register', 'settings'];
-  if (r === 'dots') return ['home', 'register', 'settings'];
-  if (r === 'reader1' || r === 'reader2') return ['home', 'films', 'settings'];
-  if (isNurse()) return ['home', 'measure', 'settings'];
-  return ['home', 'participants', 'due', 'queries', 'visits', 'settings'];
+  if (isReader()) return ['home', 'films', 'settings'];
+  const ids = ['home'];
+  if (can('view')) ids.push('participants'); else if (can('measure')) ids.push('measure');
+  if (can('due')) ids.push('due');
+  if (can('queries')) ids.push('queries');
+  if (can('checklist')) ids.push('visits');
+  if (can('contacts')) ids.push('linkpick');
+  if (can('numbers') || can('ident')) ids.push('register');
+  return ids.concat(['settings']);
 }
 const NAV_TABS = [['home', 'Home', 'home'], ['measure', 'Measure', 'ruler'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['queries', 'Queries', 'query'], ['visits', 'Checklist', 'list'], ['films', 'Films', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'link'], ['settings', 'Settings', 'settings']];
 function tabTo(name) { confirmLeave(() => { resetNav(); if (name === 'register' && T.reg) T.reg.list = null; if (name !== 'home') go(name); else { T.form = null; render(); window.scrollTo(0, 0); } }); }
@@ -735,7 +745,7 @@ function measuresDue() {
   return out;
 }
 function piHome(out, bad, waiting, oldest, dueN) {
-  const nurse = isNurse(), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], idp = role() === 'pi' && !T.practice && navigator.onLine ? identifiersPending(T.reg && T.reg.list) : [];
+  const nurse = isNurse(), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], idp = confRole() && !T.practice ? identifiersPending((T.reg && T.reg.list) || confAsList()) : [];
   const group = {}; out.queries.forEach((q) => { const g = q[0] || 'Screening log'; (group[g] = group[g] || []).push(q); });
   const qkeys = Object.keys(group).sort(), md = nurse ? measuresDue() : [];
   const main = el('main', { class: 'pihome' },
@@ -744,26 +754,36 @@ function piHome(out, bad, waiting, oldest, dueN) {
       findBox(true),
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, screenedToday())) : null,
       canData() ? enrolTile() : null),
+    can('numbers') && !canData() ? el('div', { class: 'homerow solo' }, assignTile()) : null,
     nurse ? feedCard('due ' + (md.length ? 'hot' : 'calm'), 'Measurements to take', md.length,
       md.map((m) => ({ main: m.sid, sub: m.need.join(', '), chip: String(m.need.length), chipCls: 'warn', go: () => go('measurefor', { sid: m.sid }) })), () => go('measure'), 'Nothing to measure') : null,
-    nurse ? null : feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
+    !can('due') ? null : feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
       due.map((r) => ({ main: dueLabel(r), sub: winTxt(r), chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due'),
-    nurse ? null : feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
+    !can('queries') ? null : feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
       qkeys.map((g) => ({ main: g, sub: group[g][0][4] + (group[g].length > 1 ? ' and ' + (group[g].length - 1) + ' more' : ''), chip: String(group[g].length), chipCls: 'bad', go: () => openQuery(group[g][0]) })), () => go('queries'), 'No queries'),
     w.length ? feedCard('wait', 'Waiting to enrol', w.length, w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => findPatient(id) })), () => go('form', { tab: 'S1_ENROL', key: {} }), '') : null,
+    confQueue(),
     idp.length ? feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: 'Name, record number and telephone not recorded', go: () => { if (T.reg) T.reg.list = null; go('register'); } })), () => { if (T.reg) T.reg.list = null; go('register'); }, '') : null,
     recentBlock(waiting.length ? waiting.length + ' waiting to send' : 'All entries sent'));
   return topBar('TBDM Field').concat([main]);
 }
-// DOTS incharge: the register is the work, so the home lists enrolled numbers still without identifiers and what waits to be sent.
+function toRegister() { if (T.reg) T.reg.list = null; go('register'); }
+function assignTile() {
+  const spare = ownFree().length;
+  return el('button', { class: 'tile primary', onclick: toRegister }, el('b', null, 'Assign a study number'), el('span', null, spare ? spare + ' spare number' + (spare === 1 ? '' : 's') + ' on this phone' : 'Online: next number from the register'));
+}
+function confQueue() {
+  const q = confRole() ? S.confOut || [] : [];
+  return q.length ? feedCard('due hot', 'Waiting to send', q.length, q.map((c) => ({ main: s_(c.body.study_id) || 'New number', sub: c.err ? 'Not accepted: ' + c.err : 'Saved on this phone, sent at the next sync', chip: c.err ? 'fix' : 'unsent', chipCls: c.err ? 'bad' : 'warn', go: toRegister })), toRegister, '') : null;
+}
+// A role with no study data on this phone (by default the DOTS incharge): the home lists the register work, if it has any.
 function dotsHome() {
-  const L = T.reg && T.reg.list && !T.reg.list.cached && linkUp() ? T.reg.list : confAsList(), idp = identifiersPending(L), q = S.confOut || [], spare = ownFree().length;
-  const toReg = () => { if (T.reg) T.reg.list = null; go('register'); };
+  if (!confRole()) return topBar('TBDM Field').concat([el('main', { class: 'pihome' }, el('div', { class: 'card' }, el('b', null, 'Nothing to do on this phone yet.'), el('div', { class: 'small' }, 'Your role has no tasks switched on. The PI sets them in the Role manager.')))]);
+  const L = T.reg && T.reg.list && !T.reg.list.cached && linkUp() ? T.reg.list : confAsList(), idp = identifiersPending(L), q = S.confOut || [];
   const main = el('main', { class: 'pihome' },
-    el('div', { class: 'homerow solo' },
-      el('button', { class: 'tile primary', onclick: toReg }, el('b', null, 'Assign a study number'), el('span', null, spare ? spare + ' spare number' + (spare === 1 ? '' : 's') + ' on this phone' : 'Online: next number from the register'))),
-    feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id, sub: 'Name, record number and telephone not recorded', go: toReg })), toReg, L ? 'All enrolled numbers have identifiers' : 'Open the Link register once while online'),
-    q.length ? feedCard('due hot', 'Waiting to send', q.length, q.map((c) => ({ main: s_(c.body.study_id) || 'New number', sub: c.err ? 'Not accepted: ' + c.err : 'Saved on this phone, sent at the next sync', chip: c.err ? 'fix' : 'unsent', chipCls: c.err ? 'bad' : 'warn', go: toReg })), toReg, '') : null,
+    can('numbers') ? el('div', { class: 'homerow solo' }, assignTile()) : null,
+    feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id, sub: 'Name, record number and telephone not recorded', go: toRegister })), toRegister, L ? 'All enrolled numbers have identifiers' : 'Open the Link register once while online'),
+    confQueue(),
     el('h2', null, 'Recent activity'),
     el('div', { class: 'card feedcard' }, el('div', { class: 'small muted' }, L && L.at ? 'Register copy saved ' + new Date(L.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : L ? 'Register up to date' : 'No copy of the register on this phone yet'),
       el('div', { class: 'small muted fsent' }, q.length ? q.length + ' waiting to send' : 'All entries sent')));
@@ -797,12 +817,72 @@ function tools() {
     T.practice ? null : [el('h2', null, 'Training'), el('div', { class: 'list' }, toolRow('Practice', 'Learn with made-up patients', () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']])))])]);
 }
 function home() {
-  if (role() === 'dots') return dotsHome();
+  if (!isReader() && !can('view') && !can('screen') && !can('measure')) return dotsHome();      // a role with no study data on this phone (the register only, or nothing)
   if (!S.server) return topBar('TBDM Field').concat([el('main', null, el('div', { class: 'card' }, navigator.onLine ? 'Fetching the study data…' : 'Connect to the internet once to fetch the study data.'))]);
-  const out = isNurse() || /^reader/.test(role()) ? { schedule: [], queries: [] } : derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
+  const out = !can('view') ? { schedule: [], queries: [] } : derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
   const oldest = waiting.reduce((m, c) => Math.min(m, c.at), Infinity);
   if (role() === 'reader1' || role() === 'reader2') return readerHome(bad, waiting, oldest);
   return piHome(out, bad, waiting, oldest, out.schedule.filter((r) => r[5] !== 'upcoming').length);
+}
+// ---- Role manager (PI only): one tick per task and role. The PI and reader columns are fixed (full access; blinded film scoring).
+// A tick that needs the full clinical data switches 'view' on with it, and switching 'view' off clears those ticks. Saved to the
+// workbook, which enforces it; each phone gets the change at its next sync.
+function rolesDraft() {
+  if (!T.roles) { const st = (S.server && S.server.accessStored) || {}, d = {}; ACCESS_ROLES.forEach((r) => { d[r] = accessFor_(r, st); }); T.roles = { d, dirty: false, busy: false, msg: '' }; }
+  return T.roles;
+}
+function rolesToggle(r, k) {
+  const R = rolesDraft(), row = R.d[r], on = !row[k], key = ACCESS_KEYS.filter((x) => x.key === k)[0];
+  const apply = () => {
+    row[k] = on;
+    if (on && key.need) row[key.need] = true;                                                          // a tick that needs 'view' (or 'ident') brings it
+    if (!on) ACCESS_KEYS.forEach((x) => { if (x.need === k) row[x.key] = false; });                   // and switching that off clears what depends on it
+    R.dirty = true; R.msg = ''; render();
+  };
+  if (on && key.confidential && r !== 'dots') {
+    modal('Give ' + ACCESS_ROLE_NAMES[r] + ' access to identifiers?', [el('p', null, 'Names, record numbers and telephone numbers are covered by your ethics approval. They reach a phone only while the confidential register switch is on, and every download is written to the audit log.')], [['Cancel', null], ['Give access', apply, 'primary']]);
+    return;
+  }
+  apply();
+}
+async function rolesSave() {
+  const R = rolesDraft();
+  if (R.busy) return;
+  if (!navigator.onLine) { R.msg = 'Connect to the internet to save. Your ticks are kept until you leave this page.'; render(); return; }
+  R.busy = true; R.msg = ''; render();
+  try {
+    const res = await api({ op: 'access_set', token: S.cfg.token, access: R.d });
+    if (!res.ok) throw new Error(res.error || 'not saved');
+    S.server.accessStored = res.accessStored; await saveState();
+    ACCESS_ROLES.forEach((r) => { R.d[r] = accessFor_(r, res.accessStored); });
+    R.dirty = false; R.msg = res.changed ? 'Saved. Each phone gets the change at its next sync.' : 'Saved. Nothing had changed.';
+  } catch (e) { R.msg = 'Not saved. ' + (e.message || e); }
+  R.busy = false; render();
+}
+function rolesScreen() {
+  if (role() !== 'pi' || T.practice) return topBar('Role manager').concat([el('main', null, el('div', { class: 'card' }, 'The Role manager is for the PI only.'))]);
+  if (!S.server || !S.server.accessStored) return topBar('Role manager').concat([el('main', null, el('div', { class: 'card warn' }, el('b', null, 'Update the workbook script first.'), el('div', { class: 'small' }, 'The workbook is still on a version without role access. Run PI: update script from GitHub in the workbook, then sync this phone. Until then every role keeps its usual access.')))]);
+  const R = rolesDraft(), cols = ['pi'].concat(ACCESS_ROLES).concat(['reader']);
+  const short = { pi: 'PI', data: 'Data', qc: 'Verif.', nurse: 'Nurse', dots: 'DOTS', reader: 'Reader' };
+  const cell = (r, k) => {
+    if (r === 'pi') return el('td', { class: 'acc fixed' }, el('span', { class: 'tick on', 'aria-label': 'on, fixed' }));
+    if (r === 'reader') return el('td', { class: 'acc fixed' }, el('span', { class: 'tick', 'aria-label': 'off, fixed' }));
+    const on = R.d[r][k];
+    return el('td', { class: 'acc' }, el('button', { type: 'button', class: 'tick' + (on ? ' on' : ''), 'data-r': r, 'data-k': k, 'aria-pressed': on ? 'true' : 'false', 'aria-label': ACCESS_ROLE_NAMES[r] + ': ' + ACCESS_KEYS.filter((x) => x.key === k)[0].label, onclick: () => rolesToggle(r, k) }));
+  };
+  const table = el('table', { class: 'accgrid' },
+    el('thead', null, el('tr', null, el('th', { class: 'task' }, 'Task'), cols.map((r) => el('th', { title: ACCESS_ROLE_NAMES[r] }, short[r])))),
+    el('tbody', null,
+      ACCESS_KEYS.map((k) => el('tr', { class: k.confidential ? 'conf' : '' }, el('th', { class: 'task', scope: 'row' }, k.label, k.need ? el('small', null, k.need === 'view' ? 'needs full clinical data' : 'needs names, MRN, telephone') : null), cols.map((r) => cell(r, k.key)))),
+      el('tr', { class: 'fixedrow' }, el('th', { class: 'task', scope: 'row' }, 'Score chest films', el('small', null, 'readers only, blinded')), cols.map((r) => el('td', { class: 'acc fixed' }, el('span', { class: 'tick' + (r === 'reader' ? ' on' : '') }))))));
+  return topBar('Role manager').concat([el('main', null,
+    el('div', { class: 'card small' }, 'Tap a box to switch a task on or off for everyone in that role. The PI and reader columns are fixed. The workbook enforces these ticks; phones pick them up at their next sync.'),
+    el('div', { class: 'accwrap' }, table),
+    el('div', { class: 'card small muted' }, 'Names, MRN and telephone reach a phone only while the confidential register switch is on, whatever the ticks say. Document photos only while the photo switch is on.'),
+    R.msg ? el('div', { class: 'card ' + (/^Saved/.test(R.msg) ? 'ok' : 'warn'), id: 'rolesmsg' }, R.msg) : null,
+    el('div', { class: 'row2' },
+      el('button', { class: 'btn block', type: 'button', disabled: R.busy, onclick: () => { ACCESS_ROLES.forEach((r) => { R.d[r] = accessFor_(r, null); }); R.dirty = true; R.msg = ''; render(); } }, 'Back to defaults'),
+      el('button', { class: 'btn primary block', type: 'button', id: 'rolesave', disabled: R.busy || !R.dirty, onclick: rolesSave }, R.busy ? 'Saving…' : 'Save')))]);
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
 const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']];
@@ -1032,7 +1112,7 @@ function linkScreen(p) {
       show('Name', d.name), show('Record number (MRN)', d.mrn), show('Father or husband name', d.guardian), show('Address', d.address), show('Note', d.note),
       d.updated ? el('div', { class: 'small muted' }, 'Last changed ' + d.updated) : null,
       el('button', { class: 'btn block', type: 'button', disabled: off && !st.offline, onclick: () => { st.edit = true; st.msg = ''; render(); } }, 'Edit'),
-      role() === 'dots' ? photoViewCard(sid) : null] : null,
+      !can('view') && can('photoView') ? photoViewCard(sid) : null] : null,
     d && st.edit ? [field('name', 'Participant name', 60), field('mrn', 'Record number (MRN), required', 30), field('phone', 'Telephone, required, e.g. 03001234567', 16), field('guardian', 'Father or husband name', 60), field('address', 'Address', 200), field('note', 'Note', 200),
       el('button', { class: 'btn primary block', type: 'button', disabled: (off && !st.offline) || st.busy, onclick: () => linkSave() }, st.busy ? 'Saving…' : (off ? 'Save on this phone' : 'Save'))] : null
   )]);
@@ -1204,7 +1284,7 @@ const VISIT_GUIDE = {
     enter: ['Visit form (V5), with the sputum smear date and result', 'Laboratory results when they return', 'Spirometry', 'Questionnaires (V5)', 'End of study: status C and the date'] }
 };
 function visitsScreen() {
-  const due = role() === 'dots' || !S.server ? [] : derived().schedule.filter((r) => r[5] !== 'upcoming');
+  const due = !can('view') || !S.server ? [] : derived().schedule.filter((r) => r[5] !== 'upcoming');
   return topBar('Visit checklist').concat([el('main', null,
     el('div', { class: 'card small muted' }, 'Tap a visit to see what to order and do. Every visit is counted from the day ATT started.'),
     el('div', { class: 'list' }, Object.keys(VISIT_GUIDE).map((v) => el('button', { class: 'row', onclick: () => go('visitguide', { v: v }) },
@@ -1227,7 +1307,7 @@ function guideDocs(v) {
   return out;
 }
 function visitGuideScreen(p) {
-  const g = VISIT_GUIDE[p.v], due = role() === 'dots' || !S.server ? [] : derived().schedule.filter((r) => r[1] === p.v && r[5] !== 'upcoming');
+  const g = VISIT_GUIDE[p.v], due = !can('view') || !S.server ? [] : derived().schedule.filter((r) => r[1] === p.v && r[5] !== 'upcoming');
   const list = (items) => el('ul', { class: 'steps' }, items.map((t) => el('li', null, t)));
   return topBar(g.name).concat([el('main', null,
     el('div', { class: 'card' }, el('b', null, g.when)),
@@ -1327,8 +1407,8 @@ function participant(p) {
     el('div', { class: 'facts4' }, facts.map((f) => el('div', { class: hot(f) ? 'bad' : '' }, el('span', null, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
     (() => {                                                   // confidential blocks side by side: Contact (PI) and Photos (PI, verifier)
       const t = [
-        role() === 'pi' && !T.practice ? contactTile(sid) : null,
-        (role() === 'pi' || role() === 'qc') && photosOn() ? photosTile(sid) : null].filter(Boolean);
+        can('contacts') && !T.practice ? contactTile(sid) : null,
+        can('photoView') && photosOn() ? photosTile(sid) : null].filter(Boolean);
       return t.length ? el('div', { class: 'ctiles' + (t.length === 1 ? ' solo' : '') }, t) : null;
     })(),
     visits,
@@ -1374,7 +1454,7 @@ function contactAct(sid, c) {
 function cRecent() { try { return JSON.parse(localStorage.getItem('tbdm_crecent') || '[]').filter((x) => typeof x === 'string').slice(0, 5); } catch (e) { return []; } }
 function cRemember(sid) { T.cq = ''; try { localStorage.setItem('tbdm_crecent', JSON.stringify([sid].concat(cRecent().filter((x) => x !== sid)).slice(0, 5))); } catch (e) { /* no storage: skip */ } }
 function linkPick() {
-  if (role() !== 'pi' || T.practice) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is for the PI only, and is not available in practice mode.'))]);
+  if (!can('contacts') || T.practice) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is not part of your role, and is not available in practice mode.'))]);
   const q = el('input', { class: 'search', type: 'search', placeholder: 'Study Number, MRN, Name or Telephone', autocomplete: 'off', value: T.cq || '' });
   const list = el('div', { class: 'list conf' });
   const note = el('div', { class: 'card small muted', hidden: true });
@@ -1460,7 +1540,7 @@ const NO_SCREEN_Q = /^No screening line/, WAIT_ENROL_Q = /not yet enrolled|not y
 function openQuery(q) {
   const tab = q[1], keys = APP_KEYS[tab], query = q[4] + (q[5] ? ': ' + q[5] : '');
   if (SKIPPED_Q.test(q[4])) {
-    if (role() === 'pi' && !T.practice) { if (T.reg) T.reg.list = null; go('register'); toast((q[0] || 'This number') + ' was skipped. Record what happened to it in the Link register.'); return; }
+    if (can('numbers') && !T.practice) { if (T.reg) T.reg.list = null; go('register'); toast((q[0] || 'This number') + ' was skipped. Record what happened to it in the Link register.'); return; }
     modal((q[0] || 'This number') + ' was skipped', [el('p', null, 'No screening line or enrolment uses this number. The PI explains the gap in the paper linking log.')], [['Close', null]]); return;
   }
   if (NO_SCREEN_Q.test(q[4])) { go('screening'); toast('Open ' + (q[0] || 'the patient') + "'s screening line and enter " + (q[0] || 'the study number') + ' as its study number'); return; }
@@ -1490,7 +1570,7 @@ function queries() {
   const qrow = (q) => el('button', { class: 'row qrow', onclick: () => openQuery(q) },
     el('div', { class: 'main' }, el('div', null, (NAMES[q[1]] || q[1]) + (q[3] ? ' · ' + q[3] : '')), el('div', { class: 'sub' }, q[4] + (q[5] ? ': ' + q[5] : '')),
       WAIT_ENROL_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, 'Opens at: Enrolment')
-        : SKIPPED_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, role() === 'pi' ? 'Opens at: Link register, to record what happened to the number' : 'The PI explains this in the paper linking log')
+        : SKIPPED_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, can('numbers') ? 'Opens at: Link register, to record what happened to the number' : 'The PI explains this in the paper linking log')
         : NO_SCREEN_Q.test(q[4]) ? el('div', { class: 'sub qfield' }, "Opens at: Screening log, to add the number to the patient's line")
         : q[6] ? el('div', { class: 'sub qfield' }, 'Opens at: ' + fieldName(q[1], q[6])) : null), el('span', { class: 'chev' }));
   const block = (g) => {
@@ -1568,9 +1648,10 @@ function settings() {
   const holds = (t) => !!(S.server && S.server.tabs && S.server.tabs[t]);
   const tiles = [
     holds('S0_SCREEN') ? toolTile('logs', 'Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')) : null,
-    (pi || role() === 'qc') && holds('QC_LOG') ? toolTile('check', 'Verification log', view('QC_LOG').length + ' checks', () => go('qclog')) : null,
-    role() !== 'dots' ? toolTile('practice', 'Practice mode', 'Made-up patients', practiceAsk) : null,
-    pi && !T.practice ? toolTile('export', 'Export data', 'Excel, CSV, SPSS', exportAsk, 'export-data') : null,
+    can('verify') && holds('QC_LOG') ? toolTile('check', 'Verification log', view('QC_LOG').length + ' checks', () => go('qclog')) : null,
+    can('screen') || can('view') || can('measure') || isReader() ? toolTile('practice', 'Practice mode', 'Made-up patients', practiceAsk) : null,
+    pi ? toolTile('roles', 'Role manager', 'Who can do what', () => { T.roles = null; go('roles'); }, 'role-manager') : null,
+    can('export') && !T.practice ? toolTile('export', 'Export data', 'Excel, CSV, SPSS', exportAsk, 'export-data') : null,
     toolTile('update', 'Update app', 'Get newest', () => confirmLeave(checkUpdate), 'update-now'),
     bioTile()];
   return topBar('Settings').concat([el('main', null,
@@ -1625,7 +1706,7 @@ function screenLocked(F, c) {
 }
 function visible(tab, c, v, vals) {
   if (c.pi && role() !== 'pi') return false;
-  if (isNurse() && !nurseCol_(tab, c.key)) return false;
+  if (accessLimited_(role(), acc()) && (tab === 'S1_ENROL' || tab === 'S2_BASELINE' || tab === 'VISITS') && !readOnly(tab) && !nurseCol_(tab, c.key)) return false;   // writing without 'forms': the measurement columns only
   const visit = s_(vals.visit);
   if (tab === 'VISITS') {
     if (c.key === 'smear_date' || c.key === 'smear_result') return smearDue_(visit, (find('VISITS', { study_id: s_(vals.study_id), visit: 'V3' }) || {}).smear_result);   // V4 too while the V3 smear is not negative
@@ -1648,13 +1729,7 @@ function visible(tab, c, v, vals) {
   if (APP_SERIAL[tab] === c.key) return false;
   return true;
 }
-function readOnly(tab) {
-  if (isNurse()) return NURSE_SCOPE[tab] === undefined;
-  if (role() === 'pi') return tab === 'R_SCORES';
-  if (role() === 'data') return tab === 'QC_LOG' || tab === 'R_SCORES';
-  if (role() === 'qc') return tab !== 'QC_LOG';
-  return tab !== 'R_SCORES';
-}
+function readOnly(tab) { return !accessWriteTab_(role(), acc(), tab); }
 function formScreen(p) {
   const tab = p.tab, def = defOf(tab), keys = APP_KEYS[tab], serial = APP_SERIAL[tab];
   if (!T.form || T.form.tab !== tab) {
@@ -1953,7 +2028,7 @@ function practiceTabs() {
   const at = (n) => isoOf_(Math.min(today, Math.max(first, today - n)));          // a date n days ago, never before the study could start
   const attA = Math.min(today, Math.max(first, today - 42)), v2 = attA + 24, iso = (n) => at(n);
   const row = (tab, o) => { const d = defOf(tab), k = d.cols.map((c) => c.key); return k.map((x) => (o[x] === undefined ? '' : String(o[x]))); };
-  const keep = (tab) => (role_ === 'nurse' ? defOf(tab).cols.map((c) => c.key).filter((k) => nurseCol_(tab, k)) : defOf(tab).cols.map((c) => c.key));
+  const lim = limited(), keep = (tab) => (lim ? defOf(tab).cols.map((c) => c.key).filter((k) => nurseCol_(tab, k)) : defOf(tab).cols.map((c) => c.key));
   const data = {
     S0_SCREEN: [
       { screen_no: 1, screen_date: iso(42), age: 46, sex: 'M', smear_grade: '2', eligible: 'Y', enrolled: 'Y', study_id: PRAC_A, screened_by: 'PRAC' },
@@ -1966,7 +2041,7 @@ function practiceTabs() {
     VISITS: today >= attA + 21 ? [{ study_id: PRAC_A, visit: 'V2', attended: 'Y', visit_date: isoOf_(Math.min(today, v2)), treatment: 'C', adherence: 'G', entered_by: 'PRAC' }] : []
   };
   const tabs = {};
-  SCHEMA.forEach((t) => { if (role_ === 'nurse' && NURSE_SCOPE[t.tab] === undefined) return; const cols = keep(t.tab); tabs[t.tab] = { cols, rows: (data[t.tab] || []).map((o) => { const full = row(t.tab, o), all = t.cols.map((c) => c.key); return cols.map((k) => full[all.indexOf(k)]); }) }; });
+  SCHEMA.forEach((t) => { if (lim && NURSE_SCOPE[t.tab] === undefined) return; const cols = keep(t.tab); tabs[t.tab] = { cols, rows: (data[t.tab] || []).map((o) => { const full = row(t.tab, o), all = t.cols.map((c) => c.key); return cols.map((k) => full[all.indexOf(k)]); }) }; });
   if (role_ === 'reader1' || role_ === 'reader2') { tabs.R_SCORES = { cols: READER.cols.map((c) => c.key), rows: [] }; }
   return tabs;
 }
@@ -1975,7 +2050,7 @@ function practiceStart() {
   if (T.syncing) { toast('The phone is sending entries. Try again in a moment.'); return; }
   T.real = S;
   S = { cfg: Object.assign({}, S.cfg, { token: '', api: '', email: 'practice' }), outbox: [], lastSync: Date.now(), server: null };
-  S.server = { tabs: practiceTabs(), at: Date.now(), films: /^reader/.test(T.real.cfg.role) ? [{ study_id: PRAC_A, cxr_date: isoOf_(dayNo_(todayIso()) - 41), repeat: false }, { study_id: PRAC_B, cxr_date: isoOf_(dayNo_(todayIso()) - 4), repeat: false }] : [] };
+  S.server = { access: T.real.server && T.real.server.access, tabs: practiceTabs(), at: Date.now(), films: /^reader/.test(T.real.cfg.role) ? [{ study_id: PRAC_A, cxr_date: isoOf_(dayNo_(todayIso()) - 41), repeat: false }, { study_id: PRAC_B, cxr_date: isoOf_(dayNo_(todayIso()) - 4), repeat: false }] : [] };
   T.practice = true; resetNav(); T.form = null; render();
 }
 function practiceStop() { if (!T.practice) return; S = T.real; T.real = null; T.practice = false; resetNav(); T.form = null; render(); }
@@ -2173,8 +2248,8 @@ function docState(sid, doc, visit) {
   return 'missing';
 }
 function photosOn() { return !T.practice && !!(S && S.server && S.server.photos); }
-function photoTaker() { return ['pi', 'data', 'qc', 'nurse', 'dots'].indexOf(role()) >= 0; }
-function photoViewer() { return ['pi', 'qc', 'dots'].indexOf(role()) >= 0; }
+function photoTaker() { return can('photoTake'); }
+function photoViewer() { return can('photoView'); }
 function hex(buf) { return Array.from(new Uint8Array(buf)).map((b) => ('0' + b.toString(16)).slice(-2)).join(''); }
 function rndHex(n) { return hex(crypto.getRandomValues(new Uint8Array(n))); }
 async function fileToCanvas(file) {

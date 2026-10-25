@@ -1244,4 +1244,54 @@ const NURSE_SCOPE = {
 };
 const NURSE_VISITS = ['V3', 'V5'];                    // follow-up visits at which the nurse measures
 function nurseCol_(tab, key) { const s = NURSE_SCOPE[tab]; return s !== undefined && (s === null || s.indexOf(key) >= 0); }
+// ---- Role access: what each role may do, set by the PI in the phone's Role manager (script property ACCESS).
+// The PI always has everything except scoring films; the two readers only score films (blinding). Both columns are fixed.
+// Every other role takes the defaults below until the PI changes a tick. The server enforces each tick on every request;
+// the phone only hides what the server would refuse anyway. 'view' is the full clinical data: the ticks marked need: 'view' cannot be on without it.
+const ACCESS_ROLES = ['data', 'qc', 'nurse', 'dots'];
+const ACCESS_ROLE_NAMES = { pi: 'PI', data: 'Data entry', qc: 'Verifier', nurse: 'Nurse', dots: 'DOTS incharge', reader: 'Readers' };
+const ACCESS_KEYS = [
+  { key: 'screen', label: 'Screen and enrol' },
+  { key: 'view', label: 'Participants, forms and summaries (full clinical data)' },
+  { key: 'forms', label: 'Enter clinical forms (exam, labs, PHQ-9, visits)', need: 'view' },
+  { key: 'measure', label: 'Enter measurements (height, weight, waist, arm)' },
+  { key: 'due', label: 'Due and overdue', need: 'view' },
+  { key: 'queries', label: 'Queries', need: 'view' },
+  { key: 'checklist', label: 'Visit checklist' },
+  { key: 'numbers', label: 'Give study numbers (Link register)' },
+  { key: 'ident', label: 'Names, MRN, telephone (in the Link register)', confidential: true },
+  { key: 'contacts', label: 'Call or WhatsApp participants (Contacts)', need: 'ident', confidential: true },
+  { key: 'verify', label: 'Verification log', need: 'view' },
+  { key: 'export', label: 'Export data', need: 'view' },
+  { key: 'photoTake', label: 'Take document photos' },
+  { key: 'photoView', label: 'Open document photos' }
+];
+const ACCESS_DEFAULT = {
+  data: { screen: true, view: true, forms: true, measure: true, due: true, queries: true, checklist: true, photoTake: true },
+  qc: { view: true, due: true, queries: true, checklist: true, verify: true, photoTake: true, photoView: true },
+  nurse: { screen: true, measure: true, photoTake: true },
+  dots: { numbers: true, ident: true, photoTake: true, photoView: true }
+};
+// One role's ticks: the defaults, overlaid with what the PI saved, with every tick that needs 'view' turned off when 'view' is off.
+function accessFor_(role, stored) {
+  const out = {};
+  if (role === 'pi') { ACCESS_KEYS.forEach(function (k) { out[k.key] = true; }); return out; }
+  if (ACCESS_ROLES.indexOf(role) < 0) { ACCESS_KEYS.forEach(function (k) { out[k.key] = false; }); return out; }   // readers and unknown roles
+  const d = ACCESS_DEFAULT[role] || {}, sv = stored && stored[role] ? stored[role] : null;
+  ACCESS_KEYS.forEach(function (k) { out[k.key] = sv && typeof sv[k.key] === 'boolean' ? sv[k.key] : !!d[k.key]; });
+  ACCESS_KEYS.forEach(function (k) { if (k.need && !out[k.need]) out[k.key] = false; });
+  return out;
+}
+// Can a role with these ticks write in this tab? Without 'forms' the measurement and enrolment tabs are limited to the NURSE_SCOPE columns.
+function accessWriteTab_(role, a, tab) {
+  if (role === 'pi') return tab !== 'R_SCORES';
+  if (role === 'reader1' || role === 'reader2') return tab === 'R_SCORES';
+  if (tab === 'R_SCORES') return false;
+  if (tab === 'QC_LOG') return !!a.verify;
+  if (tab === 'S0_SCREEN') return !!(a.screen || a.forms);
+  if (tab === 'S1_ENROL') return !!(a.screen || a.forms);
+  if (tab === 'S2_BASELINE' || tab === 'VISITS') return !!(a.forms || a.measure);
+  return !!a.forms;
+}
+function accessLimited_(role, a) { return role !== 'pi' && !/^reader/.test(role) && !a.forms; }   // writes limited to NURSE_SCOPE columns
 const APP_SERIAL = { S0_SCREEN: 'screen_no', EVENTS: 'event_no', QC_LOG: 'qc_no' };   // numbered by the server
