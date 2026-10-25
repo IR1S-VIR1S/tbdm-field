@@ -365,3 +365,15 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 #cr-err { color: var(--bad); min-height: 1.2em; }
 .feedhead.static { cursor: default; }
 .card.find .search { margin-bottom: 0; }
+
+/* Radiograph reader: the image stays at the top of the scoring page */
+.cxrpane { position: sticky; top: 0; z-index: 3; padding: 10px; background: var(--card); box-shadow: 0 6px 14px -10px rgba(0,0,0,.35); }
+.cxrpane .cxrbar { display: flex; align-items: center; gap: 8px; } .cxrpane .cxrbar b { flex: 1; }
+.cxrpane .cxrimg { display: block; width: 100%; margin-top: 8px; padding: 0; border: 0; background: #000; border-radius: 10px; overflow: hidden; }
+.cxrpane .cxrimg img { display: block; width: 100%; height: min(30vh, 260px); object-fit: contain; }
+@media (max-height: 700px) { .cxrpane .cxrimg img { height: 22vh; } }
+.cxrpane .cxrtools { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; } .cxrpane .grow { flex: 1; }
+.cxrpane .cxrmsg { margin-top: 6px; }
+.cxrpane.folded { padding-block: 6px; }
+.photo-full .pf-img { justify-content: flex-start; } .photo-full .pf-img img { margin: 0 auto; }
+.photo-full .btn.primary { background: var(--brand); color: #fff; border-color: var(--brand); }

@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '02a67729acd9';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'bae1b3834df0';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -304,7 +304,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) { T.idle = setTimeout(lock, IDLE_LOCK_MS); sessTouch(); } }
-function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.roles = null; T.preview = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
+function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.roles = null; T.preview = null; T.cxr = {}; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -808,13 +808,14 @@ function filmLists() {
   const todo = fl.filter((f) => !has(f.study_id, '1') || (f.repeat && !has(f.study_id, '2')));
   return { fl, mine, has, todo, done: fl.filter((f) => todo.indexOf(f) < 0) };
 }
+function filmImg(f) { return !photosOn() ? '' : f.poor ? 'image too poor' : f.img ? 'image ready' : 'no image yet'; }
 function readerHome(bad, waiting, oldest) {
   const { has, todo, done } = filmLists();
   const open = (f, n) => go('form', { tab: 'R_SCORES', key: { study_id: f.study_id, read_no: n } });
   const main = el('main', { class: 'pihome' },
     homeWarn(bad, waiting, oldest),
-    feedCard('due ' + (todo.length ? 'hot' : 'calm'), 'Films to score', todo.length, todo.map((f) => { const n = !has(f.study_id, '1') ? '1' : '2'; return { main: f.study_id, sub: 'film of ' + (f.cxr_date || '?') + (n === '2' ? ' · repeat read requested' : ''), chip: n === '2' ? 'repeat' : 'new', chipCls: 'warn', go: () => open(f, n) }; }), () => go('films'), 'Nothing to score'),
-    feedCard('calm', 'Scored', done.length, done.map((f) => ({ main: f.study_id, sub: 'film of ' + (f.cxr_date || '?'), go: () => open(f, '1') })), () => go('films'), 'None yet'),
+    feedCard('due ' + (todo.length ? 'hot' : 'calm'), 'Films to score', todo.length, todo.map((f) => { const n = !has(f.study_id, '1') ? '1' : '2'; return { main: f.study_id, sub: 'film of ' + (f.cxr_date || '?') + (n === '2' ? ' · repeat read requested' : '') + (filmImg(f) ? ' · ' + filmImg(f) : ''), chip: f.img && photosOn() && !f.poor ? 'image' : n === '2' ? 'repeat' : 'new', chipCls: f.img && photosOn() && !f.poor ? 'ok' : 'warn', go: () => open(f, n) }; }), () => go('films'), 'Nothing to score'),
+    feedCard('calm', 'Scored', done.length, done.map((f) => ({ main: f.study_id, sub: 'film of ' + (f.cxr_date || '?') + (filmImg(f) ? ' · ' + filmImg(f) : ''), go: () => open(f, '1') })), () => go('films'), 'None yet'),
     el('h2', null, 'Recent activity'),
     el('div', { class: 'card feedcard' }, el('div', { class: 'small muted' }, 'Score each film from the image alone. You see no clinical or group information, and nobody but you and the PI sees your scores.'),
       el('div', { class: 'small muted fsent' }, waiting.length ? waiting.length + ' waiting to send' : 'All entries sent')));
@@ -1661,7 +1662,7 @@ function films() {
   const item = (f) => {
     const n = !has(f.study_id, '1') ? '1' : '2';
     return el('button', { class: 'row', onclick: () => go('form', { tab: 'R_SCORES', key: { study_id: f.study_id, read_no: todo.indexOf(f) >= 0 ? n : '1' } }) },
-      el('div', { class: 'main' }, el('div', null, f.study_id), el('div', { class: 'sub' }, 'film of ' + (f.cxr_date || '?') + (todo.indexOf(f) >= 0 && n === '2' ? ' · repeat read requested' : ''))),
+      el('div', { class: 'main' }, el('div', null, f.study_id), el('div', { class: 'sub' }, 'film of ' + (f.cxr_date || '?') + (todo.indexOf(f) >= 0 && n === '2' ? ' · repeat read requested' : '') + (filmImg(f) ? ' · ' + filmImg(f) : ''))),
       statusChip(mine.filter((r) => r.study_id === f.study_id && r.read_no === (todo.indexOf(f) >= 0 ? n : '1'))[0] || null), el('span', { class: 'chev' }));
   };
   return topBar('Radiograph scoring').concat([el('main', null, el('div', { class: 'card small' }, 'Score each film from the image alone. You see no clinical or group information, and nobody but you and the PI sees your scores.'),
@@ -1828,7 +1829,7 @@ function formScreen(p) {
   T.refill = fill;
   fill();
   setTimeout(paintCalc, 0);
-  { const pc = photoCard(T.form); if (pc) main.append(pc); const pv = tab === 'R_SCORES' ? photoViewCard(s_(T.form.vals.study_id).toUpperCase()) : null; if (pv) main.prepend(pv); }
+  { const pc = photoCard(T.form); if (pc) main.append(pc); const pv = tab === 'R_SCORES' ? cxrPane(s_(T.form.vals.study_id).toUpperCase()) : null; if (pv) main.prepend(pv); }
   const bar = F.ro ? null : el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => confirmLeave(back) }, 'Cancel'), el('button', { class: 'btn primary', id: 'savebtn', onclick: saveForm }, 'Save'));
   if (p.focus && !p._focused) { p._focused = true; setTimeout(() => focusField(p.focus), 120); }
   if (p.docFocus && !p._docFocused) { p._docFocused = true; setTimeout(() => { const c = $('#photocard'); if (!c) return; c.scrollIntoView({ block: 'center', behavior: 'smooth' }); c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash'); setTimeout(() => c.classList.remove('flash'), 2600); }, 150); }
@@ -2503,6 +2504,57 @@ function photoViewCard(sid) {
   box.append(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Source documents'), el('button', { class: 'btn block', type: 'button', id: 'photo-show', onclick: load }, 'Show photos'));
   return box;
 }
+// ---- Radiograph reader: the covered radiograph sits at the top of the scoring page and stays in view while the reader scores below it.
+// Loaded once per session into memory only (never written to the phone); tap to enlarge, switch between images, or mark it too poor.
+T.cxr = T.cxr || {};
+function cxrPane(sid) {
+  if (!/^reader/.test(role()) || !sid) return null;
+  const box = el('div', { class: 'card cxrpane' + (T.cxrHide ? ' folded' : ''), id: 'cxrpane' });
+  const head = (txt) => el('div', { class: 'cxrbar' }, el('b', null, 'Radiograph ' + sid), txt ? el('span', { class: 'small muted' }, txt) : null,
+    el('button', { class: 'btn small', type: 'button', id: 'cxr-fold', onclick: () => { T.cxrHide = !T.cxrHide; render(); } }, T.cxrHide ? 'Show image' : 'Hide image'));
+  const say = (msg) => box.replaceChildren(head(''), el('div', { class: 'small muted cxrmsg' }, msg));
+  if (!photosOn()) { say('Radiograph images are switched off. Score from the film itself.'); return box; }
+  if (T.cxrHide) { box.append(head('')); return box; }
+  const C = T.cxr[sid] || (T.cxr[sid] = { list: null, i: 0, img: {}, err: '' });
+  const draw = () => {
+    if (C.err) { say(C.err); return; }
+    if (!C.list) { say('Loading the radiograph…'); return; }
+    if (!C.list.length) { say('No radiograph image has been uploaded yet. Score from the film, or come back once it is uploaded.'); return; }
+    const ph = C.list[C.i], src = C.img[ph.photo_id];
+    box.replaceChildren(head(C.list.length > 1 ? 'image ' + (C.i + 1) + ' of ' + C.list.length : ''),
+      src ? el('button', { class: 'cxrimg', type: 'button', id: 'cxr-open', 'aria-label': 'Enlarge the radiograph', onclick: () => photoOpen(ph, src) }, el('img', { src, alt: 'Chest radiograph of ' + sid + ', label covered' })) : el('div', { class: 'small muted cxrmsg' }, 'Loading the image…'),
+      el('div', { class: 'cxrtools' },
+        C.list.length > 1 ? C.list.map((x, k) => el('button', { class: 'btn small' + (k === C.i ? ' primary' : ''), type: 'button', onclick: () => { C.i = k; fetchImg(); draw(); } }, String(k + 1))) : null,
+        el('span', { class: 'grow small muted' }, ph.flag ? 'Marked too poor to read' : 'Tap the image to enlarge'),
+        ph.flag ? null : el('button', { class: 'btn small', type: 'button', id: 'cxr-poor', onclick: async () => {
+          const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({}));
+          if (f.ok) { ph.flag = 'poor'; toast('Marked too poor to read. The PI has been told.'); draw(); } else toast('Could not mark it: ' + (f.error || 'no signal'));
+        } }, 'Too poor')));
+  };
+  const fetchImg = async () => {
+    const ph = C.list && C.list[C.i];
+    if (!ph || C.img[ph.photo_id] || C.busy === ph.photo_id) return;
+    C.busy = ph.photo_id;
+    try { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 45000); if (!r.ok) throw new Error(r.error || 'not available'); C.img[ph.photo_id] = 'data:' + r.mime + ';base64,' + r.data; }
+    catch (e) { C.err = navigator.onLine ? 'Could not open the image: ' + e.message : 'The image opens only with a signal. You can still score from the film.'; }
+    C.busy = null; if ($('#cxrpane')) draw();
+  };
+  if (!C.list && !C.loading) {
+    if (!navigator.onLine) C.err = 'The image opens only with a signal. You can still score from the film.';
+    else {
+      C.loading = true;
+      api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 20000).then((r) => {
+        if (!r.ok) throw new Error(r.error || 'not available');
+        C.list = r.photos.filter((x) => x.doc === 'CXR').sort((a, b) => (s_(a.taken_at) < s_(b.taken_at) ? 1 : -1));    // newest first
+        C.loading = false; draw(); fetchImg();
+      }).catch((e) => { C.loading = false; C.err = 'Could not load the radiograph: ' + e.message; if ($('#cxrpane')) draw(); });
+    }
+  } else if (C.list) fetchImg();
+  draw();
+  // keep the image in view under the top bar while the reader scrolls the scoring fields
+  queueMicrotask(() => { const t = document.querySelector('.top'); const b = $('#cxrpane'); if (t && b) b.style.top = t.offsetHeight + 'px'; });
+  return box;
+}
 // ---- participant page blocks: what is worth knowing before tapping
 function contactTile(sid) {                                // the block opens the contact details; the number inside it is its own button: Call or WhatsApp
   const L = confAsList(), r = L ? L.rows.filter((x) => s_(x.study_id).toUpperCase() === sid)[0] : null;
@@ -2574,17 +2626,20 @@ function photosScreen(p) {                                  // the participant's
   if (card) setTimeout(() => { const b = $('#photo-show'); if (b) b.click(); }, 0);
   return topBar('Source documents · ' + p.sid).concat([el('main', null, card || el('div', { class: 'card' }, 'Source documents are not available on this phone.'))]);
 }
-async function photoOpen(ph) {
+async function photoOpen(ph, have) {
   const ov = el('div', { class: 'photo-full', role: 'dialog', 'aria-label': 'Photo' }, el('div', { class: 'small' }, 'Loading…'));
   const close = () => ov.remove();
   document.body.append(ov);
   try {
-    const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 45000);
-    if (!r.ok) throw new Error(r.error || 'not available');
-    const img = el('img', { src: 'data:' + r.mime + ';base64,' + r.data, alt: PHOTO_DOC_NAMES[ph.doc] });
+    let src = have;
+    if (!src) { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 45000); if (!r.ok) throw new Error(r.error || 'not available'); src = 'data:' + r.mime + ';base64,' + r.data; }
+    const img = el('img', { src, alt: PHOTO_DOC_NAMES[ph.doc] }), pane = el('div', { class: 'pf-img' }, img);
+    let z = 1;
+    const zoom = (n) => { z = n; img.style.width = (100 * z) + '%'; img.style.maxWidth = 'none'; ov.querySelectorAll('.pf-z').forEach((b) => b.classList.toggle('primary', +b.dataset.z === z)); };
     ov.replaceChildren(el('div', { class: 'pf-bar' }, el('b', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '')),
-      el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked too poor to read. The PI is told.' : 'Could not mark it.'); } }, 'Too poor to read'),
-      el('button', { class: 'btn small', type: 'button', id: 'photo-close', onclick: close }, 'Close')), el('div', { class: 'pf-img' }, img));
+      [1, 2, 3].map((n) => el('button', { class: 'btn small pf-z' + (n === 1 ? ' primary' : ''), type: 'button', 'data-z': String(n), onclick: () => zoom(n) }, n + '×')),
+      have ? null : el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked as too poor to read. The PI has been told.' : 'Could not mark it: ' + (f.error || 'no signal')); } }, 'Too poor'),
+      el('button', { class: 'btn small', type: 'button', id: 'photo-close', onclick: close }, 'Close')), pane);
   } catch (e) { ov.replaceChildren(el('div', { class: 'small' }, 'Could not open: ' + e.message), el('button', { class: 'btn', onclick: close }, 'Close')); }
 }
 
