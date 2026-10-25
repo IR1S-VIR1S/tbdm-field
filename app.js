@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '450e63b0cf91';                 // replaced by build.js with the build's hash
+const BUILD_ID = '8fc0b651c32a';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -362,7 +362,7 @@ function topBar(title, opts) {
   const bar = el('header', { class: 'top' },
     T.nav.length ? el('button', { class: 'back', 'aria-label': 'Back', onclick: () => confirmLeave(back) }, '‹ Back') : null,
     el('h1', null, title),
-    opts.noMenu ? null : el('button', { class: 'icon', 'aria-label': 'Lock', onclick: () => confirmLeave(lock) }, 'Lock'));
+    opts.noMenu ? null : el('button', { class: 'icon lockbtn', 'aria-label': 'Lock', title: 'Lock', onclick: (ev) => { const b = ev.currentTarget; confirmLeave(() => { b.classList.add('locking'); setTimeout(lock, 420); }); } }, icon('padlock')));
   return [bar, el('div', { id: 'syncbar' }, syncBar())];
 }
 function syncBar() {
@@ -373,8 +373,10 @@ function syncBar() {
     : (online ? 'Online' : 'Offline') + ' · ' + (n ? n + ' waiting to send' : 'all sent') + (bad ? ' · ' + bad + ' need fixing' : '')
       + (S.lastSync ? ' · updated ' + ago(S.lastSync) : ' · never updated') + (T.syncError && T.syncError !== 'offline' ? ' · last try: ' + T.syncError : '');
   return el('div', { class: 'sync ' + (online ? 'on' : 'off') }, el('span', { class: 'dot' }), el('span', { class: 'grow' }, text),
-    el('button', { onclick: () => sync(), disabled: T.syncing || !online }, 'Sync'));
+    el('button', { class: 'syncbtn' + (T.syncing || Date.now() < (T.spinUntil || 0) ? ' spin' : ''), 'aria-label': 'Sync', title: 'Sync', onclick: syncTap, disabled: T.syncing || !online }, icon('sync')));
 }
+// A tap spins the sync icon for as long as the sync runs, and for at least a moment so a quick one is still seen.
+function syncTap() { T.spinUntil = Date.now() + 900; setTimeout(paintSync, 950); sync(); paintSync(); }
 function paintSync() { const b = $('#syncbar'); if (b && S) b.replaceChildren(syncBar()); }
 function modal(title, body, actions, stop) {
   const m = $('#modal');
@@ -588,6 +590,7 @@ const ICONS = {
   list: '<rect x="4.5" y="3.5" width="15" height="17" rx="2"/><path d="m8 9 1.6 1.6L12.5 7.5M8 15.5h8M14 10h2.5"/>',
   phone: '<path d="M6.5 3.5h3l1.5 4-2 1.3a11 11 0 0 0 6.2 6.2l1.3-2 4 1.5v3a2 2 0 0 1-2 2A15.5 15.5 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  padlock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path class="shackle" d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/><path d="M12 14.5v2.5"/>',
   lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5M12 14.5v2.5"/>',
   sync: '<path d="M20 11a8 8 0 0 0-14.3-4.6L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.3 4.6l1.7-2.1M20 20v-4.5h-4.5"/>',
   export: '<path d="M12 14.5v-11M7.5 8 12 3.5 16.5 8M4.5 16.5v2a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2"/>',
