@@ -2491,10 +2491,12 @@ function photoPut_(u, req) {
   } finally { lock.releaseLock(); }
 }
 function photoList_(u, req) {
-  if (!photoViewRole_(u) && !photoReader_(u)) return { ok: false, error: 'not authorised', code: 401 };
+  if (!photoViewRole_(u) && !photoReader_(u) && !photoTakeRole_(u)) return { ok: false, error: 'not authorised', code: 401 };
   if (!photosOn_()) return { ok: true, photos: [], off: true };
   const sid = code_(req.study_id);
   if (!idOk_(sid)) return { ok: false, error: 'not a valid study number' };
+  if (!photoViewRole_(u) && !photoReader_(u))               // a phone that only takes photos learns which documents exist, never the photos themselves
+    return { ok: true, which: true, photos: photoRows_(photoSheet_()).filter(function (r) { return str_(r.study_id) === sid && !str_(r.deleted); }).map(function (r) { return { doc: str_(r.doc), visit: str_(r.visit) }; }) };
   const list = photoRows_(photoSheet_()).filter(function (r) { return str_(r.study_id) === sid && photoVisible_(u, r); })
     .map(function (r) { return { photo_id: str_(r.photo_id), doc: str_(r.doc), visit: str_(r.visit), covered: str_(r.covered), taken_at: str_(r.taken_at), taken_by: photoReader_(u) ? '' : str_(r.taken_by), flag: str_(r.flag) }; });
   return { ok: true, photos: list };
