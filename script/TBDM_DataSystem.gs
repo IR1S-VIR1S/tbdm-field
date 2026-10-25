@@ -1271,6 +1271,8 @@ function onOpen() {
     .addItem('PI: phone app: invite a team member', 'menuAppInvite')
     .addItem('PI: phone app: revoke access', 'menuAppRevoke')
     .addItem('PI: confidential link on or off', 'menuLinkSwitch')
+    .addItem('PI: photos of documents on or off', 'menuPhotoSwitch')
+    .addItem('PI: delete a participant\'s photos', 'menuPhotoDelete')
     .addItem('PI: erase ALL test data and start clean', 'menuEraseAll')
     .addSeparator()
     .addItem('PI: upgrade the workbook in place', 'menuUpgrade')
@@ -2010,6 +2012,7 @@ function menuWithdraw() {
   SCHEMA.forEach(function (t) { n += clearRows_(ss, t, sid, t.tab === 'S0_SCREEN'); });
   [1, 2].forEach(function (r) { const id = P.getProperty('READER' + r + '_ID'); if (id) n += clearRows_(SpreadsheetApp.openById(id), READER, sid, false); });
   n += deleteRowsWhere_(ss.getSheetByName('ALERTS'), 'study_id', sid);
+  if (P.getProperty('PHOTO_FOLDER_ID')) n += photoDeleteFor_(sid, 'withdrawal, destroy chosen', me_());   // before the audit purge, so its log line goes too
   n += purgeAudit_(sid);
   upsertEnd_(ss, sid, 'W', 'D');
   const base = DriveApp.getFolderById(P.getProperty('FOLDER_ID')), it = base.getFoldersByName(CFG.EXPORTS);
@@ -2108,6 +2111,10 @@ function doPost(e) {
     if (req.op === 'numbers_block') return appJson_(numbersBlock_(u, req));
     if (req.op === 'link_get') return appJson_(linkGet_(u, req));
     if (req.op === 'link_set') return appJson_(linkSet_(u, req));
+    if (req.op === 'photo_put') return appJson_(photoPut_(u, req));
+    if (req.op === 'photo_list') return appJson_(photoList_(u, req));
+    if (req.op === 'photo_get') return appJson_(photoGet_(u, req));
+    if (req.op === 'photo_flag') return appJson_(photoFlag_(u, req));
     if (req.op === 'pull') return appJson_(appPull_(u));
     if (req.op === 'push') {
       const theirs = req.schema === undefined ? 1 : Number(req.schema);   // apps older than the handshake send none
@@ -2142,7 +2149,7 @@ function appRows_(ss, def, cols) {
   return readTab_(ss, def).map(function (r) { return cols.map(function (k) { return r[k] === undefined ? '' : r[k]; }); });
 }
 function appPull_(u) {
-  const out = { ok: true, email: u.email, role: u.role, version: CFG.VERSION, schema: CFG.SCHEMA_VER, serverTime: Utilities.formatDate(new Date(), CFG.TZ, 'yyyy-MM-dd HH:mm'), today: todayIso_(), tabs: {} };
+  const out = { ok: true, email: u.email, role: u.role, version: CFG.VERSION, schema: CFG.SCHEMA_VER, serverTime: Utilities.formatDate(new Date(), CFG.TZ, 'yyyy-MM-dd HH:mm'), today: todayIso_(), tabs: {}, photos: photosOn_() };
   if (u.role === 'dots') return out;                     // the DOTS incharge sees the numbers register only
   if (u.role === 'nurse') {                              // the nurse gets only her tabs and only her columns; the rest never leaves the server
     const nss = dataSS_();
@@ -2416,6 +2423,143 @@ function menuLinkSwitch() {
   ui.alert('The confidential link is now ' + (on ? 'OFF' : 'ON') + '.');
 }
 
+// ---------------------------------------------------------------- photos of source documents (off until the ethics committee approves)
+// Any data role (and the DOTS incharge) can photograph a source document and attach it to a record: consent form, Core File,
+// withdrawal record, PHQ-9 alert slip, lab report, spirometry printout, chest radiograph. Photos go to a private Drive folder
+// owned by the PI (not inside the shared study folder), with one index row each in a PHOTOS tab of the register file. Phones that
+// take a photo cannot view it afterwards. The PI, the verifier and the DOTS incharge can view; the radiograph readers see only
+// radiographs whose name label was covered on the phone before upload. Every upload, view, flag and deletion is audited (never the image).
+// Switched on with "PI: photos of documents on or off".
+const PHOTO_TAB = 'PHOTOS';
+const PHOTO_COLS = ['photo_id', 'study_id', 'doc', 'visit', 'covered', 'file_id', 'sha256', 'taken_at', 'taken_by', 'uploaded_at', 'flag', 'note', 'deleted'];
+const PHOTO_DOCS = { CONSENT: 'consent form', CORE: 'Core Per-Patient File', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
+const PHOTO_MAX = 4000000;                                // base64 characters, about 3 MB of image
+function photosOn_() { return props_().getProperty('PHOTOS_ENABLED') === 'Y'; }
+function photoTakeRole_(u) { return !!u && ['pi', 'data', 'qc', 'nurse', 'dots'].indexOf(u.role) >= 0; }
+function photoViewRole_(u) { return !!u && ['pi', 'qc', 'dots'].indexOf(u.role) >= 0; }
+function photoReader_(u) { return !!u && (u.role === 'reader1' || u.role === 'reader2'); }
+function photoSheet_() {
+  const id = props_().getProperty('REGISTER_ID');
+  if (!id) throw new Error('The numbers register is not set up yet.');
+  const ss = SpreadsheetApp.openById(id);
+  const sh = ss.getSheetByName(PHOTO_TAB) || ss.insertSheet(PHOTO_TAB);
+  if (sh.getLastRow() === 0) sh.appendRow(PHOTO_COLS);
+  return sh;
+}
+function photoFolder_() {                                   // at the top of the PI's Drive, so it never inherits the study folder's sharing
+  const P = props_(), id = P.getProperty('PHOTO_FOLDER_ID');
+  if (id) { try { const f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) { /* make a new one */ } }
+  const f = DriveApp.createFolder('TBDM photos of source documents (confidential, PI only)');
+  P.setProperty('PHOTO_FOLDER_ID', f.getId());
+  return f;
+}
+function photoRows_(sh) {
+  const v = sh.getDataRange().getValues(); if (v.length < 2) return [];
+  const head = v[0].map(function (h) { return str_(h); });
+  return v.slice(1).map(function (r, i) { const o = { _row: i + 2 }; head.forEach(function (h, k) { o[h] = r[k]; }); return o; });
+}
+function photoVisible_(u, r) {
+  if (str_(r.deleted)) return false;
+  if (photoViewRole_(u)) return true;
+  return photoReader_(u) && str_(r.doc) === 'CXR' && str_(r.covered) === 'Y';
+}
+function bytesHex_(bytes) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, bytes).map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join(''); }
+function photoPut_(u, req) {
+  if (!photoTakeRole_(u)) return { ok: false, error: 'not authorised', code: 401 };
+  if (!photosOn_()) return { ok: false, error: 'Photos of documents are switched off.' };
+  const pid = str_(req.photo_id).toLowerCase(), sid = code_(req.study_id), doc = code_(req.doc), visit = code_(req.visit), covered = code_(req.covered) === 'Y' ? 'Y' : 'N';
+  if (!/^[0-9a-f]{32}$/.test(pid)) return { ok: false, error: 'bad photo id' };
+  if (!idOk_(sid)) return { ok: false, error: 'not a valid study number' };
+  if (!PHOTO_DOCS[doc]) return { ok: false, error: 'unknown document type' };
+  if (visit && !/^(V[1-5]|U[1-5])$/.test(visit)) return { ok: false, error: 'unknown visit' };
+  const mime = str_(req.mime);
+  if (['image/jpeg', 'image/png'].indexOf(mime) < 0) return { ok: false, error: 'only JPEG or PNG images' };
+  const data = String(req.data || '');
+  if (!data || data.length > PHOTO_MAX) return { ok: false, error: 'the image is empty or too large' };
+  const bytes = Utilities.base64Decode(data), sha = bytesHex_(bytes);
+  if (str_(req.sha256).toLowerCase() !== sha) return { ok: false, error: 'the image was damaged on the way; it will be sent again' };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = photoSheet_();
+    if (photoRows_(sh).some(function (r) { return str_(r.photo_id) === pid; })) return { ok: true, photo_id: pid, again: true };   // a retry of a photo already received
+    const name = [sid, visit || '-', doc, covered === 'Y' ? 'covered' : 'original', pid.slice(0, 8)].join('_') + (mime === 'image/png' ? '.png' : '.jpg');
+    const file = photoFolder_().createFile(Utilities.newBlob(bytes, mime, name));
+    sh.appendRow([pid, sid, doc, visit, covered, file.getId(), sha, str_(req.taken_at).slice(0, 25), u.email, new Date().toISOString(), '', str_(req.note).slice(0, 200), '']);
+    logAudit_('PHOTO_ADD', '', sid, '', '', PHOTO_DOCS[doc] + (visit ? ' ' + visit : '') + (covered === 'Y' ? ' (label covered)' : ''), u.email);
+    return { ok: true, photo_id: pid };
+  } finally { lock.releaseLock(); }
+}
+function photoList_(u, req) {
+  if (!photoViewRole_(u) && !photoReader_(u)) return { ok: false, error: 'not authorised', code: 401 };
+  if (!photosOn_()) return { ok: true, photos: [], off: true };
+  const sid = code_(req.study_id);
+  if (!idOk_(sid)) return { ok: false, error: 'not a valid study number' };
+  const list = photoRows_(photoSheet_()).filter(function (r) { return str_(r.study_id) === sid && photoVisible_(u, r); })
+    .map(function (r) { return { photo_id: str_(r.photo_id), doc: str_(r.doc), visit: str_(r.visit), covered: str_(r.covered), taken_at: str_(r.taken_at), taken_by: photoReader_(u) ? '' : str_(r.taken_by), flag: str_(r.flag) }; });
+  return { ok: true, photos: list };
+}
+function photoGet_(u, req) {
+  if (!photoViewRole_(u) && !photoReader_(u)) return { ok: false, error: 'not authorised', code: 401 };
+  if (!photosOn_()) return { ok: false, error: 'Photos of documents are switched off.' };
+  const pid = str_(req.photo_id).toLowerCase(), r = photoRows_(photoSheet_()).filter(function (x) { return str_(x.photo_id) === pid; })[0];
+  if (!r || !photoVisible_(u, r)) return { ok: false, error: 'photo not found' };
+  const blob = DriveApp.getFileById(str_(r.file_id)).getBlob();
+  logAudit_('PHOTO_VIEW', '', str_(r.study_id), '', '', PHOTO_DOCS[str_(r.doc)] + (str_(r.visit) ? ' ' + str_(r.visit) : '') + ' photo opened', u.email);
+  return { ok: true, photo_id: pid, mime: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
+}
+function photoFlag_(u, req) {                              // "too poor to read": the PI is told by e-mail
+  if (!photoViewRole_(u) && !photoReader_(u)) return { ok: false, error: 'not authorised', code: 401 };
+  const pid = str_(req.photo_id).toLowerCase(), lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = photoSheet_(), r = photoRows_(sh).filter(function (x) { return str_(x.photo_id) === pid; })[0];
+    if (!r || !photoVisible_(u, r)) return { ok: false, error: 'photo not found' };
+    sh.getRange(r._row, PHOTO_COLS.indexOf('flag') + 1).setValue('poor: ' + u.role + ' ' + todayIso_());
+    logAudit_('PHOTO_FLAG', '', str_(r.study_id), '', 'poor', PHOTO_DOCS[str_(r.doc)] + ' photo marked too poor to read', u.email);
+    notifyPI_('TB-DM study: photo too poor to read', str_(r.study_id) + ': the ' + PHOTO_DOCS[str_(r.doc)] + (str_(r.visit) ? ' (' + str_(r.visit) + ')' : '') + ' photo was marked too poor to read by ' + u.role + '. Please arrange a better photo or the original.');
+    return { ok: true };
+  } finally { lock.releaseLock(); }
+}
+function menuPhotoSwitch() {
+  requirePI_();
+  const ui = SpreadsheetApp.getUi(), P = props_(), on = photosOn_();
+  const a = ui.alert('Photos of documents', 'It is now ' + (on ? 'ON' : 'OFF') + '. Photos of consent forms, lab reports, radiographs and other source documents show names and record numbers. ' +
+    'Switch it on only after the ethics committee has approved storing them.\n\nSwitch it ' + (on ? 'OFF' : 'ON') + '?', ui.ButtonSet.YES_NO);
+  if (a !== ui.Button.YES) return;
+  P.setProperty('PHOTOS_ENABLED', on ? 'N' : 'Y');
+  if (!on) { photoFolder_(); photoSheet_(); }
+  logAudit_('PHOTO_SWITCH', '', '', on ? 'ON' : 'OFF', on ? 'OFF' : 'ON', 'photos of documents switched', me_());
+  ui.alert('Photos of documents are now ' + (on ? 'OFF. Photos already received are kept.' : 'ON. Phones show the photo buttons after their next sync.'));
+}
+function photoDeleteFor_(sid, why, by) {                  // the participant chose "destroy all data": every photo goes to the bin and its index row is marked
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  let n = 0;
+  try {
+    const sh = photoSheet_();
+    photoRows_(sh).forEach(function (r) {
+      if (str_(r.study_id) !== sid || str_(r.deleted)) return;
+      try { DriveApp.getFileById(str_(r.file_id)).setTrashed(true); } catch (e) { /* already gone */ }
+      sh.getRange(r._row, PHOTO_COLS.indexOf('deleted') + 1).setValue(todayIso_() + ' ' + why);
+      n++;
+    });
+    logAudit_('PHOTO_DELETE', '', sid, '', '', n + ' photo(s) deleted: ' + why, by);
+  } finally { lock.releaseLock(); }
+  return n;
+}
+function menuPhotoDelete() {
+  requirePI_();
+  const ui = SpreadsheetApp.getUi();
+  const a = ui.prompt('Delete a participant\'s photos', 'Study number whose photos must be destroyed (for a withdrawal with the "destroy all data" choice):', ui.ButtonSet.OK_CANCEL);
+  if (a.getSelectedButton() !== ui.Button.OK) return;
+  const sid = a.getResponseText().trim().toUpperCase();
+  if (!idOk_(sid)) { ui.alert('Not a valid study number.'); return; }
+  if (ui.alert('Delete photos of ' + sid + '?', 'Every photo of ' + sid + ' goes to the Drive bin. Empty the bin to destroy them for good.', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+  const n = photoDeleteFor_(sid, 'withdrawal, destroy chosen', me_());
+  ui.alert(n + ' photo(s) of ' + sid + ' deleted. Empty the Drive bin, and record this on the Withdrawal Deletion Record.');
+}
+
 // ---------------------------------------------------------------- erase all test data (PI only, practice before approval)
 function clearBelowHeader_(sh, ncols) {
   if (!sh || sh.getLastRow() < 2) return 0;
@@ -2445,7 +2589,9 @@ function menuEraseAll() {
     ['ALERTS', 'QC_LOG'].forEach(function (nm) { n += clearBelowHeader_(ss.getSheetByName(nm), 0); });
     [1, 2].forEach(function (r) { const id = P.getProperty('READER' + r + '_ID'); if (id) n += clearBelowHeader_(SpreadsheetApp.openById(id).getSheetByName(READER.tab), READER.cols.length); });
     const rid = P.getProperty('REGISTER_ID');
-    if (rid) { const rs = SpreadsheetApp.openById(rid); rs.getSheets().forEach(function (sh) { n += clearBelowHeader_(sh, 0); });         }   // the register tab and any old tab kept after the merge
+    if (rid) { const rs = SpreadsheetApp.openById(rid); rs.getSheets().forEach(function (sh) { n += clearBelowHeader_(sh, 0); });         }
+    const pf = P.getProperty('PHOTO_FOLDER_ID');           // photos of test documents go to the bin with the rest
+    if (pf) { try { const it = DriveApp.getFolderById(pf).getFiles(); while (it.hasNext()) it.next().setTrashed(true); } catch (e) { /* no folder */ } }   // the register tab and any old tab kept after the merge
     const au = auditSS_();
     ['LOG', 'SNAPSHOTS', 'APP_KEYS'].forEach(function (nm) { n += clearBelowHeader_(au.getSheetByName(nm), 0); });
     Object.keys(P.getProperties()).forEach(function (k) { if (k.indexOf(BLOCK_PREFIX) === 0) P.deleteProperty(k); });   // numbers held by phones: numbering restarts at TBDM-001
