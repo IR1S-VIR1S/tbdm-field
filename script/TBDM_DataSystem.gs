@@ -2432,7 +2432,7 @@ function menuLinkSwitch() {
 // Switched on with "PI: photos of documents on or off".
 const PHOTO_TAB = 'PHOTOS';
 const PHOTO_COLS = ['photo_id', 'study_id', 'doc', 'visit', 'covered', 'file_id', 'sha256', 'taken_at', 'taken_by', 'uploaded_at', 'flag', 'note', 'deleted'];
-const PHOTO_DOCS = { CONSENT: 'consent form', CORE: 'Core Per-Patient File', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
+const PHOTO_DOCS = { CONSENT: 'consent form', CORE: 'Core Per-Patient File', EXAM: 'examination sheet', VISIT: 'visit sheet', PHQ: 'PHQ-9 and GAD-7 sheet', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
 const PHOTO_MAX = 4000000;                                // base64 characters, about 3 MB of image
 function photosOn_() { return props_().getProperty('PHOTOS_ENABLED') === 'Y'; }
 function photoTakeRole_(u) { return !!u && ['pi', 'data', 'qc', 'nurse', 'dots'].indexOf(u.role) >= 0; }
