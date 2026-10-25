@@ -2584,7 +2584,7 @@ const PHOTO_TAB = 'PHOTOS';
 const PHOTO_COLS = ['photo_id', 'study_id', 'doc', 'visit', 'covered', 'file_id', 'sha256', 'taken_at', 'taken_by', 'uploaded_at', 'flag', 'note', 'deleted'];
 const PHOTO_DOCS = { CONSENT: 'consent form', CORE: 'Core Per-Patient File', EXAM: 'examination sheet', SMEAR: 'sputum smear report', LAB_CBC: 'lab report: blood count', LAB_LFT: 'lab report: liver tests', LAB_HBA1C: 'lab report: HbA1c', LAB_LIPID: 'lab report: lipid profile', LAB_FPG: 'lab report: fasting glucose', LAB_HEP: 'lab report: viral serology (HBsAg, anti-HCV)', LAB_HIV: 'lab report: HIV', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
 const PHOTO_MAX = 4000000;                                // base64 characters, about 3 MB of image
-const PHOTO_MAX_CXR = 24000000;                           // radiographs keep full resolution for scoring: about 18 MB of image
+const PHOTO_MAX_CXR = 40000000;                           // radiographs are exempt from compression and keep full resolution: up to about 30 MB of image
 function photosOn_() { return props_().getProperty('PHOTOS_ENABLED') === 'Y'; }
 function photoTakeRole_(u) { return !!u && (u.role === 'pi' || !!userAccess_(u).photoTake); }
 function photoViewRole_(u) { return !!u && (u.role === 'pi' || !!userAccess_(u).photoView); }
