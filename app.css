@@ -277,11 +277,6 @@ main h2 { background: var(--brand-soft); color: var(--brand-ink); padding: 8px 1
 @media (prefers-reduced-motion: reduce) { .sync .syncbtn.spin .ico, .top .icon.locking .ico, .top .icon.locking .shackle { animation: none; } }
 
 
-/* Pull down to sync */
-#ptr { position: fixed; top: calc(var(--safe-top) + 64px); left: 50%; z-index: 7; width: 40px; height: 40px; border-radius: 50%; background: var(--card); color: var(--brand-ink); box-shadow: 0 2px 10px rgba(0,0,0,.2); display: flex; align-items: center; justify-content: center; transform: translate(-50%,-50px); opacity: 0; transition: opacity .15s; pointer-events: none; }
-#ptr .ico, #ptr .ico svg { width: 22px; height: 22px; display: block; }
-#ptr.armed { background: var(--brand); color: #fff; }
-#ptr.spin .ico { animation: spinr .8s linear infinite; }
 
 /* Top bar: the title is centred; Back on the left, Lock on the right */
 .top { display: grid; grid-template-columns: 88px minmax(0, 1fr) 88px; gap: 8px; }

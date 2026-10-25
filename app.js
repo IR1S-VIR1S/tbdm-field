@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'a1e6d798f16d';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'c06bf543e1f1';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -311,21 +311,17 @@ document.addEventListener('visibilitychange', () => {
   else if (KEY && T.hiddenAt && Date.now() - T.hiddenAt > IDLE_LOCK_MS) lock();
 });
 window.addEventListener('online', () => { T.weak = false; paintSync(); sync(); });
-// Pull down at the top of any screen to sync. A round arrow follows the finger, turns as it is pulled, and spins while the sync runs.
+// Pull down at the top of any screen to sync. The Sync icon in the bar spins while it runs (no extra animation in the page).
 (function pullToSync() {
-  const PULL = 70; let y0 = null, dy = 0, ptr = null;
+  const PULL = 70; let y0 = null, dy = 0;
   const ready = () => KEY && S && !T.practice && $('#modal').hidden && (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
-  const pad = () => { if (!ptr) { ptr = el('div', { id: 'ptr', 'aria-hidden': 'true' }, icon('sync')); document.body.append(ptr); } return ptr; };
-  const show = (d, spin) => { const p = pad(), k = Math.min(d, PULL * 1.6); p.style.transform = 'translate(-50%,' + Math.round(k - 50) + 'px) rotate(' + Math.round(-k * 4) + 'deg)'; p.style.opacity = String(Math.min(1, k / PULL)); p.classList.toggle('armed', d >= PULL); p.classList.toggle('spin', !!spin); };
-  const hide = () => { if (ptr) { ptr.classList.remove('spin', 'armed'); ptr.style.transform = 'translate(-50%,-50px)'; ptr.style.opacity = '0'; } };
   document.addEventListener('touchstart', (e) => { y0 = e.touches.length === 1 && ready() && !e.target.closest('.bnav, #modal') ? e.touches[0].clientY : null; dy = 0; }, { passive: true });
-  document.addEventListener('touchmove', (e) => { if (y0 === null) return; dy = (e.touches[0].clientY - y0) * 0.55; if (dy > 4) show(dy); else if (ptr) hide(); }, { passive: true });
+  document.addEventListener('touchmove', (e) => { if (y0 !== null) dy = (e.touches[0].clientY - y0) * 0.55; }, { passive: true });
   document.addEventListener('touchend', () => {
     if (y0 === null) return; y0 = null;
-    if (dy < PULL) { hide(); return; }
-    if (!navigator.onLine) { hide(); toast('No internet connection. Entries stay on this phone.'); return; }
-    show(PULL, true); T.spinUntil = Date.now() + 900; paintSync();
-    Promise.resolve(sync()).catch(() => {}).then(() => setTimeout(() => { hide(); paintSync(); }, Math.max(0, T.spinUntil - Date.now())));
+    if (dy < PULL) return;
+    if (!navigator.onLine) { toast('No internet connection. Entries stay on this phone.'); return; }
+    T.spinUntil = Date.now() + 900; setTimeout(paintSync, 950); sync(); paintSync();
   }, { passive: true });
 })();
 window.addEventListener('offline', paintSync);
