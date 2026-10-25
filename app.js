@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '528178ebc9f1';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'eef57c5f57ac';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -203,7 +203,7 @@ function view(tab) {
 function data() { const d = {}; SCHEMA.forEach((t) => { d[t.tab] = view(t.tab); }); return d; }
 function derived() {
   const out = computeDerived_(data(), todayIso(), S && S.server && S.server.held);
-  if (T.practice) out.queries = out.queries.filter((q) => !/^Study number skipped/.test(q[4]));      // practice numbers sit at the top of the range on purpose
+  if (T.practice && !watching()) out.queries = out.queries.filter((q) => !/^Study number skipped/.test(q[4]));      // practice numbers sit at the top of the range on purpose
   return out;
 }
 function enrolledMap() { const m = {}; view('S1_ENROL').forEach((r) => { if (r.study_id) m[s_(r.study_id).toUpperCase()] = true; }); return m; }
@@ -304,7 +304,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) { T.idle = setTimeout(lock, IDLE_LOCK_MS); sessTouch(); } }
-function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.roles = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
+function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.roles = null; T.preview = null; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -384,7 +384,7 @@ function topBar(title, opts) {
   return [bar, el('div', { id: 'syncbar' }, syncBar())];
 }
 function syncBar() {
-  if (T.practice) return el('div', { class: 'sync practice' }, el('span', { class: 'grow' }, 'PRACTICE: nothing is saved or sent'), el('button', { onclick: practiceStop }, 'Leave'));
+  if (T.practice) return el('div', { class: 'sync practice' }, el('span', { class: 'grow' }, T.preview ? PMODE[T.pmode].name.toUpperCase() + ' AS ' + previewName(T.preview).toUpperCase() + ' · ' + PMODE[T.pmode].tag : 'PRACTICE: nothing is saved or sent'), el('button', { onclick: practiceStop }, 'Leave'));
   const n = S.outbox.filter((c) => c.status === 'pending').length, bad = S.outbox.filter((c) => c.status !== 'pending').length;
   const online = navigator.onLine;
   const text = T.syncing ? 'Sending and updating…' : T.revoked ? 'This phone no longer has access. Tell the PI.'
@@ -493,7 +493,7 @@ function lockScreen() {
 function role() { return S.cfg.role || 'data'; }
 // What this phone's role may do: the ticks the PI set in the Role manager, sent with every pull (the workbook enforces them).
 // An older workbook sends none: then the defaults apply, which match the access every role had before the Role manager.
-function acc() { const src = (T.real && T.real.server) || (S && S.server); return src && src.access ? src.access : accessFor_(role(), null); }
+function acc() { const src = T.preview ? S.server : (T.real && T.real.server) || (S && S.server); return src && src.access ? src.access : accessFor_(role(), null); }
 const can = (k) => !!acc()[k];
 const isReader = () => role() === 'reader1' || role() === 'reader2';
 const limited = () => !isReader() && role() !== 'pi' && !can('view');        // holds only the tabs and columns its ticks need
@@ -623,6 +623,8 @@ const ICONS = {
   face: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.2 15.6a4 4 0 0 0 5.6 0"/>',
   practice: '<path d="M2.5 9 12 4.5 21.5 9 12 13.5z"/><path d="M6.5 11v4.5c0 1.5 2.5 3 5.5 3s5.5-1.5 5.5-3V11M21.5 9v5"/>',
   check: '<path d="M9 3.5h6l1 2h2.5a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1H8z"/><path d="m8.5 13 2.4 2.4 4.6-4.8"/>',
+  debug: '<path d="M8.5 8.5a3.5 3.5 0 0 1 7 0v1h-7z"/><rect x="7" y="9.5" width="10" height="10" rx="5"/><path d="M12 12v6M3.5 13H7M17 13h3.5M4.5 8l2.8 2M19.5 8l-2.8 2M4.5 19l2.8-2M19.5 19l-2.8-2"/>',
+  eye: '<path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
   roles: '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 3.5v17"/><path d="m12.2 12 1.3 1.3 2.6-2.6"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
 };
@@ -693,9 +695,9 @@ function navDrag(nav) {
 function bottomNav(active) {
   let dueN = 0, qN = 0;
   try { const d = derived(); dueN = d.schedule.filter((r) => r[5] !== 'upcoming').length; qN = d.queries.length; } catch (e) { dueN = 0; qN = 0; }
-  const pend = T.practice || !confCopy() && !(T.reg && T.reg.list) ? 0 : identifiersPending(T.reg && T.reg.list ? T.reg.list : confAsList()).length;
+  const pend = (T.practice && !T.preview) || !confCopy() && !(T.reg && T.reg.list) ? 0 : identifiersPending(T.reg && T.reg.list ? T.reg.list : confAsList()).length;
   const ids = navIds();
-  const tabs = navOrdered(NAV_TABS.filter((t) => ids.indexOf(t[0]) >= 0 && ((t[0] !== 'linkpick' && t[0] !== 'register') || !T.practice)));
+  const tabs = navOrdered(NAV_TABS.filter((t) => ids.indexOf(t[0]) >= 0 && ((t[0] !== 'linkpick' && t[0] !== 'register') || !T.practice || T.preview)));
   const nav = el('nav', { class: 'bnav', 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'data-tab': t[0], 'aria-current': t[0] === active ? 'page' : null, onclick: () => tabTo(t[0]) },
     icon(t[2]), t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'queries' && qN ? el('i', { class: 'badge' }, String(qN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : null, el('span', { class: 'lbl' }, t[1]))));
   navDrag(nav);
@@ -745,7 +747,7 @@ function measuresDue() {
   return out;
 }
 function piHome(out, bad, waiting, oldest, dueN) {
-  const nurse = isNurse(), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], idp = confRole() && !T.practice ? identifiersPending((T.reg && T.reg.list) || confAsList()) : [];
+  const nurse = isNurse(), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], idp = confRole() && (!T.practice || T.preview) ? identifiersPending((T.reg && T.reg.list) || confAsList()) : [];
   const group = {}; out.queries.forEach((q) => { const g = q[0] || 'Screening log'; (group[g] = group[g] || []).push(q); });
   const qkeys = Object.keys(group).sort(), md = nurse ? measuresDue() : [];
   const main = el('main', { class: 'pihome' },
@@ -892,14 +894,14 @@ const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']]
 // A phone with one bar of signal reports "online" yet cannot finish a request. For the confidential screens a saved copy exists, so a request
 // that fails or takes longer than FAST_MS switches them to that copy (T.weak) instead of making the user wait, until the next request that succeeds.
 const FAST_MS = 3000;
-const linkUp = () => navigator.onLine && !(T.weak && Date.now() - T.weakAt < 60000 && confCopy());       // after a minute it tries the network again
+const linkUp = () => !T.preview && navigator.onLine && !(T.weak && Date.now() - T.weakAt < 60000 && confCopy());       // after a minute it tries the network again
 const netFail = (e) => !!e && (e.name === 'AbortError' || e.name === 'TypeError');
 async function confApi(body) {
   if (!confCopy()) return api(body);                    // no saved copy to fall back on: wait as long as it takes
   try { const r = await api(body, FAST_MS); T.weak = false; return r; }
   catch (e) { if (netFail(e)) { T.weak = true; T.weakAt = Date.now(); } throw e; }
 }
-function confCopy() { return confRole() && !T.practice && S.conf && S.conf.rows ? S.conf : null; }
+function confCopy() { return confRole() && (!T.practice || T.preview) && S.conf && S.conf.rows ? S.conf : null; }
 async function confSave(res) {
   if (!confRole() || T.practice || !res || !res.ok) return;
   S.conf = res.link ? { at: Date.now(), next: res.next, rows: res.rows.map((r) => Object.assign({}, r)) } : null;
@@ -951,6 +953,7 @@ async function regLoad() {
   st.loading = false; render();
 }
 async function regAssign() {
+  if (previewBlock()) return;
   const st = regState();
   if (st.busy) return;
   if (!linkUp() && !confCopy()) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
@@ -1065,6 +1068,7 @@ async function linkLoad(sid) {
   st.busy = false; render();
 }
 async function linkSave() {
+  if (previewBlock()) return;
   const st = T.link;
   if (!linkUp() && !confCopy()) { st.err = 'No internet connection. Nothing was saved.'; render(); return; }
   if (!s_((st.form || {}).mrn).trim() || !s_((st.form || {}).phone).trim()) { st.err = 'Not saved. The record number and the telephone number are both required.'; render(); return; }
@@ -1407,7 +1411,7 @@ function participant(p) {
     el('div', { class: 'facts4' }, facts.map((f) => el('div', { class: hot(f) ? 'bad' : '' }, el('span', null, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
     (() => {                                                   // confidential blocks side by side: Contact (PI) and Photos (PI, verifier)
       const t = [
-        can('contacts') && !T.practice ? contactTile(sid) : null,
+        can('contacts') && (!T.practice || T.preview) ? contactTile(sid) : null,
         can('photoView') && photosOn() ? photosTile(sid) : null].filter(Boolean);
       return t.length ? el('div', { class: 'ctiles' + (t.length === 1 ? ' solo' : '') }, t) : null;
     })(),
@@ -1454,7 +1458,7 @@ function contactAct(sid, c) {
 function cRecent() { try { return JSON.parse(localStorage.getItem('tbdm_crecent') || '[]').filter((x) => typeof x === 'string').slice(0, 5); } catch (e) { return []; } }
 function cRemember(sid) { T.cq = ''; try { localStorage.setItem('tbdm_crecent', JSON.stringify([sid].concat(cRecent().filter((x) => x !== sid)).slice(0, 5))); } catch (e) { /* no storage: skip */ } }
 function linkPick() {
-  if (!can('contacts') || T.practice) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is not part of your role, and is not available in practice mode.'))]);
+  if (!can('contacts') || (T.practice && !T.preview)) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is not part of your role, and is not available in practice mode.'))]);
   const q = el('input', { class: 'search', type: 'search', placeholder: 'Study Number, MRN, Name or Telephone', autocomplete: 'off', value: T.cq || '' });
   const list = el('div', { class: 'list conf' });
   const note = el('div', { class: 'card small muted', hidden: true });
@@ -1642,19 +1646,22 @@ function toolTile(ic, title, sub, fn, id, off) {
   return el('button', { class: 'tool' + (off ? ' off' : ''), id: id || null, onclick: fn, disabled: off ? true : null }, icon(ic), el('b', null, title), sub ? el('small', null, sub) : null);
 }
 function settings() {
-  if (T.practice) return topBar('Settings').concat([el('main', null, practiceCard())]);
+  if (T.practice && !T.preview) return topBar('Settings').concat([el('main', null, practiceCard())]);
   const pending = S.outbox.length, pi = role() === 'pi';
   // Which tools appear follows what the role holds: a log only where this phone has that tab, Export for the PI, no Practice for the DOTS incharge.
   const holds = (t) => !!(S.server && S.server.tabs && S.server.tabs[t]);
   const tiles = [
     holds('S0_SCREEN') ? toolTile('logs', 'Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')) : null,
     can('verify') && holds('QC_LOG') ? toolTile('check', 'Verification log', view('QC_LOG').length + ' checks', () => go('qclog')) : null,
-    can('screen') || can('view') || can('measure') || isReader() ? toolTile('practice', 'Practice mode', 'Made-up patients', practiceAsk) : null,
+    !T.preview && (can('screen') || can('view') || can('measure') || isReader()) ? toolTile('practice', 'Practice mode', 'Made-up patients', practiceAsk) : null,
     pi ? toolTile('roles', 'Role manager', 'Who can do what', () => { T.roles = null; go('roles'); }, 'role-manager') : null,
+    pi ? toolTile('eye', 'Surveillance', 'A role\'s view, read only', () => previewAsk('watch'), 'surveil') : null,
+    pi ? toolTile('debug', 'Debugging', 'A role on made-up data', () => previewAsk('debug'), 'debug') : null,
     can('export') && !T.practice ? toolTile('export', 'Export data', 'Excel, CSV, SPSS', exportAsk, 'export-data') : null,
     toolTile('update', 'Update app', 'Get newest', () => confirmLeave(checkUpdate), 'update-now'),
     bioTile()];
   return topBar('Settings').concat([el('main', null,
+    T.preview ? previewCard() : null,
     el('h2', null, 'Tools'), el('div', { class: 'tools' }, tiles),
     el('h2', null, 'Account'),
     el('div', { class: 'list' }, [['Account', S.cfg.email], ['Role', S.cfg.role], ['Initials', S.cfg.initials], ['Server', (S.cfg.api || '').replace(/^https:\/\/([^/]+).*$/, '$1')],
@@ -1729,7 +1736,7 @@ function visible(tab, c, v, vals) {
   if (APP_SERIAL[tab] === c.key) return false;
   return true;
 }
-function readOnly(tab) { return !accessWriteTab_(role(), acc(), tab); }
+function readOnly(tab) { return watching() || !accessWriteTab_(role(), acc(), tab); }
 function formScreen(p) {
   const tab = p.tab, def = defOf(tab), keys = APP_KEYS[tab], serial = APP_SERIAL[tab];
   if (!T.form || T.form.tab !== tab) {
@@ -1751,7 +1758,7 @@ function formScreen(p) {
   if (pend && pend.status !== 'pending') main.append(el('div', { class: 'card alert' }, el('b', null, 'The workbook did not accept this entry:'), el('ul', { class: 'small' }, Object.keys(pend.errors || {}).map((k) => el('li', null, (k === '_' ? '' : k + ': ') + pend.errors[k])))));
   if (p.query) main.append(el('div', { class: 'card qbanner' }, el('b', null, 'Query: '), p.query,
     p.focus ? el('button', { type: 'button', class: 'btn qgo', onclick: () => focusField(p.focus) }, 'Show the field') : null));
-  if (F.ro) main.append(el('div', { class: 'card small muted' }, 'View only: your role does not enter data here.'));
+  if (F.ro) main.append(el('div', { class: 'card small muted' }, watching() && accessWriteTab_(role(), acc(), F.tab) ? 'Read only in Surveillance. ' + previewName(T.preview) + ' can enter data here.' : 'View only: your role does not enter data here.'));
   if (serial && F.existing) main.append(el('div', { class: 'card small' }, serial.replace('_', ' ') + ': ', el('b', null, F.existing[serial] || 'assigned by the workbook when sent')));
   const fieldsBox = el('div');
   main.append(fieldsBox, el('div', { id: 'calc' }));
@@ -2053,7 +2060,70 @@ function practiceStart() {
   S.server = { access: T.real.server && T.real.server.access, tabs: practiceTabs(), at: Date.now(), films: /^reader/.test(T.real.cfg.role) ? [{ study_id: PRAC_A, cxr_date: isoOf_(dayNo_(todayIso()) - 41), repeat: false }, { study_id: PRAC_B, cxr_date: isoOf_(dayNo_(todayIso()) - 4), repeat: false }] : [] };
   T.practice = true; resetNav(); T.form = null; render();
 }
-function practiceStop() { if (!T.practice) return; S = T.real; T.real = null; T.practice = false; resetNav(); T.form = null; render(); }
+function practiceStop() { if (!T.practice) return; S = T.real; T.real = null; T.practice = false; T.preview = null; T.pmode = null; T.reg = null; T.link = null; resetNav(); T.form = null; render(); }
+// ---- PI only: two ways to enter another role, both built from the ticks saved in the Role manager, neither ever sends anything.
+// Surveillance ('watch'): the real study data on this phone, cut to exactly what that role's phone would receive; read only.
+// Debugging ('debug'): the practice sandbox (made-up participants and register); entries are allowed and stay in the sandbox.
+// The PI's own data is set aside untouched and comes back on leaving.
+const PREVIEW_ROLES = [['data', 'Data entry'], ['qc', 'Verifier'], ['nurse', 'Nurse'], ['dots', 'DOTS incharge'], ['reader1', 'Radiograph reader']];
+const PMODE = { watch: { name: 'Surveillance', tag: 'read only', what: 'the real study data on this phone, exactly as that role receives it. Read only: nothing can be entered, saved or sent.' },
+  debug: { name: 'Debugging', tag: 'nothing is saved or sent', what: 'made-up participants. You can enter data and follow every step; it stays here and nothing is sent.' } };
+function previewName(r) { return (PREVIEW_ROLES.filter((x) => x[0] === r)[0] || [r, r])[1]; }
+const watching = () => !!T.preview && T.pmode === 'watch';
+function previewAsk(mode) {
+  const M = PMODE[mode];
+  modal(M.name + ': choose a role', [el('p', null, 'You will see that role\'s screens with the access saved in the Role manager, on ' + M.what),
+    el('div', { class: 'list' }, PREVIEW_ROLES.map((x) => el('button', { class: 'row', type: 'button', 'data-role': x[0], onclick: () => { const m = $('#modal'); m.hidden = true; m.replaceChildren(); previewStart(x[0], mode); } },
+      el('div', { class: 'main' }, el('div', null, x[1])), el('span', { class: 'chev' }))))], [['Cancel', null]]);
+}
+// What the workbook would send that role (appPull_): every tab with the clinical data; otherwise only the tabs its ticks need, measurement columns only.
+function previewTabs(real, a, r) {
+  const src = (real.server && real.server.tabs) || {}, out = {}, want = {};
+  if (/^reader/.test(r)) return { R_SCORES: { cols: READER.cols.map((c) => c.key), rows: [] } };
+  if (a.view) Object.keys(src).forEach((t) => { want[t] = 1; });
+  else { if (a.screen) { want.S0_SCREEN = 1; want.S1_ENROL = 1; } if (a.measure) { want.S1_ENROL = 1; want.S2_BASELINE = 1; want.VISITS = 1; } if (a.verify) want.QC_LOG = 1; }
+  Object.keys(want).forEach((t) => {
+    const T0 = src[t]; if (!T0) return;
+    const keep = T0.cols.map((k, i) => [k, i]).filter((x) => a.view || NURSE_SCOPE[t] === undefined || nurseCol_(t, x[0]));
+    out[t] = { cols: keep.map((x) => x[0]), rows: T0.rows.map((row) => keep.map((x) => row[x[1]])) };
+  });
+  return out;
+}
+function previewStart(r, mode) {
+  const real = T.preview ? T.real : S;
+  if (!real || real.cfg.role !== 'pi' || (T.practice && !T.preview) || !PMODE[mode]) return;
+  if (T.syncing) { toast('The phone is sending entries. Try again in a moment.'); return; }
+  const a = accessFor_(r, (real.server && real.server.accessStored) || null), rs = real.server || {}, day = (n) => isoOf_(dayNo_(todayIso()) - n);
+  T.real = real; T.preview = r; T.pmode = mode; T.practice = true; T.reg = null; T.link = null;
+  S = { cfg: Object.assign({}, real.cfg, { token: '', api: '', email: PMODE[mode].name.toLowerCase() + ' as ' + previewName(r), role: r }), outbox: [], lastSync: Date.now(), confOut: [],
+    server: { access: a, tabs: {}, regnums: [], held: [], photos: false, at: Date.now(), films: [] } };
+  if (mode === 'watch') {
+    const cx = rs.tabs && rs.tabs.S3_CXR, ci = (k) => (cx ? cx.cols.indexOf(k) : -1);
+    Object.assign(S.server, { tabs: previewTabs(real, a, r), regnums: a.view ? rs.regnums || [] : [], held: a.view ? rs.held || [] : [], at: rs.at,
+      films: /^reader/.test(r) && cx ? cx.rows.filter((x) => x[ci('study_id')]).map((x) => ({ study_id: x[ci('study_id')], cxr_date: x[ci('cxr_date')], repeat: x[ci('repeat_read')] === 'Y' })) : [] });
+    S.lastSync = real.lastSync;
+    if ((a.numbers || a.ident) && real.conf && real.conf.rows) {         // the PI's register copy; names, record numbers and telephones only if that role is ticked for them
+      S.conf = { at: real.conf.at, next: real.conf.next, rows: real.conf.rows.map((x) => a.ident ? Object.assign({}, x) : { study_id: x.study_id, assigned_date: x.assigned_date, status: x.status, reason: x.reason }) };
+    }
+  } else {
+    S.server.films = /^reader/.test(r) ? [{ study_id: PRAC_A, cxr_date: day(41), repeat: false }, { study_id: PRAC_B, cxr_date: day(4), repeat: false }] : [];
+    S.server.tabs = practiceTabs();                     // the practice participants, cut to what this role's phone would hold
+    if (a.numbers || a.ident) {                         // a made-up register copy, so the Link register and Contacts can be tried
+      S.conf = { at: Date.now(), next: idOf_(CFG.ID_MAX - 2), rows: [
+        Object.assign({ study_id: PRAC_A, assigned_date: day(42), status: 'E', reason: '' }, a.ident ? { name: 'Practice Patient A', mrn: '000001', phone: '03000000001', guardian: '', address: '', note: '' } : {}),
+        Object.assign({ study_id: PRAC_B, assigned_date: day(6), status: 'E', reason: '' }, a.ident ? { name: '', mrn: '', phone: '', guardian: '', address: '', note: '' } : {})] };
+      S.nums = { dev: 'preview', blocks: [{ from: CFG.ID_MAX - 12, to: CFG.ID_MAX - 3 }], got: true, old: false, pend: '', err: '' };
+    }
+  }
+  resetNav(); T.form = null; render(); window.scrollTo(0, 0);
+}
+const previewBlock = () => { if (!watching()) return false; toast('Read only in Surveillance as ' + previewName(T.preview) + '.'); return true; };
+function previewCard() {
+  const M = PMODE[T.pmode];
+  return el('div', { class: 'card practice-card' }, el('b', null, M.name + ' as ' + previewName(T.preview) + ' (' + M.tag + ')'),
+    el('div', { class: 'small' }, 'That role\'s screens with the access saved in the Role manager, on ' + M.what + ' Photos are not shown here.'),
+    el('div', { class: 'row2' }, el('button', { class: 'btn block', type: 'button', onclick: () => previewAsk(T.pmode) }, 'Another role'), el('button', { class: 'btn primary block', type: 'button', id: 'preview-exit', onclick: practiceStop }, 'Back to PI')));
+}
 function practiceCommit() {                       // "sending" in practice: apply the queued entries to the sandbox copy only
   S.outbox.filter((c) => c.status === 'pending').forEach((c) => {
     const t = S.server.tabs[c.tab], d = defOf(c.tab), keys = APP_KEYS[c.tab], serial = APP_SERIAL[c.tab];
