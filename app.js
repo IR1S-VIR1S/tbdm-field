@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'd3651b857c6a';                 // replaced by build.js with the build's hash
+const BUILD_ID = '07d241fed4a5';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1275,8 +1275,8 @@ function participant(p) {
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
     (() => {                                                   // confidential blocks side by side: Contact (PI) and Photos (PI, verifier)
       const t = [
-        role() === 'pi' && !T.practice ? el('button', { class: 'ctile', id: 'tile-contact', 'aria-label': 'Contact: telephone, call, WhatsApp', title: 'Contact', onclick: () => go('link', { sid: sid }) }, icon('phone')) : null,
-        (role() === 'pi' || role() === 'qc') && photosOn() ? el('button', { class: 'ctile', id: 'tile-photos', 'aria-label': 'Photos of the paper record', title: 'Photos of the paper record', onclick: () => go('photos', { sid: sid }) }, icon('records')) : null].filter(Boolean);
+        role() === 'pi' && !T.practice ? contactTile(sid) : null,
+        (role() === 'pi' || role() === 'qc') && photosOn() ? photosTile(sid) : null].filter(Boolean);
       return t.length ? el('div', { class: 'ctiles' + (t.length === 1 ? ' solo' : '') }, t) : null;
     })(),
     visits,
@@ -1316,7 +1316,7 @@ function contactAct(sid, c) {
   modal(sid + (c.name ? ' · ' + c.name : ''), el('div', { class: 'card' }, el('div', { class: 'muted small' }, 'Telephone'), el('div', { class: 'tel big' }, ph),
     el('div', { class: 'row2' },
       el('a', { class: 'btn block', id: 'act-call', href: 'tel:' + ph.replace(/[^\d+]/g, ''), onclick: done }, 'Call'),
-      el('a', { class: 'btn block', id: 'act-wa', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer', onclick: done }, 'WhatsApp'))), [['Cancel', null]]);
+      el('a', { class: 'btn block', id: 'act-wa', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer', onclick: done }, 'WhatsApp'))), [['Contact details', () => go('link', { sid: sid })], ['Cancel', null]]);
 }
 // Contacts opened from the Contact page, newest first (study numbers only; names are read from the register copy when shown).
 function cRecent() { try { return JSON.parse(localStorage.getItem('tbdm_crecent') || '[]').filter((x) => typeof x === 'string').slice(0, 5); } catch (e) { return []; } }
@@ -2191,7 +2191,7 @@ function paintPhotoCard(target) {
     inp.addEventListener('change', () => { const f = inp.files && inp.files[0]; inp.value = ''; if (f) photoTake(f, F, doc); });
     return inp;
   };
-  box.replaceChildren(el('b', null, 'Photos of the paper record'),
+  box.replaceChildren(el('b', null, 'Source documents'),
     el('div', { class: 'small muted' }, sid ? 'Attached to ' + sid + (visit ? ' ' + visit : '') + '. Once sent, this phone cannot show them again.' : 'Enter the study number first.'),
     ...(PHOTO_DOCS_FOR[F.tab] || []).map((doc) => {
       const cam = pick(doc, true), file = pick(doc, false);
@@ -2209,23 +2209,58 @@ function photoViewCard(sid) {
   if (!photosOn() || !(photoViewer() || /^reader/.test(role())) || !sid) return null;
   const box = el('div', { class: 'card photoview', id: 'photoview' });
   const load = async () => {
-    box.replaceChildren(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Photos of the paper record'), el('div', { class: 'small muted' }, 'Loading…'));
+    box.replaceChildren(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Source documents'), el('div', { class: 'small muted' }, 'Loading…'));
     try {
       const r = await api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 20000);
       if (!r.ok) throw new Error(r.error || 'not available');
-      box.replaceChildren(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Photos of the paper record'),
+      box.replaceChildren(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Source documents'),
         r.photos.length ? el('div', { class: 'list' }, r.photos.map((ph) => el('button', { class: 'row', type: 'button', onclick: () => photoOpen(ph) },
           el('div', { class: 'main' }, el('div', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '') + (ph.covered === 'Y' ? ' (label covered)' : '')), el('div', { class: 'sub' }, [s_(ph.taken_at).replace('T', ' '), ph.taken_by].filter(Boolean).join(' · '))),
           ph.flag ? el('span', { class: 'chip bad' }, 'too poor') : null, el('span', { class: 'chev' })))) : el('div', { class: 'small muted' }, 'No photos yet.'));
-    } catch (e) { box.replaceChildren(el('b', null, 'Photos'), el('div', { class: 'small muted' }, navigator.onLine ? 'Could not load: ' + e.message : 'Photos open only with a signal.')); }
+    } catch (e) { box.replaceChildren(el('b', null, 'Source documents'), el('div', { class: 'small muted' }, navigator.onLine ? 'Could not load: ' + e.message : 'Photos open only with a signal.')); }
   };
-  box.append(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Photos of the paper record'), el('button', { class: 'btn block', type: 'button', id: 'photo-show', onclick: load }, 'Show photos'));
+  box.append(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Source documents'), el('button', { class: 'btn block', type: 'button', id: 'photo-show', onclick: load }, 'Show photos'));
   return box;
+}
+// ---- participant page blocks: what is worth knowing before tapping
+function contactTile(sid) {                                // the block opens the contact details; the number inside it is its own button: Call or WhatsApp
+  const L = confAsList(), r = L ? L.rows.filter((x) => s_(x.study_id).toUpperCase() === sid)[0] : null;
+  const name = r && s_(r.name), ph = r && s_(r.phone);
+  const open = () => go('link', { sid: sid });
+  return el('div', { class: 'ctile', id: 'tile-contact', role: 'button', tabindex: '0', 'aria-label': 'Contact details of ' + sid, onclick: open, onkeydown: (e) => { if (e.key === 'Enter') open(); } }, icon('phone'),
+    el('span', { class: 'ctx' }, el('b', null, name || 'Contact'), !ph && L ? el('small', null, 'No number yet') : null),
+    ph ? el('button', { class: 'telpill', type: 'button', id: 'tile-tel', 'aria-label': 'Call or WhatsApp ' + ph, onclick: (e) => { e.stopPropagation(); contactAct(sid, r); } }, ph) : null);
+}
+// The documents this participant's records call for, against the photos received: shows what is still missing.
+function photoNeeds(sid) {
+  const need = [['CONSENT', '', 'consent']];
+  view('LABS').filter((r) => r.study_id === sid && r.visit).forEach((r) => need.push(['LAB', r.visit, 'lab ' + r.visit]));
+  if (view('S3_CXR').some((r) => r.study_id === sid)) need.push(['CXR', '', 'radiograph']);
+  if (view('SPIRO').some((r) => r.study_id === sid)) need.push(['SPIRO', '', 'spirometry']);
+  if (view('END_STUDY').some((r) => r.study_id === sid && r.status === 'W')) need.push(['WITHDRAW', '', 'withdrawal record']);
+  return need;
+}
+function photoSummary(sid, list) {
+  const missing = photoNeeds(sid).filter((n) => !list.some((ph) => ph.doc === n[0] && (!n[1] || ph.visit === n[1]))).map((n) => n[2]);
+  const poor = list.filter((ph) => ph.flag).length;
+  const head = (list.length ? list.length + ' attached' : 'None attached') + (poor ? ' · ' + poor + ' too poor' : '');
+  const tail = missing.length ? 'Missing: ' + missing.slice(0, 2).join(', ') + (missing.length > 2 ? ' and ' + (missing.length - 2) + ' more' : '') : (list.length ? 'All documents attached' : '');
+  return [head, tail];
+}
+function photosTile(sid) {
+  T.phc = T.phc || {};
+  const c = T.phc[sid], b = el('button', { class: 'ctile', id: 'tile-photos', 'aria-label': 'Source documents of ' + sid, onclick: () => go('photos', { sid: sid }) }, icon('records'), el('span', { class: 'ctx' }));
+  const paint = (lines) => { const x = b.querySelector('.ctx'); x.replaceChildren(el('b', null, 'Documents'), ...lines.filter(Boolean).map((t) => el('small', null, t))); };
+  paint(c ? photoSummary(sid, c.list) : [navigator.onLine ? 'Checking…' : 'Opens with a signal']);
+  if (navigator.onLine && (!c || Date.now() - c.at > 60000)) setTimeout(async () => {          // never inside a render
+    try { const r = await api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 15000); if (r.ok) { T.phc[sid] = { at: Date.now(), list: r.photos }; const t = $('#tile-photos'); if (t) { const n = photosTile(sid); t.replaceWith(n); } } } catch (e) { /* stays as it is */ }
+  }, 0);
+  return b;
 }
 function photosScreen(p) {                                  // the participant's photos, loaded straight away (online only)
   const card = photoViewCard(p.sid);
   if (card) setTimeout(() => { const b = $('#photo-show'); if (b) b.click(); }, 0);
-  return topBar('Photos · ' + p.sid).concat([el('main', null, card || el('div', { class: 'card' }, 'Photos are not available on this phone.'))]);
+  return topBar('Source documents · ' + p.sid).concat([el('main', null, card || el('div', { class: 'card' }, 'Source documents are not available on this phone.'))]);
 }
 async function photoOpen(ph) {
   const ov = el('div', { class: 'photo-full', role: 'dialog', 'aria-label': 'Photo' }, el('div', { class: 'small' }, 'Loading…'));
