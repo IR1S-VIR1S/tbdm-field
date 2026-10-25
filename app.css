@@ -395,3 +395,11 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .seg.faded { opacity: .45; }
 #f-q_ru .seg.quick, #f-q_rl .seg.quick, #f-q_lu .seg.quick, #f-q_ll .seg.quick { grid-template-columns: repeat(6, 1fr); gap: 6px; }
 #f-q_ru .seg.quick button, #f-q_rl .seg.quick button, #f-q_lu .seg.quick button, #f-q_ll .seg.quick button { min-height: 40px; padding: 0; }
+.qpicks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 8px 0 12px; }
+.qpicks .btn { padding: 0; min-height: 48px; }
+.qexact { gap: 8px; } .qexact input { flex: 1; min-width: 0; height: var(--tap); border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; background: var(--card); color: var(--ink); }
+#qp-err { color: var(--bad); min-height: 1.2em; margin-top: 6px; }
+.qcell.err { border-color: var(--bad); background: var(--bad-soft); }
+.qcell:disabled { opacity: 1; }
+.method b { display: block; margin-bottom: 2px; }
+.qexact { display: flex; } .qexact .btn { flex: 0 0 auto; min-width: 88px; }

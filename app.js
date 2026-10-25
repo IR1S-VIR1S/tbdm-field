@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'd3c4b57a02a7';                 // replaced by build.js with the build's hash
+const BUILD_ID = '11db4fb80811';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -639,7 +639,7 @@ function navIds() {
   if (isReader()) return ['home', 'films', 'settings'];
   const ids = ['home'];
   if (can('view')) ids.push('participants');
-  if (can('measure')) ids.push('measure');                         // works on its own, with or without the participants tick
+  if (can('measure') && role() !== 'pi') ids.push('measure');      // works on its own, with or without the participants tick; the PI measures from the participant page
   if (can('due')) ids.push('due');
   if (can('queries')) ids.push('queries');
   if (can('checklist')) ids.push('visits');
@@ -1607,6 +1607,7 @@ function openQuery(q) {
   go('form', { tab: tab, key: key, focus: q[6], query: query });
 }
 function focusField(k) {
+  if (T.form && T.form.tab === 'R_SCORES' && QUADRANTS.indexOf(k) >= 0 && $('#quad')) { $('#quad').scrollIntoView({ block: 'center' }); quadPick(k); return; }
   let n = document.getElementById('f-' + k);
   if (!n && T.form && T.form.tab === 'LABS' && !T.form.showAll) { T.form.showAll = true; T.refill(); n = document.getElementById('f-' + k); }
   if (!n) return;
@@ -1825,13 +1826,12 @@ function formScreen(p) {
       });
       if (extra.length) fieldsBox.append(el('button', { class: 'toggle', onclick: () => { F.showAll = true; fill(); } }, '+ Show other results (' + extra.join(', ') + ')'));
     } else {
-      def.cols.filter((c) => visible(tab, c, null, F.vals)).forEach((c) => { if (tab === 'R_SCORES' && c.key === 'q_ru') fieldsBox.append(quadDiagram()); fieldsBox.append(fieldEl(c)); });
+      def.cols.filter((c) => visible(tab, c, null, F.vals)).forEach((c) => { if (tab === 'R_SCORES' && QUADRANTS.indexOf(c.key) >= 0) { if (c.key === 'q_ru') fieldsBox.append(el('div', { class: 'card small method', id: 'reader-method' }, el('b', null, 'Method'), el('div', null, 'Score each quadrant by eye: the share of it with abnormal opacification. The app averages the four; the workbook works out the Timika score.')), quadDiagram()); return; } fieldsBox.append(fieldEl(c)); });   // quadrants are scored in a pop-up from the diagram
     }
   };
   T.refill = fill;
   fill();
   setTimeout(paintCalc, 0);
-  if (tab === 'R_SCORES') fieldsBox.before(readerRules());
   { const pc = photoCard(T.form); if (pc) main.append(pc); const pv = tab === 'R_SCORES' ? cxrPane(s_(T.form.vals.study_id).toUpperCase()) : null; if (pv) main.prepend(pv); }
   const bar = F.ro ? null : el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => confirmLeave(back) }, 'Cancel'), el('button', { class: 'btn primary', id: 'savebtn', onclick: saveForm }, 'Save'));
   if (p.focus && !p._focused) { p._focused = true; setTimeout(() => focusField(p.focus), 120); }
@@ -2040,6 +2040,13 @@ async function saveForm() {
   });
   APP_KEYS[F.tab].forEach((k) => { if (APP_SERIAL[F.tab] !== k && !s_(F.vals[k])) errs.push(def.cols.filter((c) => c.key === k)[0]); });
   if (F.tab === 'R_SCORES') { const gaps = readerGaps_(F.vals, true); Object.keys(gaps).forEach((k) => { const c = def.cols.filter((x) => x.key === k)[0]; if (c && errs.indexOf(c) < 0) { errs.push(c); const b = $('#f-' + k); if (b) { b.classList.add('err'); const mm = b.querySelector('.msg'); if (mm) mm.textContent = c.label.split(',')[0] + ' ' + gaps[k]; } } }); }
+  if (F.tab === 'R_SCORES' && errs.some((c) => QUADRANTS.indexOf(c.key) >= 0)) {
+    const miss = QUADRANTS.filter((k) => s_(F.vals[k]) === '');
+    miss.forEach((k) => { const b = document.querySelector('.qcell[data-q="' + k + '"]'); if (b) b.classList.add('err'); });
+    const q = $('#quad'); if (q) q.scrollIntoView({ block: 'center' });
+    toast('Score all four quadrants first. Missing: ' + miss.map((k) => QNAME[k].toLowerCase()).join(', ') + '.');
+    return;
+  }
   if (errs.length) {
     const first = $('#f-' + errs[0].key);
     if (first) { first.classList.add('err'); first.scrollIntoView({ block: 'center' }); }
@@ -2519,19 +2526,12 @@ function photoViewCard(sid) {
 }
 // ---- Radiograph reading form helpers
 function filmOf(sid) { const k = normId(sid); return ((S.server && S.server.films) || []).filter((f) => s_(f.study_id).toUpperCase() === k)[0] || null; }
-function readerRules() {
-  return el('div', { class: 'card small rules', id: 'reader-rules' }, el('b', null, 'Blinding rules'),
-    el('ul', null, el('li', null, 'Score only the routine baseline chest radiograph of the study numbers the PI gives you.'),
-      el('li', null, 'Do not look at clinical, laboratory or diabetes information, or at the other reader\'s scores.'),
-      el('li', null, 'To correct a value, change it; every change is logged.')),
-    el('div', { class: 'muted' }, 'Score each quadrant by eye: the share of it with abnormal opacification. The app averages the four; the workbook works out the Timika score.'));
-}
 // A simple chest: four boxes laid out as on the film (the patient's right on your left). Each shows its score; the one being scored is outlined.
 function quadDiagram() {
   const F = T.form, name = { q_ru: 'Right upper', q_lu: 'Left upper', q_rl: 'Right lower', q_ll: 'Left lower' };
-  const cell = (k) => el('button', { type: 'button', class: 'qcell', 'data-q': k, onclick: () => { F.qLast = k; paintQuad(); focusField(k); } }, el('span', null, name[k]), el('b', { id: 'qv-' + k }, ''));
+  const cell = (k) => el('button', { type: 'button', class: 'qcell', 'data-q': k, disabled: F.ro ? true : null, 'aria-label': name[k] + ' quadrant: tap to score', onclick: () => quadPick(k) }, el('span', null, name[k]), el('b', { id: 'qv-' + k }, ''));
   const box = el('div', { class: 'quad card', id: 'quad', role: 'group', 'aria-label': 'Chest diagram: the four quadrants' },
-    el('div', { class: 'qhead' }, el('span', null, 'R'), el('b', null, 'Quadrants'), el('span', null, 'L')),
+    el('div', { class: 'qhead' }, el('span', null, 'R'), el('b', null, F.ro ? 'Quadrants' : 'Tap a quadrant to score it'), el('span', null, 'L')),
     el('div', { class: 'qgrid' }, cell('q_ru'), cell('q_lu'), cell('q_rl'), cell('q_ll')),
     el('div', { class: 'qfoot' }, el('span', { class: 'small muted' }, 'As on the film: the patient\'s right is on your left'), el('b', { id: 'qtotal' }, '')));
   queueMicrotask(paintQuad);
@@ -2540,8 +2540,26 @@ function quadDiagram() {
 function paintQuad() {
   const F = T.form; if (!F || F.tab !== 'R_SCORES' || !$('#quad')) return;
   const next = F.qLast || QUADRANTS.filter((k) => s_(F.vals[k]) === '')[0];
-  QUADRANTS.forEach((k) => { const b = document.querySelector('.qcell[data-q="' + k + '"]'), v = s_(F.vals[k]); if (!b) return; $('#qv-' + k).textContent = v === '' ? '–' : v + '%'; b.classList.toggle('done', v !== ''); b.classList.toggle('active', k === next); });
+  QUADRANTS.forEach((k) => { const b = document.querySelector('.qcell[data-q="' + k + '"]'), v = s_(F.vals[k]); if (!b) return; $('#qv-' + k).textContent = v === '' ? 'tap' : v + '%'; b.classList.toggle('done', v !== ''); b.classList.toggle('active', k === next && !F.ro); if (v !== '') b.classList.remove('err'); });
   const pq = pctFromQuadrants_(F.vals); $('#qtotal').textContent = pq === '' ? 'Lung affected: –' : 'Lung affected: ' + pq + '%';
+}
+const QNAME = { q_ru: 'Right upper', q_rl: 'Right lower', q_lu: 'Left upper', q_ll: 'Left lower' };
+function quadSet(k, v) {
+  const F = T.form; F.vals[k] = v; F.dirty = true; F.vals.pct_lung = pctFromQuadrants_(F.vals); F.qLast = null;
+  paintQuad(); paintCalc();
+}
+// The score for one quadrant: tap a value (0 to 100 in tens) or type an exact one; the pop-up saves it and closes.
+function quadPick(k) {
+  const F = T.form; if (!F || F.ro) return;
+  const cur = s_(F.vals[k]), close = () => { const m = $('#modal'); m.hidden = true; m.replaceChildren(); };
+  const err = el('div', { class: 'small', id: 'qp-err' });
+  const exact = el('input', { id: 'qp-exact', type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: 'Exact value', value: cur && Array.from({ length: 11 }, (_, i) => String(i * 10)).indexOf(cur) < 0 ? cur : '' });
+  const useExact = () => { const x = num_(exact.value); if (x === null || x < 0 || x > 100) { err.textContent = 'Type a number from 0 to 100.'; return; } quadSet(k, String(x)); close(); };
+  exact.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') useExact(); });
+  modal(QNAME[k] + ' quadrant', [el('p', { class: 'small' }, 'Share of this quadrant with abnormal opacification, by eye.'),
+    el('div', { class: 'qpicks' }, Array.from({ length: 11 }, (_, i) => String(i * 10)).map((v) => el('button', { type: 'button', class: 'btn qpick' + (v === cur ? ' primary' : ''), 'data-v': v, onclick: () => { quadSet(k, v); close(); } }, v + '%'))),
+    el('div', { class: 'inline qexact' }, exact, el('button', { type: 'button', class: 'btn', id: 'qp-use', onclick: useExact }, 'Use')), err],
+    cur ? [['Clear', () => quadSet(k, '')], ['Cancel', null]] : [['Cancel', null]]);
 }
 // Number of cavities: 1 to 5 as buttons, 6+ opens a box for 6 to 20; with no cavity it is 0 and the buttons are faded.
 function cavityCount(box, set, msg) {
@@ -2558,12 +2576,35 @@ function cavityCount(box, set, msg) {
 // ---- Radiograph reader: the covered radiograph sits at the top of the scoring page and stays in view while the reader scores below it.
 // Loaded once per session into memory only (never written to the phone); tap to enlarge, switch between images, or mark it too poor.
 T.cxr = T.cxr || {};
+// A made-up chest film drawn on the phone (no real image exists for practice participants).
+function sampleFilm() {
+  if (T.sampleFilm) return T.sampleFilm;
+  const c = document.createElement('canvas'); c.width = 600; c.height = 720; const g = c.getContext('2d');
+  g.fillStyle = '#0b0b0b'; g.fillRect(0, 0, 600, 720);
+  const lung = (x) => { const gr = g.createRadialGradient(x, 330, 40, x, 330, 230); gr.addColorStop(0, '#3a3a3a'); gr.addColorStop(1, '#151515'); g.fillStyle = gr; g.beginPath(); g.ellipse(x, 340, 125, 245, 0, 0, Math.PI * 2); g.fill(); };
+  lung(185); lung(415);
+  g.fillStyle = '#9a9a9a'; g.fillRect(286, 60, 28, 620);                                   // spine
+  g.strokeStyle = 'rgba(200,200,200,.35)'; g.lineWidth = 6; for (let i = 0; i < 8; i++) { g.beginPath(); g.ellipse(300, 150 + i * 60, 250, 40, 0, Math.PI * 0.1, Math.PI * 0.9); g.stroke(); }   // ribs
+  g.fillStyle = 'rgba(210,210,210,.55)'; g.beginPath(); g.ellipse(175, 200, 55, 45, 0, 0, Math.PI * 2); g.fill();      // a made-up opacity, right upper zone
+  g.fillStyle = '#ffd34d'; g.font = 'bold 30px sans-serif'; g.textAlign = 'center'; g.fillText('SAMPLE FILM', 300, 690);
+  return (T.sampleFilm = c.toDataURL('image/png'));
+}
+function samplePane(box, head, sid) {
+  if (T.cxrHide) { box.append(head('')); return box; }
+  const src = sampleFilm(), ph = { doc: 'CXR', visit: '', photo_id: 'sample' };
+  box.append(head('made-up participant'), el('button', { class: 'cxrimg', type: 'button', id: 'cxr-open', 'aria-label': 'Enlarge the sample film', onclick: () => photoOpen(ph, src) }, el('img', { src, alt: 'Sample chest film for practice' })),
+    el('div', { class: 'cxrtools' }, el('span', { class: 'grow small muted' }, 'Sample film for practice: real participants show their covered radiograph here.')));
+  queueMicrotask(() => { const t = document.querySelector('.top'); const b = $('#cxrpane'); if (t && b) b.style.top = t.offsetHeight + 'px'; });
+  return box;
+}
 function cxrPane(sid) {
   if (!/^reader/.test(role()) || !sid) return null;
   const box = el('div', { class: 'card cxrpane' + (T.cxrHide ? ' folded' : ''), id: 'cxrpane' });
   const head = (txt) => el('div', { class: 'cxrbar' }, el('b', null, 'Radiograph ' + sid), txt ? el('span', { class: 'small muted' }, txt) : null,
     el('button', { class: 'btn small', type: 'button', id: 'cxr-fold', onclick: () => { T.cxrHide = !T.cxrHide; render(); } }, T.cxrHide ? 'Show image' : 'Hide image'));
   const say = (msg) => box.replaceChildren(head(''), el('div', { class: 'small muted cxrmsg' }, msg));
+  if (T.practice && !watching()) return samplePane(box, head, sid);          // practice and Debugging: a drawn sample film, so the page looks as it will
+  if (watching()) { say('Images are not loaded in Surveillance. The reader sees the covered radiograph here once photos are switched on.'); return box; }
   if (!photosOn()) { say('Radiograph images are switched off. Score from the film itself.'); return box; }
   if (T.cxrHide) { box.append(head('')); return box; }
   const C = T.cxr[sid] || (T.cxr[sid] = { list: null, i: 0, img: {}, err: '' });
