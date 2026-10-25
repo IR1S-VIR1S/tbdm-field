@@ -2,7 +2,7 @@
 'use strict';
 const CFG = {
   VERSION: '1.2',
-  SCHEMA_VER: 2,                      // raised whenever a data tab gains, loses or reorders a column; phones compare it before sending
+  SCHEMA_VER: 3,                      // raised whenever a data tab gains, loses or reorders a column; phones compare it before sending
   ID_PREFIX: 'TBDM-',
   ID_MAX: 999,                     // three digits after the prefix; the format cannot go higher without changing the id rules
   BLOCK_SIZE: 10,                  // study numbers handed to one phone at a time, so two phones that are offline together never offer the same number
@@ -320,7 +320,13 @@ const READER = { tab: 'R_SCORES', kind: 'reader', rows: 600, title: 'Chest radio
   col('study_id', 'Study number of the film', 'rid', { pair: 'read_no' }),
   col('read_no', 'Read number: 1 first read, 2 repeat read (only films the PI marks)', 'pairlist', { values: ['1', '2'], pair: 'study_id', hint: 'Type 1 for the first read, 2 for a repeat read. One row per study number and read number' }),
   col('read_date', 'Date read', 'date'),
-  col('pct_lung', 'Percentage of the total lung field affected, 0 to 100', 'num', { min: 0, max: 100 }),
+  // Percentage of lung affected (Timika score, Ralph et al. Thorax 2010): each quadrant's abnormal opacification estimated by eye,
+  // the four added and divided by 4, as applied by Murthy et al. BMC Medicine 2018. [VERIFY against the full Ralph 2010 methods before training the readers.]
+  col('q_ru', 'Right upper quadrant: % of abnormal opacification, 0 to 100', 'num', { min: 0, max: 100 }),
+  col('q_rl', 'Right lower quadrant: % of abnormal opacification, 0 to 100', 'num', { min: 0, max: 100 }),
+  col('q_lu', 'Left upper quadrant: % of abnormal opacification, 0 to 100', 'num', { min: 0, max: 100 }),
+  col('q_ll', 'Left lower quadrant: % of abnormal opacification, 0 to 100', 'num', { min: 0, max: 100 }),
+  col('pct_lung', 'Percentage of the total lung field affected, 0 to 100: the mean of the four quadrants (calculated, not typed)', 'num', { min: 0, max: 100 }),
   col('cavity', 'Any cavity', 'list', { codes: YN }),
   col('n_cavities', 'Number of cavities', 'int', { min: 0, max: 20 }),
   col('reader_initials', 'Your initials', 'text', { max: 10 })] };
@@ -551,10 +557,19 @@ function validateValue_(c, v, row, ctx) {                   // '' when acceptabl
 }
 
 // A radiograph score is usable only when it is complete: date, lung percentage, cavity answer, and the count when there is a cavity.
-function readerGaps_(v) {
+const QUADRANTS = ['q_ru', 'q_rl', 'q_lu', 'q_ll'];
+// The percentage of lung affected from the four quadrant estimates: their mean, to 1 decimal; '' until all four are entered.
+function pctFromQuadrants_(v) {
+  const q = QUADRANTS.map(function (k) { return num_(v[k]); });
+  if (q.some(function (x) { return x === null; })) return '';
+  return String(round_((q[0] + q[1] + q[2] + q[3]) / 4, 1));
+}
+// strict (a new or changed read): all four quadrants are needed. Otherwise an older read typed as one percentage still counts.
+function readerGaps_(v, strict) {
   const g = {};
   if (str_(v.read_date) === '') g.read_date = 'is required';
-  if (str_(v.pct_lung) === '') g.pct_lung = 'is required';
+  if (strict || QUADRANTS.some(function (k) { return str_(v[k]) !== ''; })) QUADRANTS.forEach(function (k) { if (str_(v[k]) === '') g[k] = 'is required'; });
+  else if (str_(v.pct_lung) === '') g.pct_lung = 'is required';
   if (code_(v.cavity) === '') g.cavity = 'is required';
   else if (code_(v.cavity) === 'Y' && str_(v.n_cavities) === '') g.n_cavities = 'is required when there is a cavity';
   return g;

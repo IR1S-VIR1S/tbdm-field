@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'bae1b3834df0';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'd3c4b57a02a7';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -814,6 +814,7 @@ function readerHome(bad, waiting, oldest) {
   const open = (f, n) => go('form', { tab: 'R_SCORES', key: { study_id: f.study_id, read_no: n } });
   const main = el('main', { class: 'pihome' },
     homeWarn(bad, waiting, oldest),
+    el('div', { class: 'homerow solo' }, el('button', { class: 'tile primary', id: 'score-film', onclick: () => go('form', { tab: 'R_SCORES', key: {}, preset: { read_no: '1' } }) }, el('b', null, 'Score a film'), el('span', null, 'Type the study number the PI gave you'))),
     feedCard('due ' + (todo.length ? 'hot' : 'calm'), 'Films to score', todo.length, todo.map((f) => { const n = !has(f.study_id, '1') ? '1' : '2'; return { main: f.study_id, sub: 'film of ' + (f.cxr_date || '?') + (n === '2' ? ' · repeat read requested' : '') + (filmImg(f) ? ' · ' + filmImg(f) : ''), chip: f.img && photosOn() && !f.poor ? 'image' : n === '2' ? 'repeat' : 'new', chipCls: f.img && photosOn() && !f.poor ? 'ok' : 'warn', go: () => open(f, n) }; }), () => go('films'), 'Nothing to score'),
     feedCard('calm', 'Scored', done.length, done.map((f) => ({ main: f.study_id, sub: 'film of ' + (f.cxr_date || '?') + (filmImg(f) ? ' · ' + filmImg(f) : ''), go: () => open(f, '1') })), () => go('films'), 'None yet'),
     el('h2', null, 'Recent activity'),
@@ -1780,7 +1781,8 @@ function visible(tab, c, v, vals) {
     if (ri) return t === 'E2' && s_(vals.e2_rucam_type).toUpperCase() === ri[3];
     if (m) return t === m[1].toUpperCase();
   }
-  if (tab === 'R_SCORES' && c.key === 'n_cavities') return s_(vals.cavity).toUpperCase() === 'Y';
+  if (tab === 'R_SCORES' && c.key === 'pct_lung') return false;                    // calculated from the quadrants, shown live under the diagram
+  if (tab === 'R_SCORES' && c.key === 'n_cavities') return s_(vals.cavity) !== '';     // faded at 0 when there is no cavity
   if (APP_SERIAL[tab] === c.key) return false;
   return true;
 }
@@ -1823,12 +1825,13 @@ function formScreen(p) {
       });
       if (extra.length) fieldsBox.append(el('button', { class: 'toggle', onclick: () => { F.showAll = true; fill(); } }, '+ Show other results (' + extra.join(', ') + ')'));
     } else {
-      def.cols.filter((c) => visible(tab, c, null, F.vals)).forEach((c) => fieldsBox.append(fieldEl(c)));
+      def.cols.filter((c) => visible(tab, c, null, F.vals)).forEach((c) => { if (tab === 'R_SCORES' && c.key === 'q_ru') fieldsBox.append(quadDiagram()); fieldsBox.append(fieldEl(c)); });
     }
   };
   T.refill = fill;
   fill();
   setTimeout(paintCalc, 0);
+  if (tab === 'R_SCORES') fieldsBox.before(readerRules());
   { const pc = photoCard(T.form); if (pc) main.append(pc); const pv = tab === 'R_SCORES' ? cxrPane(s_(T.form.vals.study_id).toUpperCase()) : null; if (pv) main.prepend(pv); }
   const bar = F.ro ? null : el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => confirmLeave(back) }, 'Cancel'), el('button', { class: 'btn primary', id: 'savebtn', onclick: saveForm }, 'Save'));
   if (p.focus && !p._focused) { p._focused = true; setTimeout(() => focusField(p.focus), 120); }
@@ -1840,6 +1843,8 @@ function fieldMsg(c) {
   const F = T.form, v = F.vals[c.key];
   let m = validateValue_(c, v, F.vals, ctx());
   if (!m && c.type === 'sidnew' && F.tab === 'S1_ENROL' && !F.existing && s_(v) && enrolledMap()[s_(v).toUpperCase()]) m = 'is already enrolled';
+  if (!m && F.tab === 'R_SCORES' && c.key === 'study_id' && s_(v) && !filmOf(v)) m = 'is not on your film list';
+  if (!m && F.tab === 'R_SCORES' && c.key === 'read_no' && s_(v) === '2' && !(filmOf(F.vals.study_id) || {}).repeat) m = 'is only for films the PI has marked for a repeat read';
   if (!m && c.type === 'sidnew' && F.tab === 'S1_ENROL' && !F.existing && s_(v)) {         // screened out or not enrolled: stop here, so nothing is queued for the workbook to refuse
     const sc = view('S0_SCREEN').filter((r) => code_(r.study_id) === code_(v))[0];
     if (sc && sc.eligible === 'N') { const x = EXCL.filter((e) => e[0] === s_(sc.excl_code))[0]; m = 'was screened as not eligible' + (x ? ' (' + x[1] + ')' : '') + ', so it cannot be enrolled'; }
@@ -1862,6 +1867,7 @@ function fieldEl(c) {
   const set = (v, rerender) => {
     F.vals[c.key] = v; F.dirty = true;
     if (F.tab === 'R_SCORES' && c.key === 'cavity') F.vals.n_cavities = v === 'N' ? '0' : (v === 'Y' && F.vals.n_cavities === '0' ? '' : F.vals.n_cavities);
+    if (F.tab === 'R_SCORES' && QUADRANTS.indexOf(c.key) >= 0) { F.vals.pct_lung = pctFromQuadrants_(F.vals); F.qLast = c.key; paintQuad(); }
     if (F.tab === 'S1_ENROL' && c.key === 'dm_status') {          // not diabetic: the drugs answer is 0 (none) and closed; it opens again if the status changes
       if (v === '0') { F.vals.dm_drugs = '0'; F.autoDrugs = true; }
       else if (F.autoDrugs) { F.vals.dm_drugs = ''; F.autoDrugs = false; }
@@ -1890,11 +1896,13 @@ function fieldEl(c) {
     return box;
   }
   const relayout = ['visit', 'declined', 'event_type', 'phq9', 'hba1c_unit', 'glucose_unit', 'lipid_unit', 'smear_result', 'eligible', 'enrolled', 'e2_rucam_type', 'dm_status', 'smoking', 'smear_grade', 'excl_code'].indexOf(c.key) >= 0 || (F.tab === 'R_SCORES' && c.key === 'cavity');
+  if (F.tab === 'R_SCORES' && c.key === 'n_cavities' && !F.ro && !fixed) return cavityCount(box, set, msg);
   if (c.codes || c.type === 'pairlist') {
-    const opts = c.codes || c.values.map((x) => [x, '']);
+    const rn = F.tab === 'R_SCORES' && c.key === 'read_no', film = rn ? filmOf(F.vals.study_id) : null;
+    const opts = rn ? [['1', 'First read'], ['2', 'Repeat read']] : c.codes || c.values.map((x) => [x, '']);
     if (opts.length <= 7) {
       const seg = el('div', { class: 'seg' + (opts.length === 2 ? ' yn' : ''), role: 'radiogroup', 'aria-label': c.label });
-      opts.forEach((o) => seg.append(el('button', { type: 'button', role: 'radio', 'aria-checked': String(val === o[0]), class: val === o[0] ? 'on' : '',
+      opts.forEach((o) => seg.append(el('button', { type: 'button', role: 'radio', 'aria-checked': String(val === o[0]), class: val === o[0] ? 'on' : '', disabled: rn && o[0] === '2' && !(film && film.repeat) ? true : null,
         onclick: (ev) => { const now = F.vals[c.key] === o[0] ? '' : o[0]; seg.querySelectorAll('button').forEach((b) => { b.classList.remove('on'); b.setAttribute('aria-checked', 'false'); });
           if (now) { ev.currentTarget.classList.add('on'); ev.currentTarget.setAttribute('aria-checked', 'true'); } set(now, relayout); } },
         o[0], o[1] ? el('small', null, o[1]) : null)));
@@ -1921,8 +1929,8 @@ function fieldEl(c) {
     const inp = el('input', { id: 'i-' + c.key, type, value: val, autocomplete: 'off', inputmode: isNum ? (c.type === 'int' || c.type === 'uniqueint' ? 'numeric' : 'decimal') : null,
       autocapitalize: ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 || BY_FIELDS.indexOf(c.key) >= 0 ? 'characters' : 'off',
       maxlength: c.type === 'text' ? String(c.max) : null, disabled: unitMissing || na, placeholder: unitMissing ? 'choose the unit first' : na ? 'does not apply' : ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? 'e.g. 7 or ' + idOf_(7) : null,
-      oninput: (ev) => set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? normId(ev.target.value) : ev.target.value),   // checked as the full number while typing; the box itself is tidied when you leave it
-      onchange: (ev) => { const v = ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? normId(ev.target.value) : ev.target.value; ev.target.value = v; set(v); carryFromScreening(); },
+      oninput: (ev) => { set(['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? normId(ev.target.value) : ev.target.value); if (F.tab === 'R_SCORES' && c.key === 'study_id' && /^\d{3}$/.test(s_(ev.target.value).trim())) { ev.target.value = normId(ev.target.value); render(); } },   // checked as the full number while typing; the box itself is tidied when you leave it
+      onchange: (ev) => { const v = ['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0 ? normId(ev.target.value) : ev.target.value; ev.target.value = v; set(v); carryFromScreening(); if (F.tab === 'R_SCORES' && c.key === 'study_id' && idOk_(v)) render(); },
       onblur: (ev) => { if (['sidnew', 'sid', 'sidl', 'rid'].indexOf(c.type) >= 0) { const v = normId(ev.target.value); if (v !== ev.target.value) { ev.target.value = v; set(v); } carryFromScreening(); } } });
     if (F.tab === 'S1_ENROL' && c.key === 'regimen' && !F.ro) {      // one tap for the regimens the PI named; typing any other regimen still works
       const row = el('div', { class: 'seg quick', role: 'group', 'aria-label': c.label + ', quick choices' });
@@ -1931,8 +1939,8 @@ function fieldEl(c) {
       inp.addEventListener('input', paint); paint();
       box.append(row);
     }
-    if (F.tab === 'R_SCORES' && (c.key === 'pct_lung' || c.key === 'n_cavities') && !F.ro) {      // tap choices; typing an exact value still works
-      const picks = c.key === 'pct_lung' ? Array.from({ length: 21 }, (_, i) => String(i * 5)) : Array.from({ length: 10 }, (_, i) => String(i + 1));
+    if (F.tab === 'R_SCORES' && QUADRANTS.indexOf(c.key) >= 0 && !F.ro) {      // tap choices in tens; typing an exact value 0 to 100 still works
+      const picks = Array.from({ length: 11 }, (_, i) => String(i * 10));
       const row = el('div', { class: 'seg quick', role: 'group', 'aria-label': c.label + ', quick choices' });
       const paint = () => row.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === s_(F.vals[c.key])));
       picks.forEach((x) => row.append(el('button', { type: 'button', 'data-v': x, onclick: () => { inp.value = x; set(x); paint(); } }, x)));
@@ -1999,7 +2007,7 @@ function liveCalc() {
     if (num_(v.phq9) > 0) out.push(['Item 9', 'ABOVE 0: STOP', true]);
   }
   if (F.tab === 'SPIRO' && num_(v.fev1_l) !== null && num_(v.fvc_l) > 0) out.push(['FEV1/FVC calculated', round_(100 * num_(v.fev1_l) / num_(v.fvc_l), 1) + '%']);
-  if (F.tab === 'R_SCORES') { const t = timika_(v.pct_lung, v.cavity); if (t !== '') out.push(['Timika', t]); }
+  if (F.tab === 'R_SCORES') { const pq = pctFromQuadrants_(v); out.push(['Lung affected (mean of 4 quadrants)', pq === '' ? 'fill all 4 quadrants' : pq + '%']); }
   return out;
 }
 function labDili(v) {
@@ -2031,7 +2039,7 @@ async function saveForm() {
     const m = fieldMsg(c); if (m) errs.push(c);
   });
   APP_KEYS[F.tab].forEach((k) => { if (APP_SERIAL[F.tab] !== k && !s_(F.vals[k])) errs.push(def.cols.filter((c) => c.key === k)[0]); });
-  if (F.tab === 'R_SCORES') { const gaps = readerGaps_(F.vals); Object.keys(gaps).forEach((k) => { const c = def.cols.filter((x) => x.key === k)[0]; if (c && errs.indexOf(c) < 0) { errs.push(c); const b = $('#f-' + k); if (b) { b.classList.add('err'); const mm = b.querySelector('.msg'); if (mm) mm.textContent = c.label.split(',')[0] + ' ' + gaps[k]; } } }); }
+  if (F.tab === 'R_SCORES') { const gaps = readerGaps_(F.vals, true); Object.keys(gaps).forEach((k) => { const c = def.cols.filter((x) => x.key === k)[0]; if (c && errs.indexOf(c) < 0) { errs.push(c); const b = $('#f-' + k); if (b) { b.classList.add('err'); const mm = b.querySelector('.msg'); if (mm) mm.textContent = c.label.split(',')[0] + ' ' + gaps[k]; } } }); }
   if (errs.length) {
     const first = $('#f-' + errs[0].key);
     if (first) { first.classList.add('err'); first.scrollIntoView({ block: 'center' }); }
@@ -2371,24 +2379,28 @@ function photoTaker() { return can('photoTake'); }
 function photoViewer() { return can('photoView'); }
 function hex(buf) { return Array.from(new Uint8Array(buf)).map((b) => ('0' + b.toString(16)).slice(-2)).join(''); }
 function rndHex(n) { return hex(crypto.getRandomValues(new Uint8Array(n))); }
-async function fileToCanvas(file) {
+// Document photos are made smaller (2000 px) to keep uploads quick. Chest radiographs are not: they are read for scoring, so they keep the
+// camera's full resolution, limited only by the largest picture a phone can draw (about 16 megapixels on iPhones).
+const CXR_MAX_AREA = 16000000;
+async function fileToCanvas(file, full) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('This file is not a picture the phone can read.')); i.src = url; });
-    const k = Math.min(1, PHOTO_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight));
+    const k = full ? Math.min(1, Math.sqrt(CXR_MAX_AREA / (img.naturalWidth * img.naturalHeight))) : Math.min(1, PHOTO_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight));
     const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
     return c;
   } finally { URL.revokeObjectURL(url); }
 }
-const canvasJpeg = (c) => new Promise((res) => c.toBlob((b) => res(b), 'image/jpeg', 0.85));
-async function photoQueue(canvas, meta) {                  // encrypt and keep until the next sync
-  const blob = await canvasJpeg(canvas), bytes = new Uint8Array(await blob.arrayBuffer());
+const canvasJpeg = (c, q) => new Promise((res) => c.toBlob((b) => res(b), 'image/jpeg', q || 0.85));
+// encrypt and keep until the next sync. raw: the file exactly as the camera made it (radiograph originals), so nothing is re-compressed.
+async function photoQueue(canvas, meta, raw, quality) {
+  const blob = raw ? raw : await canvasJpeg(canvas, quality), bytes = new Uint8Array(await blob.arrayBuffer());
   const sha = hex(await crypto.subtle.digest('SHA-256', bytes)), id = rndHex(16), iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, KEY, bytes);
   await kvSet('ph_' + id, { iv, ct });
   S.photoOut = S.photoOut || [];
-  S.photoOut.push(Object.assign({ id, sha, mime: 'image/jpeg', at: new Date().toISOString().slice(0, 16), status: 'pending' }, meta));
+  S.photoOut.push(Object.assign({ id, sha, mime: raw ? raw.type : 'image/jpeg', at: new Date().toISOString().slice(0, 16), status: 'pending' }, meta));
   await saveState();
 }
 async function pushPhotos(still) {
@@ -2397,7 +2409,7 @@ async function pushPhotos(still) {
     const box = await kvGet('ph_' + ph.id);
     if (!box) { S.photoOut = S.photoOut.filter((x) => x.id !== ph.id); continue; }
     const bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: box.iv }, KEY, box.ct));
-    const res = await api({ op: 'photo_put', token: S.cfg.token, photo_id: ph.id, study_id: ph.sid, doc: ph.doc, visit: ph.visit || '', covered: ph.covered || 'N', mime: ph.mime, data: b64(bytes), sha256: ph.sha, taken_at: ph.at, note: ph.note || '' }, 90000); still();
+    const res = await api({ op: 'photo_put', token: S.cfg.token, photo_id: ph.id, study_id: ph.sid, doc: ph.doc, visit: ph.visit || '', covered: ph.covered || 'N', mime: ph.mime, data: b64(bytes), sha256: ph.sha, taken_at: ph.at, note: ph.note || '' }, ph.doc === 'CXR' ? 240000 : 90000); still();
     if (res.code === 401) throw Object.assign(new Error(res.error || 'not authorised'), { code: 401 });
     const cur = (S.photoOut || []).filter((x) => x.id === ph.id)[0];
     if (res.ok) {
@@ -2439,13 +2451,14 @@ function coverTool(canvas, done) {
 async function photoTake(file, F, doc) {
   const sid = s_(F.vals.study_id).toUpperCase(), visit = s_(F.vals.visit).toUpperCase();
   let canvas;
-  try { canvas = await fileToCanvas(file); } catch (e) { toast(e.message); return; }
+  try { canvas = await fileToCanvas(file, doc === 'CXR'); } catch (e) { toast(e.message); return; }
   const base = { sid, doc, visit: /^(V[1-5]|U[1-5])$/.test(visit) ? visit : '', by: S.cfg.initials };
   const finish = async () => { toast('Photo kept on this phone, locked with your PIN. It is sent at the next sync.'); paintPhotoCard(); if (navigator.onLine) sync(); };
   if (doc === 'CXR') {
     coverTool(canvas, async (covered) => {
-      await photoQueue(covered, Object.assign({}, base, { covered: 'Y' }));
-      await photoQueue(canvas, Object.assign({}, base, { covered: 'N' }));          // the uncovered original, for the PI, the verifier and the DOTS incharge only
+      await photoQueue(covered, Object.assign({}, base, { covered: 'Y' }), null, 0.95);   // the readers' copy: full resolution, near-lossless
+      const asIs = /^image\/(jpeg|png)$/.test(file.type) ? file : null;                   // the original exactly as taken; other formats become a high-quality JPEG
+      await photoQueue(canvas, Object.assign({}, base, { covered: 'N' }), asIs, 0.95);   // for the PI, the verifier and the DOTS incharge only
       finish();
     });
     return;
@@ -2504,6 +2517,44 @@ function photoViewCard(sid) {
   box.append(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Source documents'), el('button', { class: 'btn block', type: 'button', id: 'photo-show', onclick: load }, 'Show photos'));
   return box;
 }
+// ---- Radiograph reading form helpers
+function filmOf(sid) { const k = normId(sid); return ((S.server && S.server.films) || []).filter((f) => s_(f.study_id).toUpperCase() === k)[0] || null; }
+function readerRules() {
+  return el('div', { class: 'card small rules', id: 'reader-rules' }, el('b', null, 'Blinding rules'),
+    el('ul', null, el('li', null, 'Score only the routine baseline chest radiograph of the study numbers the PI gives you.'),
+      el('li', null, 'Do not look at clinical, laboratory or diabetes information, or at the other reader\'s scores.'),
+      el('li', null, 'To correct a value, change it; every change is logged.')),
+    el('div', { class: 'muted' }, 'Score each quadrant by eye: the share of it with abnormal opacification. The app averages the four; the workbook works out the Timika score.'));
+}
+// A simple chest: four boxes laid out as on the film (the patient's right on your left). Each shows its score; the one being scored is outlined.
+function quadDiagram() {
+  const F = T.form, name = { q_ru: 'Right upper', q_lu: 'Left upper', q_rl: 'Right lower', q_ll: 'Left lower' };
+  const cell = (k) => el('button', { type: 'button', class: 'qcell', 'data-q': k, onclick: () => { F.qLast = k; paintQuad(); focusField(k); } }, el('span', null, name[k]), el('b', { id: 'qv-' + k }, ''));
+  const box = el('div', { class: 'quad card', id: 'quad', role: 'group', 'aria-label': 'Chest diagram: the four quadrants' },
+    el('div', { class: 'qhead' }, el('span', null, 'R'), el('b', null, 'Quadrants'), el('span', null, 'L')),
+    el('div', { class: 'qgrid' }, cell('q_ru'), cell('q_lu'), cell('q_rl'), cell('q_ll')),
+    el('div', { class: 'qfoot' }, el('span', { class: 'small muted' }, 'As on the film: the patient\'s right is on your left'), el('b', { id: 'qtotal' }, '')));
+  queueMicrotask(paintQuad);
+  return box;
+}
+function paintQuad() {
+  const F = T.form; if (!F || F.tab !== 'R_SCORES' || !$('#quad')) return;
+  const next = F.qLast || QUADRANTS.filter((k) => s_(F.vals[k]) === '')[0];
+  QUADRANTS.forEach((k) => { const b = document.querySelector('.qcell[data-q="' + k + '"]'), v = s_(F.vals[k]); if (!b) return; $('#qv-' + k).textContent = v === '' ? '–' : v + '%'; b.classList.toggle('done', v !== ''); b.classList.toggle('active', k === next); });
+  const pq = pctFromQuadrants_(F.vals); $('#qtotal').textContent = pq === '' ? 'Lung affected: –' : 'Lung affected: ' + pq + '%';
+}
+// Number of cavities: 1 to 5 as buttons, 6+ opens a box for 6 to 20; with no cavity it is 0 and the buttons are faded.
+function cavityCount(box, set, msg) {
+  const F = T.form, none = s_(F.vals.cavity) === 'N', v = s_(F.vals.n_cavities), big = !none && (F.cav6 || num_(v) >= 6);
+  const seg = el('div', { class: 'seg quick' + (none ? ' faded' : ''), role: 'radiogroup', 'aria-label': 'Number of cavities' });
+  ['1', '2', '3', '4', '5', '6+'].forEach((x) => seg.append(el('button', { type: 'button', 'data-v': x, disabled: none ? true : null, class: (x === '6+' ? big : v === x) ? 'on' : '',
+    onclick: () => { if (x === '6+') { F.cav6 = true; if (num_(F.vals.n_cavities) < 6) F.vals.n_cavities = ''; } else { F.cav6 = false; set(x); } const y = window.scrollY; T.refill(); window.scrollTo(0, y); if (x === '6+') setTimeout(() => { const i = $('#i-n_cavities'); if (i) i.focus(); }, 50); } }, x)));
+  box.append(seg);
+  if (none) box.append(el('div', { class: 'hint' }, '0: no cavity'));
+  if (big) box.append(el('input', { id: 'i-n_cavities', type: 'text', inputmode: 'numeric', value: num_(v) >= 6 ? v : '', placeholder: '6 to 20', autocomplete: 'off', oninput: (ev) => set(ev.target.value) }));
+  box.append(msg);
+  return box;
+}
 // ---- Radiograph reader: the covered radiograph sits at the top of the scoring page and stays in view while the reader scores below it.
 // Loaded once per session into memory only (never written to the phone); tap to enlarge, switch between images, or mark it too poor.
 T.cxr = T.cxr || {};
@@ -2535,7 +2586,7 @@ function cxrPane(sid) {
     const ph = C.list && C.list[C.i];
     if (!ph || C.img[ph.photo_id] || C.busy === ph.photo_id) return;
     C.busy = ph.photo_id;
-    try { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 45000); if (!r.ok) throw new Error(r.error || 'not available'); C.img[ph.photo_id] = 'data:' + r.mime + ';base64,' + r.data; }
+    try { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 120000); if (!r.ok) throw new Error(r.error || 'not available'); C.img[ph.photo_id] = 'data:' + r.mime + ';base64,' + r.data; }
     catch (e) { C.err = navigator.onLine ? 'Could not open the image: ' + e.message : 'The image opens only with a signal. You can still score from the film.'; }
     C.busy = null; if ($('#cxrpane')) draw();
   };
@@ -2632,7 +2683,7 @@ async function photoOpen(ph, have) {
   document.body.append(ov);
   try {
     let src = have;
-    if (!src) { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 45000); if (!r.ok) throw new Error(r.error || 'not available'); src = 'data:' + r.mime + ';base64,' + r.data; }
+    if (!src) { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, ph.doc === 'CXR' ? 120000 : 45000); if (!r.ok) throw new Error(r.error || 'not available'); src = 'data:' + r.mime + ';base64,' + r.data; }
     const img = el('img', { src, alt: PHOTO_DOC_NAMES[ph.doc] }), pane = el('div', { class: 'pf-img' }, img);
     let z = 1;
     const zoom = (n) => { z = n; img.style.width = (100 * z) + '%'; img.style.maxWidth = 'none'; ov.querySelectorAll('.pf-z').forEach((b) => b.classList.toggle('primary', +b.dataset.z === z)); };
