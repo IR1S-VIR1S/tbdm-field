@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '15bcbba14ef6';                 // replaced by build.js with the build's hash
+const BUILD_ID = '8299548a58c1';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -378,10 +378,11 @@ function render() {
 function hasGuide() { return ['nurse', 'dots', 'reader1', 'reader2'].indexOf(role()) < 0; }
 function topBar(title, opts) {
   opts = opts || {};
-  const bar = el('header', { class: 'top' },
-    T.nav.length ? el('button', { class: 'back', 'aria-label': 'Back', onclick: () => confirmLeave(back) }, '‹ Back') : null,
-    el('h1', null, title),
-    opts.noMenu ? null : el('button', { class: 'icon lockbtn', 'aria-label': 'Lock', title: 'Lock', onclick: (ev) => { const b = ev.currentTarget; confirmLeave(() => { b.classList.add('locking'); setTimeout(lock, 420); }); } }, icon('padlock')));
+  const bar = el('header', { class: 'top' },          // the title is centred between the left (Back) and right (Lock) slots
+    el('div', { class: 'tl' }, T.nav.length ? el('button', { class: 'back', 'aria-label': 'Back', onclick: () => confirmLeave(back) }, '‹ Back') : null),
+    // "Laboratory results · TBDM-001" is shown on two lines so a centred title never hides the study number
+    el('h1', null, ...(/ · TBDM-\d+/.test(s_(title)) ? [s_(title).replace(/ · (TBDM-\d+.*)$/, ''), el('small', null, s_(title).replace(/^.* · (TBDM-\d+.*)$/, '$1'))] : [title])),
+    el('div', { class: 'tr' }, opts.noMenu ? null : el('button', { class: 'icon lockbtn', 'aria-label': 'Lock', title: 'Lock', onclick: (ev) => { const b = ev.currentTarget; confirmLeave(() => { b.classList.add('locking'); setTimeout(lock, 420); }); } }, icon('padlock'))));
   return [bar, el('div', { id: 'syncbar' }, syncBar())];
 }
 function syncBar() {

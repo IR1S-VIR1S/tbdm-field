@@ -283,3 +283,10 @@ main h2 { background: var(--brand-soft); color: var(--brand-ink); padding: 8px 1
 #ptr .ico, #ptr .ico svg { width: 22px; height: 22px; display: block; }
 #ptr.armed { background: var(--brand); color: #fff; }
 #ptr.spin .ico { animation: spinr .8s linear infinite; }
+
+/* Top bar: the title is centred; Back on the left, Lock on the right */
+.top { display: grid; grid-template-columns: 88px minmax(0, 1fr) 88px; gap: 8px; }
+.top .back { white-space: nowrap; }
+.top .tl { display: flex; align-items: center; justify-self: start; } .top .tr { display: flex; align-items: center; justify-self: end; }
+.top h1 { text-align: center; min-width: 0; }
+.top h1 small { display: block; font-size: 13px; font-weight: 600; opacity: .85; overflow: hidden; text-overflow: ellipsis; }
