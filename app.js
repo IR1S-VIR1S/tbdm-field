@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '11fd837e32d8';                 // replaced by build.js with the build's hash
+const BUILD_ID = '0ecae7670da1';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -90,9 +90,12 @@ async function sessRestore() {
 }
 async function saveState() {
   if (T.practice) { practiceCommit(); return; }
-  if (!S || !KEY) return;
+  await saveVault(S);
+}
+async function saveVault(st) {                            // the real study state, encrypted (also used while the PI is in Surveillance or Debugging)
+  if (!st || !KEY) return;
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, KEY, new TextEncoder().encode(JSON.stringify(S)));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, KEY, new TextEncoder().encode(JSON.stringify(st)));
   await kvSet('vault', { v: 1, salt: T.salt, iv, ct });
 }
 async function openVault(pin) {
@@ -281,7 +284,7 @@ async function sync() {
     if (S.server && S.server.photos && (S.photoOut || []).length) await pushPhotos(still);
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, at: Date.now() };
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, navOrder: pull.navOrder || null, navOrders: pull.navOrders || null, at: Date.now() };
     if (pull.photos && (S.photoOut || []).length) await pushPhotos(still);          // photos taken before the feature reached this phone
     if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
     T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email;
@@ -651,8 +654,29 @@ const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'pe
 function tabTo(name) { confirmLeave(() => { resetNav(); if (name === 'register' && T.reg) T.reg.list = null; if (name !== 'home') go(name); else { T.form = null; render(); window.scrollTo(0, 0); } }); }
 // The bar can be rearranged: hold a tab for a moment, then slide it left or right. The order is kept on this phone (not sensitive, not sent anywhere).
 const NAVKEY = 'tbdm-nav';
-function navSaved() { try { const v = JSON.parse(localStorage.getItem(NAVKEY) || 'null'); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
+// Personal order {order, at} (older phones saved a bare list). The role's default order comes from the PI (pull: navOrder {order, at});
+// the personal order wins only if it was made after the PI last set the default. In Surveillance and Debugging only the role default counts.
+function navPersonal() { try { const v = JSON.parse(localStorage.getItem(NAVKEY) || 'null'); return Array.isArray(v) ? { order: v, at: 0 } : v && Array.isArray(v.order) ? v : null; } catch (e) { return null; } }
+function navSaved() {
+  const d = S && S.server && S.server.navOrder, p = T.preview ? null : navPersonal();
+  if (p && (!d || +p.at > +d.at)) return p.order;
+  return d ? d.order : p ? p.order : [];
+}
 function navOrdered(tabs) { const o = navSaved(), rank = (t) => { const i = o.indexOf(t[0]); return i < 0 ? 999 : i; }; return tabs.map((t, i) => [t, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((x) => x[0]); }
+const navKeyOf = (r) => (/^reader/.test(r) ? 'reader' : r);
+// Sent with the PI's own phone access (the sandbox itself never contacts the study). Phones of that role get it at their next sync.
+async function navSetDefault(order) {
+  const real = T.real, r = T.preview; if (!real || !r) return;
+  S.server.navOrder = { order, at: Date.now() }; render();
+  if (!navigator.onLine) { toast('Connect to the internet to save the bar order for ' + previewName(r) + '.'); return; }
+  try {
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 30000);
+    const res = await fetch(real.cfg.api, { method: 'POST', body: JSON.stringify({ op: 'nav_set', token: real.cfg.token, role: r, order }), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, signal: ctl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store' }).then((x) => x.json()).finally(() => clearTimeout(timer));
+    if (!res.ok) throw new Error(res.error || 'not saved');
+    real.server.navOrders = res.navOrders; await saveVault(real);
+    toast('Saved as the bar order for ' + previewName(r) + '. Their phones change at the next sync.');
+  } catch (e) { toast('Bar order not saved: ' + e.message); }
+}
 function navDrag(nav) {
   let timer = 0, drag = null, sx = 0, sy = 0, swallow = false, edge = 0;
   const btns = () => Array.from(nav.querySelectorAll('.bn'));
@@ -660,7 +684,11 @@ function navDrag(nav) {
     clearTimeout(timer); clearInterval(edge);
     if (drag) {
       drag.el.classList.remove('dragging'); drag.el.style.transform = ''; nav.classList.remove('dragmode');
-      if (save) { try { localStorage.setItem(NAVKEY, JSON.stringify(btns().map((b) => b.dataset.tab))); } catch (e) { /* ignore */ } }
+      if (save) {
+        const order = btns().map((b) => b.dataset.tab);
+        if (T.preview) navSetDefault(order);                                     // the PI in Surveillance or Debugging: the role's default order
+        else { try { localStorage.setItem(NAVKEY, JSON.stringify({ order, at: Date.now() })); } catch (e) { /* ignore */ } }
+      }
       drag = null; swallow = true; setTimeout(() => { swallow = false; }, 350);
     }
   };
@@ -2161,9 +2189,9 @@ function previewStart(r, mode) {
   if (!real || real.cfg.role !== 'pi' || (T.practice && !T.preview) || !PMODE[mode]) return;
   if (T.syncing) { toast('The phone is sending entries. Try again in a moment.'); return; }
   const a = accessFor_(r, (real.server && real.server.accessStored) || null), rs = real.server || {}, day = (n) => isoOf_(dayNo_(todayIso()) - n);
-  T.real = real; T.preview = r; T.pmode = mode; T.practice = true; T.reg = null; T.link = null;
+  T.real = real; T.preview = r; T.pmode = mode; T.practice = true; T.reg = null; T.link = null; T.navScroll = 0;
   S = { cfg: Object.assign({}, real.cfg, { token: '', api: '', email: PMODE[mode].name.toLowerCase() + ' as ' + previewName(r), role: r }), outbox: [], lastSync: Date.now(), confOut: [],
-    server: { access: a, tabs: {}, regnums: [], held: [], photos: false, at: Date.now(), films: [] } };
+    server: { access: a, tabs: {}, regnums: [], held: [], photos: false, at: Date.now(), films: [], navOrder: ((rs.navOrders || {})[navKeyOf(r)]) || null } };
   if (mode === 'watch') {
     const cx = rs.tabs && rs.tabs.S3_CXR, ci = (k) => (cx ? cx.cols.indexOf(k) : -1);
     Object.assign(S.server, { tabs: previewTabs(real, a, r), regnums: a.view ? rs.regnums || [] : [], held: a.view ? rs.held || [] : [], at: rs.at,
@@ -2595,7 +2623,6 @@ function sampleFilm() {
   return (T.sampleFilm = c.toDataURL('image/png'));
 }
 function samplePane(box, head, sid) {
-  if (T.cxrHide) { box.append(head('')); return box; }
   const src = sampleFilm(), ph = { doc: 'CXR', visit: '', photo_id: 'sample' };
   box.append(head('made-up participant'), el('button', { class: 'cxrimg', type: 'button', id: 'cxr-open', 'aria-label': 'Enlarge the sample film', onclick: () => photoOpen(ph, src) }, el('img', { src, alt: 'Sample chest film for practice' })),
     el('div', { class: 'cxrtools' }, el('span', { class: 'grow small muted' }, 'Sample film for practice: real participants show their covered radiograph here.')));
@@ -2604,14 +2631,12 @@ function samplePane(box, head, sid) {
 }
 function cxrPane(sid) {
   if (!/^reader/.test(role()) || !sid) return null;
-  const box = el('div', { class: 'card cxrpane' + (T.cxrHide ? ' folded' : ''), id: 'cxrpane' });
-  const head = (txt) => el('div', { class: 'cxrbar' }, el('b', null, 'Radiograph ' + sid), txt ? el('span', { class: 'small muted' }, txt) : null,
-    el('button', { class: 'btn small', type: 'button', id: 'cxr-fold', onclick: () => { T.cxrHide = !T.cxrHide; render(); } }, T.cxrHide ? 'Show image' : 'Hide image'));
+  const box = el('div', { class: 'card cxrpane', id: 'cxrpane' });
+  const head = (txt) => el('div', { class: 'cxrbar' }, el('b', null, 'Radiograph ' + sid), txt ? el('span', { class: 'small muted' }, txt) : null);   // the film is always shown when there is one
   const say = (msg) => box.replaceChildren(head(''), el('div', { class: 'small muted cxrmsg' }, msg));
   if (T.practice && !watching()) return samplePane(box, head, sid);          // practice and Debugging: a drawn sample film, so the page looks as it will
   if (watching()) { say('Images are not loaded in Surveillance. The reader sees the covered radiograph here once photos are switched on.'); return box; }
   if (!photosOn()) { say('Radiograph images are switched off. Score from the film itself.'); return box; }
-  if (T.cxrHide) { box.append(head('')); return box; }
   const C = T.cxr[sid] || (T.cxr[sid] = { list: null, i: 0, img: {}, err: '' });
   const draw = () => {
     if (C.err) { say(C.err); return; }
@@ -2735,7 +2760,7 @@ async function photoOpen(ph, have) {
     let z = 1;
     const zoom = (n) => { z = n; img.style.width = n === 0 ? img.naturalWidth + 'px' : (100 * z) + '%'; img.style.maxWidth = 'none'; ov.querySelectorAll('.pf-z').forEach((b) => b.classList.toggle('primary', +b.dataset.z === z)); };   // 0 = actual pixels (full resolution)
     ov.replaceChildren(el('div', { class: 'pf-bar' }, el('b', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '')),
-      [1, 2, 3, 0].map((n) => el('button', { class: 'btn small pf-z' + (n === 1 ? ' primary' : ''), type: 'button', 'data-z': String(n), title: n === 0 ? 'Actual pixels, full resolution' : '', onclick: () => zoom(n) }, n === 0 ? '1:1' : n + '×')),
+      /^reader/.test(role()) ? null : [1, 2, 3, 0].map((n) => el('button', { class: 'btn small pf-z' + (n === 1 ? ' primary' : ''), type: 'button', 'data-z': String(n), title: n === 0 ? 'Actual pixels, full resolution' : '', onclick: () => zoom(n) }, n === 0 ? '1:1' : n + '×')),
       have ? null : el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked as too poor to read. The PI has been told.' : 'Could not mark it: ' + (f.error || 'no signal')); } }, 'Too poor'),
       el('button', { class: 'btn small', type: 'button', id: 'photo-close', onclick: close }, 'Close')), pane);
   } catch (e) { ov.replaceChildren(el('div', { class: 'small' }, 'Could not open: ' + e.message), el('button', { class: 'btn', onclick: close }, 'Close')); }
