@@ -1273,11 +1273,19 @@ const ACCESS_DEFAULT = {
   dots: { numbers: true, ident: true, photoTake: true, photoView: true }
 };
 // One role's ticks: the defaults, overlaid with what the PI saved, with every tick that needs 'view' turned off when 'view' is off.
+// Roles the PI adds in the Role manager ('c1', 'c2' ...) for particular people: a name, the people's e-mails and their own ticks (none by default).
+const CUSTOM_ROLE_RX = /^c\d{1,3}$/, CUSTOM_MAX = 12, CUSTOM_PEOPLE_MAX = 20;
+function isCustomRole_(role) { return CUSTOM_ROLE_RX.test(String(role || '')); }
+function accessRoleName_(role, stored) {
+  if (isCustomRole_(role)) { const c = stored && stored.custom && stored.custom[role]; return c ? String(c.name) : 'Removed role'; }
+  return ACCESS_ROLE_NAMES[role] || (/^reader/.test(role) ? 'Radiograph reader' : String(role || ''));
+}
 function accessFor_(role, stored) {
   const out = {};
   if (role === 'pi') { ACCESS_KEYS.forEach(function (k) { out[k.key] = true; }); return out; }
-  if (ACCESS_ROLES.indexOf(role) < 0) { ACCESS_KEYS.forEach(function (k) { out[k.key] = false; }); return out; }   // readers and unknown roles
-  const d = ACCESS_DEFAULT[role] || {}, sv = stored && stored[role] ? stored[role] : null;
+  const custom = isCustomRole_(role) && stored && stored.custom && stored.custom[role] ? stored.custom[role] : null;
+  if (ACCESS_ROLES.indexOf(role) < 0 && !custom) { ACCESS_KEYS.forEach(function (k) { out[k.key] = false; }); return out; }   // readers and unknown roles
+  const d = custom ? {} : ACCESS_DEFAULT[role] || {}, sv = custom ? custom.access || {} : stored && stored[role] ? stored[role] : null;
   ACCESS_KEYS.forEach(function (k) { out[k.key] = sv && typeof sv[k.key] === 'boolean' ? sv[k.key] : !!d[k.key]; });
   ACCESS_KEYS.forEach(function (k) { if (k.need && !out[k.need]) out[k.key] = false; });
   return out;

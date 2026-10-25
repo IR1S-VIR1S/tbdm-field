@@ -359,3 +359,9 @@ button.tick { cursor: pointer; }
 td.fixed .tick { opacity: .45; }
 .accgrid tr.fixedrow th.task { color: var(--muted); }
 button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+.accgrid th.custom { color: var(--tools); }
+.accgrid td.custom { background: var(--brand-soft); }
+#modal textarea.search { height: auto; padding: 10px 14px; resize: vertical; font: inherit; }
+#cr-err { color: var(--bad); min-height: 1.2em; }
+.feedhead.static { cursor: default; }
+.card.find .search { margin-bottom: 0; }
