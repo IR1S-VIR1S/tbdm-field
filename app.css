@@ -337,3 +337,6 @@ div.ctile { cursor: pointer; }
 .photocard .pbtn { width: 44px; height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--brand-ink); display: inline-flex; align-items: center; justify-content: center; }
 .photocard .pbtn:disabled { opacity: .4; } .photocard .pbtn .ico, .photocard .pbtn svg { width: 22px; height: 22px; display: block; }
 .photocard .photorow .grow { min-width: 0; }
+
+/* recent activity: the line about what is sent */
+.fsent { margin-top: 8px; }

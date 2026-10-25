@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'fd08342f532b';                 // replaced by build.js with the build's hash
+const BUILD_ID = '41d271c1094e';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -597,7 +597,6 @@ function findBox(short) {
       el('button', { class: 'btn primary', type: 'button', id: 'findgo', onclick: () => findPatient($('#find').value) }, 'Open')),
     recent);
 }
-// ---- PI home: a feed of what needs attention, with a bottom bar. Other roles keep the tile home.
 const ICONS = {
   camera: '<path d="M4 8h3l1.5-2.5h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>',
   records: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><rect x="8.5" y="11" width="8" height="6.5" rx="1"/><path d="m8.5 16 2.5-2.5 2 2 1.5-1.5 2 2"/>',
@@ -626,11 +625,12 @@ function icon(k) { const s = el('span', { class: 'ico', 'aria-hidden': 'true' })
 function navIds() {
   const r = role();
   if (r === 'pi') return ['home', 'participants', 'due', 'queries', 'visits', 'linkpick', 'register', 'settings'];
-  if (r === 'dots' || r === 'reader1' || r === 'reader2') return ['home', 'settings'];
+  if (r === 'dots') return ['home', 'register', 'settings'];
+  if (r === 'reader1' || r === 'reader2') return ['home', 'films', 'settings'];
   if (isNurse()) return ['home', 'measure', 'settings'];
   return ['home', 'participants', 'due', 'queries', 'visits', 'settings'];
 }
-const NAV_TABS = [['home', 'Home', 'home'], ['measure', 'Measure', 'ruler'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['queries', 'Queries', 'query'], ['visits', 'Checklist', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'link'], ['settings', 'Settings', 'settings']];
+const NAV_TABS = [['home', 'Home', 'home'], ['measure', 'Measure', 'ruler'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['queries', 'Queries', 'query'], ['visits', 'Checklist', 'list'], ['films', 'Films', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'link'], ['settings', 'Settings', 'settings']];
 function tabTo(name) { confirmLeave(() => { resetNav(); if (name === 'register' && T.reg) T.reg.list = null; if (name !== 'home') go(name); else { T.form = null; render(); window.scrollTo(0, 0); } }); }
 // The bar can be rearranged: hold a tab for a moment, then slide it left or right. The order is kept on this phone (not sensitive, not sent anywhere).
 const NAVKEY = 'tbdm-nav';
@@ -684,8 +684,8 @@ function bottomNav(active) {
   let dueN = 0, qN = 0;
   try { const d = derived(); dueN = d.schedule.filter((r) => r[5] !== 'upcoming').length; qN = d.queries.length; } catch (e) { dueN = 0; qN = 0; }
   const pend = T.practice || !confCopy() && !(T.reg && T.reg.list) ? 0 : identifiersPending(T.reg && T.reg.list ? T.reg.list : confAsList()).length;
-  const ids = navIds(), me = role();
-  const tabs = navOrdered(NAV_TABS.filter((t) => ids.indexOf(t[0]) >= 0 && ((t[0] !== 'linkpick' && t[0] !== 'register') || !T.practice)).map((t) => t[0] === 'home' && me === 'dots' ? ['home', 'Link register', 'link'] : t[0] === 'home' && (me === 'reader1' || me === 'reader2') ? ['home', 'Films', 'list'] : t));
+  const ids = navIds();
+  const tabs = navOrdered(NAV_TABS.filter((t) => ids.indexOf(t[0]) >= 0 && ((t[0] !== 'linkpick' && t[0] !== 'register') || !T.practice)));
   const nav = el('nav', { class: 'bnav', 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'data-tab': t[0], 'aria-current': t[0] === active ? 'page' : null, onclick: () => tabTo(t[0]) },
     icon(t[2]), t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'queries' && qN ? el('i', { class: 'badge' }, String(qN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : null, el('span', { class: 'lbl' }, t[1]))));
   navDrag(nav);
@@ -711,27 +711,81 @@ function feedCard(cls, title, count, rows, onAll, none) {
     rows.length ? rows.slice(0, 3).map((r) => el('button', { class: 'feedrow', onclick: r.go }, el('span', { class: 'fmain' }, r.main, r.sub ? el('small', null, r.sub) : null), r.chip ? el('span', { class: 'chip ' + (r.chipCls || '') }, r.chip) : null)) : el('div', { class: 'feednone' }, none),
     count > 3 ? el('button', { class: 'feedmore', onclick: onAll }, 'See all ' + count) : null);
 }
+// One home for every role: the same layout (sync warnings, number box and quick buttons, then lists of what needs attention, then recent
+// activity). The roles differ only in which blocks appear, each block built from data that role already holds on the phone.
+function homeWarn(bad, waiting, oldest) {
+  return bad.length ? el('button', { class: 'card alert row', onclick: () => go('attention') }, el('div', { class: 'main' }, el('div', null, bad.length + ' entr' + (bad.length > 1 ? 'ies need' : 'y needs') + ' fixing'), el('div', { class: 'sub' }, 'The workbook did not accept them. Tap to see why.')), el('span', { class: 'chev' })) :
+    waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null;
+}
+function recentBlock(sent) {
+  return [el('h2', null, 'Recent activity'),
+    el('div', { class: 'card feedcard' },
+      T.recent.length ? [el('div', { class: 'small muted' }, 'Opened on this phone'), el('div', { class: 'chips' }, T.recent.map((sid) => el('button', { class: 'rchip', onclick: () => findPatient(sid) }, sid)))] : el('div', { class: 'small muted' }, 'Nothing opened yet in this session.'),
+      el('div', { class: 'small muted fsent' }, sent))];
+}
+// Measurements the nurse can take now: the baseline if missing, and any open nurse visit not yet entered.
+function measuresDue() {
+  const out = [];
+  view('S1_ENROL').filter((r) => r.study_id).sort((a, b) => (a.study_id < b.study_id ? -1 : 1)).forEach((r) => {
+    const sid = r.study_id, need = [];
+    if (!find('S2_BASELINE', { study_id: sid }) && !visitOpens(sid, 'V1')) need.push('V1 baseline');
+    NURSE_VISITS.forEach((v) => { if (!visitOpens(sid, v) && !find('VISITS', { study_id: sid, visit: v })) need.push(v); });
+    if (need.length) out.push({ sid, need });
+  });
+  return out;
+}
 function piHome(out, bad, waiting, oldest, dueN) {
-  const due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = waitingEnrol(), idp = !T.practice && navigator.onLine ? identifiersPending(T.reg && T.reg.list) : [];
+  const nurse = isNurse(), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], idp = role() === 'pi' && !T.practice && navigator.onLine ? identifiersPending(T.reg && T.reg.list) : [];
   const group = {}; out.queries.forEach((q) => { const g = q[0] || 'Screening log'; (group[g] = group[g] || []).push(q); });
-  const qkeys = Object.keys(group).sort();
+  const qkeys = Object.keys(group).sort(), md = nurse ? measuresDue() : [];
   const main = el('main', { class: 'pihome' },
-    bad.length ? el('button', { class: 'card alert row', onclick: () => go('attention') }, el('div', { class: 'main' }, el('div', null, bad.length + ' entr' + (bad.length > 1 ? 'ies need' : 'y needs') + ' fixing'), el('div', { class: 'sub' }, 'The workbook did not accept them. Tap to see why.')), el('span', { class: 'chev' })) :
-    waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null,
-    el('div', { class: 'homerow' },
+    homeWarn(bad, waiting, oldest),
+    el('div', { class: 'homerow' + (canData() ? '' : ' solo') },
       findBox(true),
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, screenedToday())) : null,
       canData() ? enrolTile() : null),
-    feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
+    nurse ? feedCard('due ' + (md.length ? 'hot' : 'calm'), 'Measurements to take', md.length,
+      md.map((m) => ({ main: m.sid, sub: m.need.join(', '), chip: String(m.need.length), chipCls: 'warn', go: () => go('measurefor', { sid: m.sid }) })), () => go('measure'), 'Nothing to measure') : null,
+    nurse ? null : feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
       due.map((r) => ({ main: dueLabel(r), sub: winTxt(r), chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due'),
-    feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
+    nurse ? null : feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
       qkeys.map((g) => ({ main: g, sub: group[g][0][4] + (group[g].length > 1 ? ' and ' + (group[g].length - 1) + ' more' : ''), chip: String(group[g].length), chipCls: 'bad', go: () => openQuery(group[g][0]) })), () => go('queries'), 'No queries'),
     w.length ? feedCard('wait', 'Waiting to enrol', w.length, w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => findPatient(id) })), () => go('form', { tab: 'S1_ENROL', key: {} }), '') : null,
     idp.length ? feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: 'Name, record number and telephone not recorded', go: () => { if (T.reg) T.reg.list = null; go('register'); } })), () => { if (T.reg) T.reg.list = null; go('register'); }, '') : null,
+    recentBlock(waiting.length ? waiting.length + ' waiting to send' : 'All entries sent'));
+  return topBar('TBDM Field').concat([main]);
+}
+// DOTS incharge: the register is the work, so the home lists enrolled numbers still without identifiers and what waits to be sent.
+function dotsHome() {
+  const L = T.reg && T.reg.list && !T.reg.list.cached && linkUp() ? T.reg.list : confAsList(), idp = identifiersPending(L), q = S.confOut || [], spare = ownFree().length;
+  const toReg = () => { if (T.reg) T.reg.list = null; go('register'); };
+  const main = el('main', { class: 'pihome' },
+    el('div', { class: 'homerow solo' },
+      el('button', { class: 'tile primary', onclick: toReg }, el('b', null, 'Assign a study number'), el('span', null, spare ? spare + ' spare number' + (spare === 1 ? '' : 's') + ' on this phone' : 'Online: next number from the register'))),
+    feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id, sub: 'Name, record number and telephone not recorded', go: toReg })), toReg, L ? 'All enrolled numbers have identifiers' : 'Open the Link register once while online'),
+    q.length ? feedCard('due hot', 'Waiting to send', q.length, q.map((c) => ({ main: s_(c.body.study_id) || 'New number', sub: c.err ? 'Not accepted: ' + c.err : 'Saved on this phone, sent at the next sync', chip: c.err ? 'fix' : 'unsent', chipCls: c.err ? 'bad' : 'warn', go: toReg })), toReg, '') : null,
     el('h2', null, 'Recent activity'),
-    el('div', { class: 'card feedcard' },
-      T.recent.length ? [el('div', { class: 'small muted' }, 'Opened on this phone'), el('div', { class: 'chips' }, T.recent.map((sid) => el('button', { class: 'rchip', onclick: () => findPatient(sid) }, sid)))] : el('div', { class: 'small muted' }, 'Nothing opened yet in this session.'),
-      el('div', { class: 'small muted', style: 'margin-top:8px' }, waiting.length ? waiting.length + ' waiting to send' : 'All entries sent') ));
+    el('div', { class: 'card feedcard' }, el('div', { class: 'small muted' }, L && L.at ? 'Register copy saved ' + new Date(L.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : L ? 'Register up to date' : 'No copy of the register on this phone yet'),
+      el('div', { class: 'small muted fsent' }, q.length ? q.length + ' waiting to send' : 'All entries sent')));
+  return topBar('TBDM Field').concat([main]);
+}
+// Radiograph readers: films to score first, then what they have scored. Nothing clinical is held on this phone.
+function filmLists() {
+  const fl = (S.server && S.server.films) || [], mine = view('R_SCORES');
+  const has = (sid, n) => mine.some((r) => r.study_id === sid && r.read_no === n);
+  const todo = fl.filter((f) => !has(f.study_id, '1') || (f.repeat && !has(f.study_id, '2')));
+  return { fl, mine, has, todo, done: fl.filter((f) => todo.indexOf(f) < 0) };
+}
+function readerHome(bad, waiting, oldest) {
+  const { has, todo, done } = filmLists();
+  const open = (f, n) => go('form', { tab: 'R_SCORES', key: { study_id: f.study_id, read_no: n } });
+  const main = el('main', { class: 'pihome' },
+    homeWarn(bad, waiting, oldest),
+    feedCard('due ' + (todo.length ? 'hot' : 'calm'), 'Films to score', todo.length, todo.map((f) => { const n = !has(f.study_id, '1') ? '1' : '2'; return { main: f.study_id, sub: 'film of ' + (f.cxr_date || '?') + (n === '2' ? ' · repeat read requested' : ''), chip: n === '2' ? 'repeat' : 'new', chipCls: 'warn', go: () => open(f, n) }; }), () => go('films'), 'Nothing to score'),
+    feedCard('calm', 'Scored', done.length, done.map((f) => ({ main: f.study_id, sub: 'film of ' + (f.cxr_date || '?'), go: () => open(f, '1') })), () => go('films'), 'None yet'),
+    el('h2', null, 'Recent activity'),
+    el('div', { class: 'card feedcard' }, el('div', { class: 'small muted' }, 'Score each film from the image alone. You see no clinical or group information, and nobody but you and the PI sees your scores.'),
+      el('div', { class: 'small muted fsent' }, waiting.length ? waiting.length + ' waiting to send' : 'All entries sent')));
   return topBar('TBDM Field').concat([main]);
 }
 function toolRow(title, sub, fn) { return el('button', { class: 'row', onclick: fn }, el('div', { class: 'main' }, el('div', null, title), el('div', { class: 'sub' }, sub)), el('span', { class: 'chev' })); }
@@ -743,33 +797,12 @@ function tools() {
     T.practice ? null : [el('h2', null, 'Training'), el('div', { class: 'list' }, toolRow('Practice', 'Learn with made-up patients', () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']])))])]);
 }
 function home() {
-  if (role() === 'dots') return registerScreen();
+  if (role() === 'dots') return dotsHome();
   if (!S.server) return topBar('TBDM Field').concat([el('main', null, el('div', { class: 'card' }, navigator.onLine ? 'Fetching the study data…' : 'Connect to the internet once to fetch the study data.'))]);
-  if (role() === 'reader1' || role() === 'reader2') return films();
-  const out = isNurse() ? { schedule: [], queries: [] } : derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
+  const out = isNurse() || /^reader/.test(role()) ? { schedule: [], queries: [] } : derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
   const oldest = waiting.reduce((m, c) => Math.min(m, c.at), Infinity);
-  const dueN = out.schedule.filter((r) => r[5] !== 'upcoming').length;
-  if (role() === 'pi') return piHome(out, bad, waiting, oldest, dueN);
-  const main = el('main', null,
-    bad.length ? el('button', { class: 'card alert row', onclick: () => go('attention') }, el('div', { class: 'main' }, el('div', null, bad.length + ' entr' + (bad.length > 1 ? 'ies need' : 'y needs') + ' fixing'), el('div', { class: 'sub' }, 'The workbook did not accept them. Tap to see why.')), el('span', { class: 'chev' })) : null,
-    waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null,
-    el('div', { class: 'homerow' + (canData() ? '' : ' solo') },
-      findBox(true),
-      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, screenedToday())) : null,
-      canData() ? enrolTile() : null),
-    el('div', { class: 'tiles' },
-      isNurse() ? el('button', { class: 'tile primary', onclick: () => go('measure') }, el('b', null, 'Measurements'), el('span', null, 'Height, weight, waist, arm')) : null,
-      isNurse() ? null : el('button', { class: 'tile guide', onclick: () => go('visits') }, el('b', null, 'Visit checklist'), el('span', null, 'What to order and do')),
-      isNurse() ? null : el('button', { class: 'tile people', onclick: () => go('participants') }, el('b', null, 'Participants'), el('span', null, Object.keys(enrolledMap()).length + ' enrolled')),
-      role() === 'pi' && !T.practice ? el('button', { class: 'tile conf', onclick: () => go('linkpick') }, el('b', null, 'Contact'), el('span', null, 'Confidential · call, WhatsApp')) : null,
-      role() === 'pi' && !T.practice && navigator.onLine ? el('button', { class: 'tile conf', onclick: () => { if (T.reg) T.reg.list = null; go('register'); } }, el('b', null, 'Link register'), el('span', null, identifiersPending(T.reg && T.reg.list).length ? identifiersPending(T.reg.list).length + ' enrolled, identifiers pending' : 'Confidential · online only')) : null,
-      isNurse() ? null : el('button', { class: 'tile due ' + (dueN ? 'hot' : 'calm'), onclick: () => go('due') }, el('b', null, 'Due and overdue'), el('span', null, dueN + ' visit' + (dueN === 1 ? '' : 's'))),
-      isNurse() ? null : el('button', { class: 'tile queries ' + (out.queries.length ? 'hot' : 'calm'), onclick: () => go('queries') }, el('b', null, 'Queries'), el('span', null, out.queries.length + ' to check')),
-      el('button', { class: 'tile', onclick: () => go('screening') }, el('b', null, 'Screening log'), el('span', null, view('S0_SCREEN').length + ' screened')),
-      role() === 'qc' || role() === 'pi' ? el('button', { class: 'tile', onclick: () => go('qclog') }, el('b', null, 'Verification log'), el('span', null, view('QC_LOG').length + ' checks')) : null,
-      T.practice ? null : el('button', { class: 'tile guide', onclick: () => modal('Start practice mode?', [el('p', null, 'You will work on made-up participants. Nothing is saved or sent to the study. Your real entries are kept safe and come back when you leave practice.')], [['Cancel', null], ['Start practice', practiceStart, 'primary']]) }, el('b', null, 'Practice'), el('span', null, 'Learn with made-up patients')),
-      el('button', { class: 'tile', onclick: () => go('settings') }, el('b', null, 'Settings'), el('span', null, S.cfg.email || ''))));
-  return topBar('TBDM Field').concat([main]);
+  if (role() === 'reader1' || role() === 'reader2') return readerHome(bad, waiting, oldest);
+  return piHome(out, bad, waiting, oldest, out.schedule.filter((r) => r[5] !== 'upcoming').length);
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
 const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']];
@@ -1390,18 +1423,26 @@ function linkPick() {
   if (!confCopy() && navigator.onLine && !T.cqLoading && !T.cqTried) { T.cqLoading = true; T.cqTried = true; confRefresh(() => {}).catch(() => {}).then(() => { T.cqLoading = false; if (KEY && cur().name === 'linkpick') { const old = $('.search'); T.cq = old ? old.value : T.cq; render(); } }); }
   return topBar('Contact').concat([el('main', null, q, note, dueBox, recentBox, list)]);
 }
+// The nurse's participant page: the same layout as everyone else's (enrolment on top, then one block per visit with its window),
+// listing only the measurements she takes.
 function measureFor(p) {
   const sid = p.sid; recordRecent(sid);
+  const e = find('S1_ENROL', { study_id: sid }), d0 = e ? dayNo_(e.att_start_date) : null;
   const row = (tab, key, name) => {
     const opens = visitOpens(sid, key.visit || 'V1');
     if (opens && !find(tab, key)) return lockedRow(name, opens);
     return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, name)), statusChip(find(tab, key)), el('span', { class: 'chev' }));
   };
+  const block = (v, rows) => {
+    const w = CFG.WINDOWS[v], range = d0 !== null ? dmy(isoOf_(d0 + w[1])) + ' to ' + dmy(isoOf_(d0 + w[2])) : 'set the date ATT started';
+    return [el('h2', { class: 'vhead' }, v + ' · ' + (v === 'V1' ? 'baseline' : 'month ' + ({ V2: 1, V3: 2, V4: 3, V5: 6 })[v])),
+      el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)), rows)];
+  };
   return topBar(sid).concat([el('main', null,
-    el('div', { class: 'list' }, row('S2_BASELINE', { study_id: sid }, 'V1 baseline: height, weight, waist, arm'),
-      NURSE_VISITS.map((v) => row('VISITS', { study_id: sid, visit: v }, v + ': weight, waist, arm'))),
-    el('h2', null, 'Enrolment'),
-    el('div', { class: 'list' }, row('S1_ENROL', { study_id: sid }, 'Enrolment details')))]);
+    el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
+      el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, e && e.att_start_date ? 'ATT started ' + e.att_start_date : 'ATT start date not recorded')), statusChip(e), el('span', { class: 'chev' }))),
+    block('V1', row('S2_BASELINE', { study_id: sid }, 'Height, weight, waist, arm')),
+    NURSE_VISITS.map((v) => block(v, row('VISITS', { study_id: sid, visit: v }, 'Weight, waist, arm'))))]);
 }
 function due() {
   const out = derived();
@@ -1485,10 +1526,7 @@ function attention() {
     bad.length ? null : el('div', { class: 'empty' }, 'Nothing needs fixing'))]);
 }
 function films() {
-  const fl = (S.server && S.server.films) || [], mine = view('R_SCORES');
-  const has = (sid, n) => mine.some((r) => r.study_id === sid && r.read_no === n);
-  const todo = fl.filter((f) => !has(f.study_id, '1') || (f.repeat && !has(f.study_id, '2')));
-  const done = fl.filter((f) => todo.indexOf(f) < 0);
+  const { mine, has, todo, done } = filmLists();
   const item = (f) => {
     const n = !has(f.study_id, '1') ? '1' : '2';
     return el('button', { class: 'row', onclick: () => go('form', { tab: 'R_SCORES', key: { study_id: f.study_id, read_no: todo.indexOf(f) >= 0 ? n : '1' } }) },
@@ -1497,8 +1535,7 @@ function films() {
   };
   return topBar('Radiograph scoring').concat([el('main', null, el('div', { class: 'card small' }, 'Score each film from the image alone. You see no clinical or group information, and nobody but you and the PI sees your scores.'),
     el('h2', null, 'To score (' + todo.length + ')'), el('div', { class: 'list' }, todo.length ? todo.map(item) : el('div', { class: 'empty' }, 'Nothing to score')),
-    el('h2', null, 'Scored'), el('div', { class: 'list' }, done.length ? done.map(item) : el('div', { class: 'empty' }, 'None yet')),
-    el('button', { class: 'btn block', onclick: () => go('settings') }, 'Settings'))]);
+    el('h2', null, 'Scored'), el('div', { class: 'list' }, done.length ? done.map(item) : el('div', { class: 'empty' }, 'None yet')))]);
 }
 // Manual update: asks the server for a newer version, then reloads once the new one is in place.
 // Update now: the background updater may already have fetched the new version and be waiting for the lock screen, so first
