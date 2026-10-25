@@ -162,7 +162,7 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
 .bn { position: relative; flex: 1 0 auto; min-width: 74px; scroll-snap-align: center; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 2px 8px; background: none; border: 0; color: var(--muted); min-height: 58px; }
 .bn .ico { width: 24px; height: 24px; display: block; } .bn .ico svg { width: 24px; height: 24px; display: block; }
 .bn .lbl { font-size: 11px; font-weight: 600; }
-.bn.on { color: var(--brand-ink); } .bn.on::before { content: ""; position: absolute; top: 0; left: 22%; right: 22%; height: 3px; border-radius: 0 0 3px 3px; background: var(--brand); }
+.bn.on { color: var(--brand-ink); } .bnav .slide { position: absolute; top: 0; left: 0; height: 3px; border-radius: 0 0 3px 3px; background: var(--brand); pointer-events: none; } .bnav .slide.go { transition: transform .28s cubic-bezier(.3,.7,.2,1), width .28s cubic-bezier(.3,.7,.2,1); }
 .bn .badge { position: absolute; top: 4px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #b3261e; color: #fff; font-style: normal; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; }
 
 
@@ -239,3 +239,8 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
 
 .bn.on .ico svg { fill: currentColor; } .bn.on .ico svg .d { stroke: var(--card); }
 .bn.on .ico svg.nofill, .bn.on[data-tab="register"] .ico svg { fill: none; stroke-width: 2.6; }
+
+@keyframes tabon { from { color: var(--muted); } }
+@keyframes tabfill { from { fill-opacity: 0; } }
+.bn.on { animation: tabon .25s ease-out; } .bn.on .ico svg { animation: tabfill .25s ease-out; }
+@media (prefers-reduced-motion: reduce) { .bn.on, .bn.on .ico svg { animation: none; } }

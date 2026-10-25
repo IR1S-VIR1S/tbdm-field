@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '5d8a0cfd43c5';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'bff895fba4b8';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -350,7 +350,7 @@ function render() {
     queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
-  const hasNav = role() === 'pi' && S && S.server && ['home', 'participants', 'due', 'tools', 'queries', 'visits', 'settings', 'linkpick', 'register'].indexOf(c.name) >= 0;
+  const hasNav = !!(S && S.server) && navIds().concat(c.name === 'tools' ? ['tools'] : []).indexOf(c.name) >= 0;
   if (hasNav) app.append(bottomNav(c.name === 'tools' ? 'settings' : c.name));
   // iOS home-screen apps (WebKit bug 301994): on a page shorter than the screen, a bar pinned to the bottom floats about one
   // status bar above the real bottom. Pages long enough to scroll are fine, so short pages are made just taller than the screen.
@@ -526,9 +526,11 @@ function waitingEnrol() {
 }
 // Enrolled numbers whose name, record number and telephone are not yet recorded (known from the last register load; the register is online only)
 function identifiersPending(L) { return L && L.link ? L.rows.filter((r) => r.status === 'E' && !r.mrn && !r.phone) : []; }
+// Useful at a glance on the Screen tile: how many patients this phone has screened today (including lines not yet sent).
+function screenedToday() { const t = todayIso(), n = view('S0_SCREEN').filter((r) => s_(r.screen_date) === t).length; return n ? n + ' screened today' : 'None screened today'; }
 function enrolTile() {
   const w = waitingEnrol();
-  return el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrol'),
+  return el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrolment'),
     el('span', null, w.length ? 'Waiting: ' + w[0] + (w.length > 1 ? ' and ' + (w.length - 1) + ' more' : '') : 'Patient Study Number'));
 }
 // Every patient carries a card with the study number. Typing it here opens whatever that person needs next, whatever the role.
@@ -577,6 +579,7 @@ function findBox(short) {
 }
 // ---- PI home: a feed of what needs attention, with a bottom bar. Other roles keep the tile home.
 const ICONS = {
+  ruler: '<rect x="3" y="8" width="18" height="8" rx="1.5"/><path d="M7 8v3M11 8v4M15 8v3M19 8v4"/>',
   home: '<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.4"/><path d="M16.5 14.6c2.7.2 4.5 2 4.5 4.9"/>',
   due: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
@@ -594,9 +597,17 @@ const ICONS = {
   check: '<path d="M9 3.5h6l1 2h2.5a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1H8z"/><path d="m8.5 13 2.4 2.4 4.6-4.8"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
 };
-const ICON_DETAIL = { due: [1], query: [1], list: [1] };   // inner strokes that must stay visible when the bar icon is filled
+const ICON_DETAIL = { due: [1], query: [1], list: [1], ruler: [1] };   // inner strokes that must stay visible when the bar icon is filled
 function icon(k) { const s = el('span', { class: 'ico', 'aria-hidden': 'true' }); s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICONS[k] + '</svg>'; { (ICON_DETAIL[k] || []).forEach((i) => { const c = s.querySelector('svg').children[i]; if (c) c.setAttribute('class', 'd'); }); } return s; }
-const NAV_TABS = [['home', 'Home', 'home'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['queries', 'Queries', 'query'], ['visits', 'Checklist', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'link'], ['settings', 'Settings', 'settings']];
+// Every role gets the bar; the roles differ only in which tabs appear.
+function navIds() {
+  const r = role();
+  if (r === 'pi') return ['home', 'participants', 'due', 'queries', 'visits', 'linkpick', 'register', 'settings'];
+  if (r === 'dots' || r === 'reader1' || r === 'reader2') return ['home', 'settings'];
+  if (isNurse()) return ['home', 'measure', 'settings'];
+  return ['home', 'participants', 'due', 'queries', 'visits', 'settings'];
+}
+const NAV_TABS = [['home', 'Home', 'home'], ['measure', 'Measure', 'ruler'], ['participants', 'Participants', 'people'], ['due', 'Due', 'due'], ['queries', 'Queries', 'query'], ['visits', 'Checklist', 'list'], ['linkpick', 'Contacts', 'phone'], ['register', 'Link register', 'link'], ['settings', 'Settings', 'settings']];
 function tabTo(name) { confirmLeave(() => { resetNav(); if (name === 'register' && T.reg) T.reg.list = null; if (name !== 'home') go(name); else { T.form = null; render(); window.scrollTo(0, 0); } }); }
 // The bar can be rearranged: hold a tab for a moment, then slide it left or right. The order is kept on this phone (not sensitive, not sent anywhere).
 const NAVKEY = 'tbdm-nav';
@@ -650,11 +661,25 @@ function bottomNav(active) {
   let dueN = 0, qN = 0;
   try { const d = derived(); dueN = d.schedule.filter((r) => r[5] !== 'upcoming').length; qN = d.queries.length; } catch (e) { dueN = 0; qN = 0; }
   const pend = T.practice || !confCopy() && !(T.reg && T.reg.list) ? 0 : identifiersPending(T.reg && T.reg.list ? T.reg.list : confAsList()).length;
-  const tabs = navOrdered(NAV_TABS.filter((t) => (t[0] !== 'linkpick' && t[0] !== 'register') || (role() === 'pi' && !T.practice)));
+  const ids = navIds(), me = role();
+  const tabs = navOrdered(NAV_TABS.filter((t) => ids.indexOf(t[0]) >= 0 && ((t[0] !== 'linkpick' && t[0] !== 'register') || !T.practice)).map((t) => t[0] === 'home' && me === 'dots' ? ['home', 'Link register', 'link'] : t[0] === 'home' && (me === 'reader1' || me === 'reader2') ? ['home', 'Films', 'list'] : t));
   const nav = el('nav', { class: 'bnav', 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'data-tab': t[0], 'aria-current': t[0] === active ? 'page' : null, onclick: () => tabTo(t[0]) },
     icon(t[2]), t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'queries' && qN ? el('i', { class: 'badge' }, String(qN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : null, el('span', { class: 'lbl' }, t[1]))));
   navDrag(nav);
-  setTimeout(() => { const on = nav.querySelector('.bn.on'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' }); }, 0);          // the selected tab is always in view
+  // The top indicator slides from the tab that was selected to the new one (the bar is rebuilt on every screen, so its last place is remembered).
+  const slide = el('i', { class: 'slide', 'aria-hidden': 'true' }); nav.append(slide);
+  const place = (b) => { const w = b.offsetWidth; return { x: Math.round(b.offsetLeft + w * 0.22), w: Math.round(w * 0.56) }; };
+  queueMicrotask(() => {
+    const on = nav.querySelector('.bn.on'); if (!on) { slide.style.display = 'none'; return; }
+    const to = place(on), prev = T.navPos && T.navPos.id !== active ? T.navPos : null, from = prev && nav.querySelector('[data-tab="' + prev.id + '"]');
+    if (T.navScroll) nav.scrollLeft = T.navScroll;
+    const set = (q) => { slide.style.width = q.w + 'px'; slide.style.transform = 'translateX(' + q.x + 'px)'; };
+    const calm = !(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+    if (from && calm) { set(place(from)); void slide.offsetWidth; slide.classList.add('go'); }
+    set(to); T.navPos = { id: active };
+    if (on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center', behavior: calm && from ? 'smooth' : 'auto' });
+    nav.addEventListener('scroll', () => { T.navScroll = nav.scrollLeft; }, { passive: true });
+  });          // the selected tab is always in view
   return nav;
 }
 function feedCard(cls, title, count, rows, onAll, none) {
@@ -672,7 +697,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
     waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null,
     el('div', { class: 'homerow' },
       findBox(true),
-      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, 'Add a screening line')) : null,
+      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, screenedToday())) : null,
       canData() ? enrolTile() : null),
     el('h2', null, 'Needs attention'),
     feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
@@ -708,7 +733,7 @@ function home() {
     waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null,
     el('div', { class: 'homerow' + (canData() ? '' : ' solo') },
       findBox(true),
-      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, 'Add a screening line')) : null,
+      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, screenedToday())) : null,
       canData() ? enrolTile() : null),
     el('div', { class: 'tiles' },
       isNurse() ? el('button', { class: 'tile primary', onclick: () => go('measure') }, el('b', null, 'Measurements'), el('span', null, 'Height, weight, waist, arm')) : null,
@@ -1304,6 +1329,8 @@ function linkPick() {
     view('S1_ENROL').forEach((r) => { const id = s_(r.study_id).toUpperCase(); if (id && !have[id]) { have[id] = true; rows.push({ study_id: r.study_id }); } });
     rows.sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
     const typed = !!s_(q.value).trim(), shown = typed ? regMatch(rows, q.value) : [];
+    list.hidden = !typed;
+    list.hidden = !typed;
     note.hidden = !!L; note.textContent = L ? '' : 'Names and telephones are not on this phone yet. Open this page once with a signal to load them. Only study numbers can be searched until then.';
     list.replaceChildren(...(shown.length ? shown.slice(0, 100).map((r) => el('button', { class: 'row', onclick: () => { cRemember(r.study_id); go('link', { sid: r.study_id }); } },
       el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : '', r.phone].filter(Boolean).join(' · ') || 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : (typed ? [el('div', { class: 'empty' }, 'No contact matches.')] : [])));
