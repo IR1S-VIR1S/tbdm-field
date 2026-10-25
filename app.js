@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'c25ac4d68fe3';                 // replaced by build.js with the build's hash
+const BUILD_ID = '0a6a943148e9';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1287,10 +1287,10 @@ function linkPick() {
     rows.forEach((r) => { have[s_(r.study_id).toUpperCase()] = true; });
     view('S1_ENROL').forEach((r) => { const id = s_(r.study_id).toUpperCase(); if (id && !have[id]) { have[id] = true; rows.push({ study_id: r.study_id }); } });
     rows.sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
-    const shown = regMatch(rows, q.value);
+    const typed = !!s_(q.value).trim(), shown = typed ? regMatch(rows, q.value) : [];
     note.hidden = !!L; note.textContent = L ? '' : 'Names and telephones are not on this phone yet. Open this page once with a signal to load them. Only study numbers can be searched until then.';
     list.replaceChildren(...(shown.length ? shown.slice(0, 100).map((r) => el('button', { class: 'row', onclick: () => go('link', { sid: r.study_id }) },
-      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : '', r.phone].filter(Boolean).join(' · ') || 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, 'No contact matches.')]));
+      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : '', r.phone].filter(Boolean).join(' · ') || 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, typed ? 'No contact matches.' : 'Type a study number, name, MRN or telephone to find a contact.')]));
   };
   q.addEventListener('input', fill); fill();
   if (!confCopy() && navigator.onLine && !T.cqLoading && !T.cqTried) { T.cqLoading = true; T.cqTried = true; confRefresh(() => {}).catch(() => {}).then(() => { T.cqLoading = false; if (KEY && cur().name === 'linkpick') { const old = $('.search'); T.cq = old ? old.value : T.cq; render(); } }); }
