@@ -361,6 +361,7 @@ const DERIVED = {
     ['study_id', 'Study number', 't'], ['att_start_date', 'Date ATT started (day 0)', 'd'],
     ['dm_status', 'Diabetes at enrolment: K known, N new, 0 not diabetic', 't'],
     ['bmi_v1', 'Body mass index at Visit 1, kg/m2, from weight and height', 'n'],
+    ['vai_v1', 'Visceral adiposity index at Visit 1 (Amato 2010): sex-specific, from waist, BMI, triglycerides and HDL in mmol/L', 'n'],
     ['tbscore_v1_p90', 'Bandim TBscore at Visit 1 (0 to 13), pulse threshold above 90 per minute', 'n'],
     ['tbscore_v1_p100', 'Bandim TBscore at Visit 1, pulse threshold above 100 per minute (sensitivity analysis)', 'n'],
     ['tbscore_v3_p90', 'Bandim TBscore at Visit 3, pulse above 90', 'n'], ['tbscore_v3_p100', 'Bandim TBscore at Visit 3, pulse above 100', 'n'],
@@ -470,6 +471,16 @@ function minutes_(t) { const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(str_(t));
 function idOk_(s) { const m = new RegExp('^' + CFG.ID_PREFIX + '(\\d{3})$').exec(code_(s)); return !!m && +m[1] >= 1 && +m[1] <= CFG.ID_MAX; }
 function idOf_(k) { return CFG.ID_PREFIX + ('00' + k).slice(-3); }
 function inWindow_(visit, day) { const w = CFG.WINDOWS[visit]; if (!w || day === null) return ''; return day >= w[1] && day <= w[2] ? 'Y' : 'N'; }
+// Visceral adiposity index (Amato MC et al., Diabetes Care 2010;33:920-2, doi 10.2337/dc09-1825; equations as printed in
+// Amato et al., Lipids Health Dis 2011;10:183, doi 10.1186/1476-511X-10-183). Waist in cm; triglycerides and HDL in mmol/L.
+// mg/dL is converted with the NIDDK factors (triglycerides x 0.0113, cholesterol x 0.0259). Blank if anything is missing.
+function vai_(sex, waist, w, h, tg, hdl, unit) {
+  const wc = num_(waist), kg = num_(w), cm = num_(h), t = num_(tg), d = num_(hdl), sx = code_(sex), u = code_(unit);
+  if (wc === null || kg === null || cm === null || cm <= 0 || t === null || d === null || d <= 0 || (sx !== 'M' && sx !== 'F') || (u !== 'M' && u !== 'L')) return '';
+  const bmi = kg / Math.pow(cm / 100, 2), tgm = u === 'M' ? t * 0.0113 : t, hdm = u === 'M' ? d * 0.0259 : d;
+  const v = sx === 'M' ? (wc / (39.68 + 1.88 * bmi)) * (tgm / 1.03) * (1.31 / hdm) : (wc / (36.58 + 1.89 * bmi)) * (tgm / 0.81) * (1.52 / hdm);
+  return round_(v, 2);
+}
 function bmi_(w, h) { const kg = num_(w), cm = num_(h); if (kg === null || cm === null || cm <= 0) return ''; return round_(kg / Math.pow(cm / 100, 2), 1); }
 function ratio_(a, b) { const x = num_(a), y = num_(b); return x === null || y === null || y <= 0 ? '' : round_(x / y, 2); }
 function timika_(pct, cavity) { const p = num_(pct), c = code_(cavity); if (p === null || (c !== 'Y' && c !== 'N')) return ''; return p + (c === 'Y' ? 40 : 0); }
@@ -644,7 +655,8 @@ function computeDerived_(data, today, held) {
     const tot = function (r, p, n) { return r.declined === 'Y' ? '' : sumItems_(r, p, n); };
     const pos9 = function (r) { return r.declined !== 'Y' && num_(r.phq9) !== null && num_(r.phq9) > 0; };
     const l4 = labs[sid + '|V4'] || {}, a4 = hba1cPct_(l4.hba1c, l4.hba1c_unit);
-    out.participant.push([sid, e.att_start_date || '', e.dm_status || '', bmi1,
+    const l1 = labs[sid + '|V1'] || {};
+    out.participant.push([sid, e.att_start_date || '', e.dm_status || '', bmi1, vai_(e.sex, b.waist_cm, b.weight_kg, b.height_cm, l1.tg, l1.hdl, l1.lipid_unit),
       tbscore_(b, bmi1, CFG.PULSE_PRIMARY), tbscore_(b, bmi1, CFG.PULSE_SENSITIVITY),
       tbscore_(v3, bmi3, CFG.PULSE_PRIMARY), tbscore_(v3, bmi3, CFG.PULSE_SENSITIVITY),
       tbscore_(v5, bmi5, CFG.PULSE_PRIMARY), tbscore_(v5, bmi5, CFG.PULSE_SENSITIVITY),
@@ -2432,7 +2444,7 @@ function menuLinkSwitch() {
 // Switched on with "PI: photos of documents on or off".
 const PHOTO_TAB = 'PHOTOS';
 const PHOTO_COLS = ['photo_id', 'study_id', 'doc', 'visit', 'covered', 'file_id', 'sha256', 'taken_at', 'taken_by', 'uploaded_at', 'flag', 'note', 'deleted'];
-const PHOTO_DOCS = { CONSENT: 'consent form', CORE: 'Core Per-Patient File', EXAM: 'examination sheet', VISIT: 'visit sheet', PHQ: 'PHQ-9 and GAD-7 sheet', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
+const PHOTO_DOCS = { CONSENT: 'consent form', CORE: 'Core Per-Patient File', EXAM: 'examination sheet', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
 const PHOTO_MAX = 4000000;                                // base64 characters, about 3 MB of image
 function photosOn_() { return props_().getProperty('PHOTOS_ENABLED') === 'Y'; }
 function photoTakeRole_(u) { return !!u && ['pi', 'data', 'qc', 'nurse', 'dots'].indexOf(u.role) >= 0; }
