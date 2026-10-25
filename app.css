@@ -244,3 +244,23 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
 @keyframes tabfill { from { fill-opacity: 0; } }
 .bn.on { animation: tabon .25s ease-out; } .bn.on .ico svg { animation: tabfill .25s ease-out; }
 @media (prefers-reduced-motion: reduce) { .bn.on, .bn.on .ico svg { animation: none; } }
+
+/* Home feed headers are bands in the colour of their meaning (same palette as the tiles) */
+.feedhead { color: var(--ink); }
+.feed.due.calm .feedhead { background: #fdf0e3; color: #8a4a0b; } .feed.due.hot .feedhead { background: #ad4c0a; color: #fff; }
+.feed.queries.calm .feedhead { background: #fdecea; color: #8c1d18; } .feed.queries.hot .feedhead { background: #b3261e; color: #fff; }
+.feed.conf .feedhead { background: #3b2a6b; color: #fff; } .feed.wait .feedhead { background: var(--pend); color: #fff; }
+.feed.due.hot .fcount, .feed.queries.hot .fcount, .feed.conf .fcount, .feed.wait .fcount { background: #fff; }
+.feed.due.hot .fcount { color: #ad4c0a; } .feed.queries.hot .fcount { color: #b3261e; } .feed.conf .fcount { color: #3b2a6b; } .feed.wait .fcount { color: #2f4a96; }
+.feed.due.calm .fcount { background: #f0c79b; color: #6e3a08; } .feed.queries.calm .fcount { background: #f1b7b1; color: #7a1712; }
+.feed .feedhead .chev::after { color: currentColor; }
+@media (prefers-color-scheme: dark) {
+  .feed.due.calm .feedhead { background: #35220f; color: #f6c48e; } .feed.queries.calm .feedhead { background: #3a1714; color: #ffb4ab; }
+  .feed.wait .feedhead { background: #3b5bb5; }
+  .feed.due.calm .fcount { background: #6a4520; color: #f6c48e; } .feed.queries.calm .fcount { background: #6b2a24; color: #ffb4ab; }
+}
+
+/* Section headings are bands too, so each block of a page is easy to find */
+main h2 { background: var(--brand-soft); color: var(--brand-ink); padding: 8px 12px; border-radius: 10px; margin: 20px 0 8px; font-weight: 800; }
+.duebox h2 { background: #fdf0e3; color: #8a4a0b; } .recentbox h2 { background: #e8eefb; color: #2f4a96; }
+@media (prefers-color-scheme: dark) { .duebox h2 { background: #35220f; color: #f6c48e; } .recentbox h2 { background: #1a2442; color: #aebff0; } }
