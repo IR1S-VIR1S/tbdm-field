@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'f0a7b34e1ec9';                 // replaced by build.js with the build's hash
+const BUILD_ID = '88d9a95ac2f0';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1471,12 +1471,13 @@ function toolTile(ic, title, sub, fn, id, off) {
 function settings() {
   if (T.practice) return topBar('Settings').concat([el('main', null, practiceCard())]);
   const pending = S.outbox.length, pi = role() === 'pi';
+  // Which tools appear follows what the role holds: a log only where this phone has that tab, Export for the PI, no Practice for the DOTS incharge.
+  const holds = (t) => !!(S.server && S.server.tabs && S.server.tabs[t]);
   const tiles = [
-    pi ? toolTile('logs', 'Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')) : null,
-    pi ? toolTile('check', 'Verification log', view('QC_LOG').length + ' checks', () => go('qclog')) : null,
+    holds('S0_SCREEN') ? toolTile('logs', 'Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')) : null,
+    (pi || role() === 'qc') && holds('QC_LOG') ? toolTile('check', 'Verification log', view('QC_LOG').length + ' checks', () => go('qclog')) : null,
     role() !== 'dots' ? toolTile('practice', 'Practice mode', 'Made-up patients', practiceAsk) : null,
     pi && !T.practice ? toolTile('export', 'Export data', 'Excel, CSV, SPSS', exportAsk, 'export-data') : null,
-    toolTile('sync', 'Sync now', pending ? pending + ' waiting' : 'All sent', () => sync()),
     toolTile('update', 'Update app', 'Get newest', () => confirmLeave(checkUpdate), 'update-now'),
     bioTile()];
   return topBar('Settings').concat([el('main', null,
