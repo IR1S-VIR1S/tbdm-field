@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '254e9b349946';                 // replaced by build.js with the build's hash
+const BUILD_ID = '2532e1054ed8';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -357,6 +357,8 @@ function render() {
   let sa = false; try { sa = !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)); } catch (e) { sa = false; }
   app.style.minHeight = hasNav && sa ? (Math.max(screen.height || 0, innerHeight) + 1) + 'px' : '';
 }
+// Roles that use the visit checklist (not the nurse, the DOTS incharge or the radiology readers).
+function hasGuide() { return ['nurse', 'dots', 'reader1', 'reader2'].indexOf(role()) < 0; }
 function topBar(title, opts) {
   opts = opts || {};
   const bar = el('header', { class: 'top' },
@@ -1236,7 +1238,8 @@ function participant(p) {
     const w = CFG.WINDOWS[v], range = d0 !== null ? dmy(isoOf_(d0 + w[1])) + ' to ' + dmy(isoOf_(d0 + w[2])) : 'set the date ATT started';
     const st = sched[v];
     return [el('h2', null, v + ' · ' + (v === 'V1' ? 'baseline' : 'month ' + ({ V2: 1, V3: 2, V4: 3, V5: 6 })[v]) + ' ', st ? el('span', { class: 'chip ' + (st === 'overdue' ? 'bad' : st === 'due now' ? 'warn' : '') }, st) : null),
-      el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)), (curV = v, VISIT_FORMS[v].map((f) => formRow(f[0], f[1]))))];
+      el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)),
+        hasGuide() && VISIT_GUIDE[v] ? el('button', { class: 'row guiderow', onclick: () => go('visitguide', { v: v }) }, el('div', { class: 'main' }, el('div', null, 'What to order and do'), el('div', { class: 'sub' }, VISIT_GUIDE[v].name.replace(' · ', ' | '))), el('span', { class: 'chev' })) : null, (curV = v, VISIT_FORMS[v].map((f) => formRow(f[0], f[1]))))];
   });
   const usedU = view('LABS').filter((r) => r.study_id === sid && /^U/.test(r.visit)).map((r) => r.visit);
   const nextU = ['U1', 'U2', 'U3', 'U4', 'U5'].filter((u) => usedU.indexOf(u) < 0)[0];
