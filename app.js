@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '7ca275b88a8c';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'e74cb5ab651b';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1151,7 +1151,7 @@ function dueLabel(r) { const g = VISIT_GUIDE[r[1]]; return r[0] + ' | ' + (g ? g
 const VISIT_GUIDE = {
   V1: { name: 'Visit 1 · Baseline', when: 'Day 0 to 7 after ATT started', measure: M_V1, examine: E_ALL, symptoms: [S_TB, 'How many weeks the symptoms have lasted', S_HEP],
     order: [['Fasting bloods, 08:00 to 10:00. Write the draw time on the slip', BLOOD_FULL], ['Chest radiograph', 'The routine film. Tell the PI when it is ready']],
-    do: ['Consent, then assign the next study number', 'History: smoking, alcohol, diabetes, hypertension', 'Questionnaires PHQ-9 and GAD-7, unless declined'],
+    do: ['Consent, then assign the next study number', 'Copy the diagnostic sputum smear grade from the NTP card', 'History: smoking, alcohol, diabetes, hypertension', 'Questionnaires PHQ-9 and GAD-7, unless declined'],
     enter: ['Enrolment first', 'Baseline form', 'Laboratory results when they return', 'Chest radiograph date', 'Questionnaires (V1)'] },
   V2: { name: 'Visit 2 · Month 1', when: 'Day 21 to 35', measure: [], examine: [], symptoms: [S_HEP],
     order: [['Liver tests (ALT, AST, ALP, total bilirubin)', 'If any symptom is present, draw them the same day']],
@@ -1160,7 +1160,7 @@ const VISIT_GUIDE = {
   V3: { name: 'Visit 3 · Month 2', when: 'Day 49 to 70 · end of intensive phase', measure: M_ALL, examine: E_ALL, symptoms: [S_TB, S_HEP],
     order: [['Blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', ''], ['Sputum smear', 'Record the date and result']],
     do: ['Treatment status and adherence', 'Sputum conversion: Y, N or U. Never leave it blank'],
-    enter: ['Visit form (V3)', 'Laboratory results when they return', 'Check the liver injury definition'] },
+    enter: ['Visit form (V3), with the sputum smear date and result', 'Laboratory results when they return', 'Check the liver injury definition'] },
   V4: { name: 'Visit 4 · Month 3', when: 'Day 77 to 98', measure: [], examine: [], symptoms: [S_HEP],
     order: [['HbA1c, blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', 'Enter the HbA1c with its unit']],
     do: ['Treatment status and adherence', 'New diabetes found: refer for diabetes care and record it'],
@@ -1168,7 +1168,7 @@ const VISIT_GUIDE = {
   V5: { name: 'Visit 5 · Month 6', when: 'Day 154 to 182 · treatment completion', measure: M_ALL, examine: E_ALL, symptoms: [S_TB, S_HEP],
     order: [['Blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', ''], ['Sputum smear', 'Record the date and result'], ['Spirometry', 'Only if smear negative and not declined']],
     do: ['Treatment status and adherence', 'Treatment outcome', 'Questionnaires PHQ-9 and GAD-7, unless declined'],
-    enter: ['Visit form (V5)', 'Laboratory results when they return', 'Spirometry', 'Questionnaires (V5)', 'End of study: status C and the date'] }
+    enter: ['Visit form (V5), with the sputum smear date and result', 'Laboratory results when they return', 'Spirometry', 'Questionnaires (V5)', 'End of study: status C and the date'] }
 };
 function visitsScreen() {
   const due = role() === 'dots' || !S.server ? [] : derived().schedule.filter((r) => r[5] !== 'upcoming');
@@ -1178,6 +1178,19 @@ function visitsScreen() {
       el('div', { class: 'main' }, el('div', null, VISIT_GUIDE[v].name), el('div', { class: 'sub' }, VISIT_GUIDE[v].when)),
       due.filter((r) => r[1] === v).length ? el('span', { class: 'chip warn' }, due.filter((r) => r[1] === v).length + ' due') : null, el('span', { class: 'chev' })))))
   ]);
+}
+// The source documents to photograph at a visit, from the same rules the forms use (shown only when photos are switched on)
+function guideDocs(v) {
+  if (!photosOn()) return [];
+  const out = v === 'V1' ? ['Consent form', 'Diagnostic sputum smear report or NTP card'] : [];
+  (VISIT_FORMS[v] || []).forEach((f) => {
+    if (f[0] === 'END_STUDY') return;
+    const docs = requiredDocs(f[0], f[1]);
+    if (f[0] === 'LABS' && docs.length) out.push('Lab report pages: ' + docs.map((d) => LAB_PAGES[d.slice(4)].replace(/ \(.*\)$/, '')).join(', '));
+    else docs.forEach((d) => out.push(PHOTO_DOC_NAMES[d] + (f[0] === 'SPIRO' ? ' (if done)' : '')));
+  });
+  if (v === 'V5') out.push('Withdrawal Deletion Record, only for a participant who withdrew');
+  return out;
 }
 function visitGuideScreen(p) {
   const g = VISIT_GUIDE[p.v], due = role() === 'dots' || !S.server ? [] : derived().schedule.filter((r) => r[1] === p.v && r[5] !== 'upcoming');
@@ -1193,6 +1206,7 @@ function visitGuideScreen(p) {
     el('div', { class: 'list' }, g.order.map((o) => el('div', { class: 'row' }, el('div', { class: 'main' }, el('div', null, o[0]), o[1] ? el('div', { class: 'sub' }, o[1]) : null)))),
     el('h2', null, 'Do at the visit'), el('div', { class: 'card' }, list(g.do)),
     el('h2', null, 'Enter in this app'), el('div', { class: 'card' }, list(g.enter)),
+    (() => { const d = guideDocs(p.v); return d.length ? [el('h2', null, 'Documents to photograph'), el('div', { class: 'card' }, list(d))] : null; })(),
     due.length ? [el('h2', null, 'Due now or overdue'), el('div', { class: 'list' }, due.map((r) => el('button', { class: 'row', onclick: () => go('participant', { sid: r[0] }) },
       el('div', { class: 'main' }, el('div', null, r[0])), el('span', { class: 'chip ' + (r[5] === 'overdue' ? 'bad' : 'warn') }, r[5]), el('span', { class: 'chev' }))))] : null,
     el('div', { class: 'card small muted' }, 'Abnormal results and urgent events: manual Part 4. Liver injury and PHQ-9 item 9 above 0 are acted on the same day.')
@@ -2087,15 +2101,25 @@ function exportAsk() {
 // A photo is shrunk, encrypted with the PIN key and kept on this phone until the next sync, then sent and deleted here.
 // Phones that take photos cannot view them; the PI, the verifier and the DOTS incharge can; radiograph readers see only
 // radiographs whose name label was covered on the phone. Nothing is written to the phone's gallery.
-const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File', EXAM: 'Examination sheet', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
-const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'CORE'], S2_BASELINE: ['EXAM'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
+const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File', EXAM: 'Examination sheet', SMEAR: 'Sputum smear report', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
+const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'SMEAR', 'CORE'], S2_BASELINE: ['EXAM'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
 const PHOTO_MAX_PX = 2000;
 // A lab report comes as separate pages; each visit needs the pages of the tests ordered at it (visit checklist).
 const LAB_PAGES = { CBC: 'Blood count (CBC)', LFT: 'Liver tests (LFT)', HBA1C: 'HbA1c', LIPID: 'Lipid profile', FPG: 'Fasting glucose', HEP: 'Viral serology (HBsAg, anti-HCV)', HIV: 'HIV' };
 const LAB_PAGES_FOR = { V1: ['CBC', 'LFT', 'HBA1C', 'LIPID', 'FPG', 'HEP', 'HIV'], V2: ['LFT'], V3: ['CBC', 'LFT'], V4: ['HBA1C', 'CBC', 'LFT'], V5: ['CBC', 'LFT'], U: ['LFT'] };
 Object.keys(LAB_PAGES).forEach((k) => { PHOTO_DOC_NAMES['LAB_' + k] = LAB_PAGES[k]; });
 function labDocs(visit) { const v = s_(visit).toUpperCase(); return (LAB_PAGES_FOR[/^U/.test(v) ? 'U' : v] || []).map((k) => 'LAB_' + k); }
-function docsFor(tab, visit) { return tab === 'LABS' ? labDocs(visit) : (PHOTO_DOCS_FOR[tab] || []); }
+function smearVisit(visit) { return /^V[35]$/.test(s_(visit).toUpperCase()); }          // follow-up smears are taken at V3 and V5
+function docsFor(tab, visit) {                                // the documents a form offers to photograph
+  if (tab === 'LABS') return labDocs(visit);
+  if (tab === 'VISITS') return smearVisit(visit) ? ['SMEAR'] : [];
+  return PHOTO_DOCS_FOR[tab] || [];
+}
+function requiredDocs(tab, visit) {                           // the documents a form must have before it shows as complete (the Core File stays optional)
+  if (tab === 'S1_ENROL') return ['CONSENT', 'SMEAR'];         // consent and the diagnostic smear report (or NTP card)
+  if (tab === 'END_STUDY') return ['WITHDRAW'];
+  return docsFor(tab, visit);
+}
 // Where each document stands for one participant and visit: on the server (from the cached list or this phone's sent log), waiting on this phone, or missing.
 function docState(sid, doc, visit) {
   const same = (x) => x.doc === doc && (x.visit || '') === (visit || '');
@@ -2252,13 +2276,14 @@ function contactTile(sid) {                                // the block opens th
     ph ? el('button', { class: 'telpill', type: 'button', id: 'tile-tel', 'aria-label': 'Call or WhatsApp ' + ph, onclick: (e) => { e.stopPropagation(); contactAct(sid, r); } }, ph) : null);
 }
 // The documents this participant's records call for, against the photos received: shows what is still missing.
-function photoNeeds(sid) {                                 // one document per open form: consent, then each visit's forms once the visit window has opened
-  const need = [['CONSENT', '', 'consent']], label = { EXAM: 'examination', LAB: 'lab', CXR: 'radiograph', SPIRO: 'spirometry' };
+function photoNeeds(sid) {                                 // every required document: enrolment, then each visit's forms once the visit window has opened
+  const lab = (d) => (/^LAB_/.test(d) ? LAB_PAGES[d.slice(4)].replace(/ \(.*\)$/, '') : PHOTO_DOC_NAMES[d].toLowerCase());
+  const need = requiredDocs('S1_ENROL').map((d) => [d, '', d === 'CONSENT' ? 'consent' : 'diagnostic smear']);
   Object.keys(VISIT_FORMS).forEach((v) => {
     if (visitOpens(sid, v)) return;
     VISIT_FORMS[v].forEach((f) => {
-      if (f[0] === 'LABS') { labDocs(f[1]).forEach((d) => need.push([d, f[1], 'lab ' + f[1] + ' ' + LAB_PAGES[d.slice(4)].replace(/ \(.*\)$/, '')])); return; }
-      const d = DOC_FOR[f[0]]; if (d && label[d] && (f[0] !== 'SPIRO' || find('SPIRO', { study_id: sid }) || spiroOk(sid))) need.push([d, f[1] || '', label[d] + (f[1] ? ' ' + f[1] : '')]);
+      if (f[0] === 'END_STUDY' || (f[0] === 'SPIRO' && !find('SPIRO', { study_id: sid }) && !spiroOk(sid))) return;
+      requiredDocs(f[0], f[1]).forEach((d) => need.push([d, f[1] || '', /^LAB_/.test(d) ? 'lab ' + f[1] + ' ' + lab(d) : d === 'SMEAR' ? 'smear ' + f[1] : lab(d) + (f[1] ? ' ' + f[1] : '')]));
     });
   });
   if (view('END_STUDY').some((r) => r.study_id === sid && r.status === 'W')) need.push(['WITHDRAW', '', 'withdrawal record']);
@@ -2290,9 +2315,10 @@ function photoFetch(sid, after) {
 const DOC_FOR = { S1_ENROL: 'CONSENT', S2_BASELINE: 'EXAM', LABS: 'LAB', S3_CXR: 'CXR', SPIRO: 'SPIRO', END_STUDY: 'WITHDRAW' };
 function docPill(sid, tab, visit, row) {
   const c = T.phc && T.phc[sid];
-  if (!DOC_FOR[tab] || !c || !photosOn() || !photoTaker()) return null;          // shown for every open form, entered or not
+  const docs = requiredDocs(tab, visit);
+  if (!docs.length || !c || !photosOn() || !photoTaker()) return null;          // shown for every open form, entered or not
   if (tab === 'END_STUDY' && !(row && row.status === 'W')) return null;
-  const docs = tab === 'LABS' ? labDocs(visit) : [DOC_FOR[tab]], have = docs.filter((d) => docState(sid, d, visit || '') !== 'missing').length;
+  const have = docs.filter((d) => docState(sid, d, visit || '') !== 'missing').length;
   const key = visit ? { study_id: sid, visit } : { study_id: sid };
   const open = (e) => { e.stopPropagation(); go('form', { tab, key, docFocus: true }); };
   if (have === docs.length) return el('span', { class: 'chip docok', title: 'All documents attached' }, docs.length > 1 ? docs.length + '/' + docs.length + ' ✓' : 'doc ✓');
