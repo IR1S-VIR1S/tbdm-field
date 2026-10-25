@@ -2097,11 +2097,19 @@ const ACCESS_DEFAULT = {
   dots: { numbers: true, ident: true, photoTake: true, photoView: true }
 };
 // One role's ticks: the defaults, overlaid with what the PI saved, with every tick that needs 'view' turned off when 'view' is off.
+// Roles the PI adds in the Role manager ('c1', 'c2' ...) for particular people: a name, the people's e-mails and their own ticks (none by default).
+const CUSTOM_ROLE_RX = /^c\d{1,3}$/, CUSTOM_MAX = 12, CUSTOM_PEOPLE_MAX = 20;
+function isCustomRole_(role) { return CUSTOM_ROLE_RX.test(String(role || '')); }
+function accessRoleName_(role, stored) {
+  if (isCustomRole_(role)) { const c = stored && stored.custom && stored.custom[role]; return c ? String(c.name) : 'Removed role'; }
+  return ACCESS_ROLE_NAMES[role] || (/^reader/.test(role) ? 'Radiograph reader' : String(role || ''));
+}
 function accessFor_(role, stored) {
   const out = {};
   if (role === 'pi') { ACCESS_KEYS.forEach(function (k) { out[k.key] = true; }); return out; }
-  if (ACCESS_ROLES.indexOf(role) < 0) { ACCESS_KEYS.forEach(function (k) { out[k.key] = false; }); return out; }   // readers and unknown roles
-  const d = ACCESS_DEFAULT[role] || {}, sv = stored && stored[role] ? stored[role] : null;
+  const custom = isCustomRole_(role) && stored && stored.custom && stored.custom[role] ? stored.custom[role] : null;
+  if (ACCESS_ROLES.indexOf(role) < 0 && !custom) { ACCESS_KEYS.forEach(function (k) { out[k.key] = false; }); return out; }   // readers and unknown roles
+  const d = custom ? {} : ACCESS_DEFAULT[role] || {}, sv = custom ? custom.access || {} : stored && stored[role] ? stored[role] : null;
   ACCESS_KEYS.forEach(function (k) { out[k.key] = sv && typeof sv[k.key] === 'boolean' ? sv[k.key] : !!d[k.key]; });
   ACCESS_KEYS.forEach(function (k) { if (k.need && !out[k.need]) out[k.key] = false; });
   return out;
@@ -2126,6 +2134,9 @@ function randomHex_(n) { let s = ''; while (s.length < n) s += Utilities.getUuid
 function roleOf_(email) {
   const e = (email || '').toLowerCase();
   if (e && e === piEmail_()) return 'pi';
+  const cu = (accessStored_().custom) || {};                // a role the PI made for particular people comes before the standard lists
+  const hit = Object.keys(cu).filter(function (id) { return isCustomRole_(id) && (cu[id].emails || []).indexOf(e) >= 0; })[0];
+  if (e && hit) return hit;
   if (emails_('DATA_EMAILS').indexOf(e) >= 0) return 'data';
   if (emails_('QC_EMAILS').indexOf(e) >= 0) return 'qc';
   if (emails_('READER1_EMAIL').indexOf(e) >= 0) return 'reader1';
@@ -2216,6 +2227,7 @@ function appPull_(u) {
   const acc = userAccess_(u);
   out.access = acc;
   if (u.role === 'pi') out.accessStored = accessStored_();           // the Role manager grid on the PI phone
+  out.roleName = accessRoleName_(u.role, accessStored_());
   if (!/^reader/.test(u.role) && !acc.view) {             // without the full clinical data: only the tabs its ticks need, and only their columns
     const nss = dataSS_(), want = {};
     if (acc.screen) { want.S0_SCREEN = 1; want.S1_ENROL = 1; }
@@ -2261,6 +2273,35 @@ function accessSet_(u, req) {
       next[r] = row;
       ACCESS_KEYS.forEach(function (k) { if (row[k.key] !== before[k.key]) changes.push(r + ' ' + k.key + ' ' + (before[k.key] ? 'on' : 'off') + ' to ' + (row[k.key] ? 'on' : 'off')); });
     });
+    // roles made for particular people
+    const oldC = old.custom || {}, incC = inc.custom && typeof inc.custom === 'object' ? inc.custom : oldC, seen = {}, pi = piEmail_();
+    const ids = Object.keys(incC).filter(isCustomRole_);
+    if (ids.length > CUSTOM_MAX) return { ok: false, error: 'at most ' + CUSTOM_MAX + ' extra roles' };
+    next.custom = {};
+    for (let n = 0; n < ids.length; n++) {
+      const id = ids[n], c = incC[id] || {}, name = String(c.name || '').replace(/\s+/g, ' ').trim().slice(0, 30);
+      if (!name) return { ok: false, error: 'every extra role needs a name' };
+      const emails = (Array.isArray(c.emails) ? c.emails : []).map(function (x) { return String(x).trim().toLowerCase(); }).filter(function (x) { return x; });
+      if (emails.length > CUSTOM_PEOPLE_MAX) return { ok: false, error: name + ': at most ' + CUSTOM_PEOPLE_MAX + ' people' };
+      for (let m = 0; m < emails.length; m++) {
+        const e = emails[m];
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return { ok: false, error: name + ': ' + e + ' is not an e-mail address' };
+        if (e === pi) return { ok: false, error: name + ': the PI cannot be put in another role' };
+        if (seen[e]) return { ok: false, error: e + ' is in two extra roles (' + seen[e] + ' and ' + name + ')' };
+        seen[e] = name;
+      }
+      const before = oldC[id] ? accessFor_(id, old) : null, row = {}, src = c.access && typeof c.access === 'object' ? c.access : {};
+      ACCESS_KEYS.forEach(function (k) { row[k.key] = typeof src[k.key] === 'boolean' ? src[k.key] : before ? before[k.key] : false; });
+      ACCESS_KEYS.forEach(function (k) { if (k.need && !row[k.need]) row[k.key] = false; });
+      next.custom[id] = { name: name, emails: emails, access: row };
+      if (!oldC[id]) changes.push('new role ' + name + ' (' + emails.length + ' people)');
+      else {
+        if (oldC[id].name !== name) changes.push('role ' + oldC[id].name + ' renamed ' + name);
+        if ((oldC[id].emails || []).join(',') !== emails.join(',')) changes.push(name + ' people: ' + emails.join(', '));
+        ACCESS_KEYS.forEach(function (k) { if (row[k.key] !== before[k.key]) changes.push(name + ' ' + k.key + ' ' + (before[k.key] ? 'on' : 'off') + ' to ' + (row[k.key] ? 'on' : 'off')); });
+      }
+    }
+    Object.keys(oldC).forEach(function (id) { if (!next.custom[id]) changes.push('role ' + oldC[id].name + ' removed'); });
     props_().setProperty('ACCESS', JSON.stringify(next));
     if (changes.length) logAudit_('ACCESS', '', '', '', '', 'role access changed: ' + changes.join('; '), u.email);
     return { ok: true, accessStored: next, changed: changes.length };
@@ -2842,15 +2883,16 @@ function menuAppInvite() {
     if (!/^(https:\/\/\S+|http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/\S*)$/.test(appUrl)) { ui.alert('Not saved', 'The address must start with https://', ui.ButtonSet.OK); return; }
     P.setProperty('APP_URL', appUrl);
   }
-  const b = ui.prompt('Invite a team member', 'Google account e-mail of the person (they must already be in a study user list):', ui.ButtonSet.OK_CANCEL);
+  const b = ui.prompt('Invite a team member', 'Google account e-mail of the person (they must already be in a study user list, or in an extra role made in the phone\'s Role manager):', ui.ButtonSet.OK_CANCEL);
   if (b.getSelectedButton() !== ui.Button.OK) return;
   const email = b.getResponseText().trim().toLowerCase(), role = roleOf_(email);
   if (!role) { ui.alert('Not invited', email + ' is not in any study user list. Add them with "PI: manage users and sharing" first.', ui.ButtonSet.OK); return; }
   const code = randomHex_(32);
   P.setProperty('APPJOIN_' + sha256_(code), JSON.stringify({ email: email, expires: Date.now() + APP_JOIN_DAYS * 864e5 }));
   const link = appUrl.replace(/#.*$/, '') + '#join=' + encodeURIComponent(api) + '~' + code;
-  logAudit_('APP', '', '', '', email, 'phone app invitation issued (' + role + ')', '');
-  ui.alert('Invitation for ' + email + ' (' + role + ')', 'Send this link to ' + email + ' privately. It works once, on one phone, and expires in ' + APP_JOIN_DAYS + ' days:\n\n' + link, ui.ButtonSet.OK);
+  const rname = accessRoleName_(role, accessStored_());
+  logAudit_('APP', '', '', '', email, 'phone app invitation issued (' + rname + ')', '');
+  ui.alert('Invitation for ' + email + ' (' + rname + ')', 'Send this link to ' + email + ' privately. It works once, on one phone, and expires in ' + APP_JOIN_DAYS + ' days:\n\n' + link, ui.ButtonSet.OK);
 }
 // ---------------------------------------------------------------- in-place upgrade (keeps phones, invitations and the web app address)
 // A new script version can add, remove or reorder columns. This moves every existing row into the new
