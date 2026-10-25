@@ -314,3 +314,8 @@ div.ctile { cursor: pointer; }
 #tile-contact { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 6px; align-items: center; }
 #tile-contact .telpill { grid-column: 1 / -1; justify-self: stretch; text-align: center; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
 #tile-contact .ctx b { font-size: 13px; line-height: 1.25; white-space: normal; overflow: hidden; text-overflow: clip; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+
+/* "No document" pill beside a record's status, and the photo card flash it leads to */
+.chip.docmiss { background: #ece6fb; color: #3b2a6b; border: 0; margin-right: 6px; }
+.photocard.flash { animation: qflash 2.5s ease-out; }
+@media (prefers-color-scheme: dark) { .chip.docmiss { background: #3a2f5e; color: #ece6fb; } }

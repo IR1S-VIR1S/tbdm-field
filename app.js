@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'c06bf543e1f1';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'c27a033c6b1f';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1237,6 +1237,7 @@ const SPIRO_WHY = 'opens when the Visit 5 smear is recorded as negative (not don
 function lockedRow(name, opens) { return el('div', { class: 'row locked', 'aria-disabled': 'true' }, el('div', { class: 'main' }, el('div', null, name), el('div', { class: 'sub' }, 'opens ' + opens)), el('span', { class: 'chip' }, 'not yet')); }
 function participant(p) {
   const sid = p.sid, out = derived(), e = find('S1_ENROL', { study_id: sid }); recordRecent(sid);
+  photoFetch(sid, () => { if (cur().name === 'participant' && cur().p.sid === sid) render(); });
   if (!e) return topBar(sid).concat([el('main', null, el('div', { class: 'card' }, 'This study number is not in the workbook (it may have been withdrawn).'))]);
   const dp = out.participant.filter((r) => r[0] === sid)[0] || [];
   const dpk = DERIVED.DERIVED_PARTICIPANT.map((x) => x[0]), D = {}; dpk.forEach((k, i) => { D[k] = dp[i]; });
@@ -1250,7 +1251,7 @@ function participant(p) {
     const opens = visitOpens(sid, curV);
     if (opens && tab !== 'END_STUDY' && !find(tab, key)) return lockedRow(NAMES[tab], opens);
     if (tab === 'SPIRO' && !find(tab, key) && !spiroOk(sid)) return lockedRow(NAMES[tab], SPIRO_WHY.replace(/^opens /, ''));
-    return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, NAMES[tab])), statusChip(find(tab, key)), el('span', { class: 'chev' }));
+    return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, NAMES[tab])), docPill(sid, tab, visit, find(tab, key)), statusChip(find(tab, key)), el('span', { class: 'chev' }));
   };
   const visits = ['V1', 'V2', 'V3', 'V4', 'V5'].map((v) => {
     const w = CFG.WINDOWS[v], range = d0 !== null ? dmy(isoOf_(d0 + w[1])) + ' to ' + dmy(isoOf_(d0 + w[2])) : 'set the date ATT started';
@@ -1267,7 +1268,7 @@ function participant(p) {
     ['Timika', D.timika_final], ['PHQ-9 V1', D.phq9_v1], ['Item 9 positive', D.item9_positive || 'no']];
   const main = el('main', null,
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
-      el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), statusChip(e), el('span', { class: 'chev' }))),
+      el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), docPill(sid, 'S1_ENROL', '', e), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
     (() => {                                                   // confidential blocks side by side: Contact (PI) and Photos (PI, verifier)
       const t = [
@@ -1636,6 +1637,7 @@ function formScreen(p) {
   { const pc = photoCard(T.form); if (pc) main.append(pc); const pv = tab === 'R_SCORES' ? photoViewCard(s_(T.form.vals.study_id).toUpperCase()) : null; if (pv) main.prepend(pv); }
   const bar = F.ro ? null : el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => confirmLeave(back) }, 'Cancel'), el('button', { class: 'btn primary', id: 'savebtn', onclick: saveForm }, 'Save'));
   if (p.focus && !p._focused) { p._focused = true; setTimeout(() => focusField(p.focus), 120); }
+  if (p.docFocus && !p._docFocused) { p._docFocused = true; setTimeout(() => { const c = $('#photocard'); if (!c) return; c.scrollIntoView({ block: 'center', behavior: 'smooth' }); c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash'); setTimeout(() => c.classList.remove('flash'), 2600); }, 150); }
   return topBar(title).concat([main, bar]);
 }
 function ctx() { return { enrolled: enrolledMap(), today: dayNo_(todayIso()) }; }
@@ -2243,14 +2245,35 @@ function photoSummary(sid, list) {
   const tail = missing.length ? 'Missing: ' + missing.slice(0, 2).join(', ') + (missing.length > 2 ? ' and ' + (missing.length - 2) + ' more' : '') : (list.length ? 'All documents attached' : '');
   return [head, tail];
 }
+// Which documents of this participant have reached the server (cached for a minute; online only). Viewers get the full list,
+// phones that only take photos get document and visit only.
+function photoFetch(sid, after) {
+  T.phc = T.phc || {};
+  const c = T.phc[sid];
+  if (!photosOn() || !navigator.onLine || (c && Date.now() - c.at < 60000) || T.phcBusy === sid) return;
+  T.phcBusy = sid;
+  setTimeout(async () => {                                          // never inside a render
+    try { const r = await api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 15000); if (r.ok) { T.phc[sid] = { at: Date.now(), list: r.photos }; if (after) after(); } } catch (e) { /* stays as it is */ }
+    T.phcBusy = '';
+  }, 0);
+}
+// "No document" pill beside a record's status pill: the record exists, but the photo of its source document has not reached the server.
+const DOC_FOR = { S1_ENROL: 'CONSENT', LABS: 'LAB', S3_CXR: 'CXR', SPIRO: 'SPIRO', END_STUDY: 'WITHDRAW' };
+function docPill(sid, tab, visit, row) {
+  const doc = DOC_FOR[tab], c = T.phc && T.phc[sid];
+  if (!doc || !row || !c || !photosOn() || !photoTaker()) return null;
+  if (tab === 'END_STUDY' && row.status !== 'W') return null;
+  const queued = (S.photoOut || []).some((x) => x.sid === sid && x.doc === doc && (!visit || x.visit === visit));
+  if (queued || c.list.some((ph) => ph.doc === doc && (!visit || ph.visit === visit))) return null;
+  const key = visit ? { study_id: sid, visit } : { study_id: sid };
+  return el('button', { class: 'chip docmiss', type: 'button', onclick: (e) => { e.stopPropagation(); go('form', { tab, key, docFocus: true }); } }, 'no document');
+}
 function photosTile(sid) {
   T.phc = T.phc || {};
   const c = T.phc[sid], b = el('button', { class: 'ctile', id: 'tile-photos', 'aria-label': 'Source documents of ' + sid, onclick: () => go('photos', { sid: sid }) }, icon('records'), el('span', { class: 'ctx' }));
   const paint = (lines) => { const x = b.querySelector('.ctx'); x.replaceChildren(el('b', null, 'Documents'), ...lines.filter(Boolean).map((t) => el('small', null, t))); };
   paint(c ? photoSummary(sid, c.list) : [navigator.onLine ? 'Checking…' : 'Opens with a signal']);
-  if (navigator.onLine && (!c || Date.now() - c.at > 60000)) setTimeout(async () => {          // never inside a render
-    try { const r = await api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 15000); if (r.ok) { T.phc[sid] = { at: Date.now(), list: r.photos }; const t = $('#tile-photos'); if (t) { const n = photosTile(sid); t.replaceWith(n); } } } catch (e) { /* stays as it is */ }
-  }, 0);
+  photoFetch(sid, () => { if (cur().name === 'participant' && !(T.form && T.form.dirty)) render(); });
   return b;
 }
 function photosScreen(p) {                                  // the participant's photos, loaded straight away (online only)
