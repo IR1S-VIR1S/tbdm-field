@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '0a6a943148e9';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'e3a33b8a73e1';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1259,6 +1259,9 @@ function contactAct(sid, c) {
       el('a', { class: 'btn block', id: 'act-call', href: 'tel:' + ph.replace(/[^\d+]/g, ''), onclick: done }, 'Call'),
       el('a', { class: 'btn block', id: 'act-wa', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer', onclick: done }, 'WhatsApp'))), [['Cancel', null]]);
 }
+// Contacts opened from the Contact page, newest first (study numbers only; names are read from the register copy when shown).
+function cRecent() { try { return JSON.parse(localStorage.getItem('tbdm_crecent') || '[]').filter((x) => typeof x === 'string').slice(0, 5); } catch (e) { return []; } }
+function cRemember(sid) { try { localStorage.setItem('tbdm_crecent', JSON.stringify([sid].concat(cRecent().filter((x) => x !== sid)).slice(0, 5))); } catch (e) { /* no storage: skip */ } }
 function linkPick() {
   if (role() !== 'pi' || T.practice) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is for the PI only, and is not available in practice mode.'))]);
   const q = el('input', { class: 'search', type: 'search', placeholder: 'Study number, name, MRN or telephone', autocomplete: 'off', value: T.cq || '' });
@@ -1273,15 +1276,26 @@ function linkPick() {
     dueBox.replaceChildren(el('h2', null, 'Due and overdue'), el('div', { class: 'list duec' }, rows.map((r) => {
       const c = byId[s_(r[0]).toUpperCase()] || {}, ph = s_(c.phone);
       return el('div', { class: 'row' },
-        el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r[0] }) }, el('div', null, dueLabel(r)), c.name ? el('div', { class: 'sub' }, c.name) : null,
+        el('button', { class: 'main', type: 'button', onclick: () => { cRemember(r[0]); go('link', { sid: r[0] }); } }, el('div', null, dueLabel(r)), c.name ? el('div', { class: 'sub' }, c.name) : null,
           el('div', { class: 'sub winline' }, winTxt(r))),
         el('div', { class: 'side' },
           ph ? el('button', { class: 'tel', type: 'button', onclick: () => contactAct(r[0], c) }, ph) : el('span', { class: 'sub notel' }, L ? 'no number yet' : 'not loaded'),
           el('span', { class: 'chip ' + (r[5] === 'overdue' ? 'bad' : r[5] === 'due now' ? 'warn' : '') }, r[5])));
     })));
   };
+  const recentBox = el('div', { class: 'recentbox' });
+  const paintRecent = () => {
+    const L = confAsList(), byId = {}; (L ? L.rows : []).forEach((r) => { byId[s_(r.study_id).toUpperCase()] = r; });
+    const ids = cRecent();
+    recentBox.hidden = !ids.length || !!s_(q.value).trim();
+    recentBox.replaceChildren(el('h2', null, 'Recent searches'), el('div', { class: 'list conf' }, ids.map((id) => {
+      const c = byId[id.toUpperCase()] || {};
+      return el('button', { class: 'row', type: 'button', onclick: () => { cRemember(id); go('link', { sid: id }); } },
+        el('div', { class: 'main' }, el('div', null, id), el('div', { class: 'sub' }, [c.name, c.phone].filter(Boolean).join(' · ') || 'telephone, call, WhatsApp')), el('span', { class: 'chev' }));
+    })));
+  };
   const fill = () => {
-    T.cq = q.value; paintDue();
+    T.cq = q.value; paintDue(); paintRecent();
     const L = confAsList(), have = {};
     const rows = L ? L.rows.slice() : [];
     rows.forEach((r) => { have[s_(r.study_id).toUpperCase()] = true; });
@@ -1289,12 +1303,12 @@ function linkPick() {
     rows.sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
     const typed = !!s_(q.value).trim(), shown = typed ? regMatch(rows, q.value) : [];
     note.hidden = !!L; note.textContent = L ? '' : 'Names and telephones are not on this phone yet. Open this page once with a signal to load them. Only study numbers can be searched until then.';
-    list.replaceChildren(...(shown.length ? shown.slice(0, 100).map((r) => el('button', { class: 'row', onclick: () => go('link', { sid: r.study_id }) },
+    list.replaceChildren(...(shown.length ? shown.slice(0, 100).map((r) => el('button', { class: 'row', onclick: () => { cRemember(r.study_id); go('link', { sid: r.study_id }); } },
       el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : '', r.phone].filter(Boolean).join(' · ') || 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : [el('div', { class: 'empty' }, typed ? 'No contact matches.' : 'Type a study number, name, MRN or telephone to find a contact.')]));
   };
   q.addEventListener('input', fill); fill();
   if (!confCopy() && navigator.onLine && !T.cqLoading && !T.cqTried) { T.cqLoading = true; T.cqTried = true; confRefresh(() => {}).catch(() => {}).then(() => { T.cqLoading = false; if (KEY && cur().name === 'linkpick') { const old = $('.search'); T.cq = old ? old.value : T.cq; render(); } }); }
-  return topBar('Contact').concat([el('main', null, q, note, dueBox, list)]);
+  return topBar('Contact').concat([el('main', null, q, note, dueBox, recentBox, list)]);
 }
 function measureFor(p) {
   const sid = p.sid; recordRecent(sid);
