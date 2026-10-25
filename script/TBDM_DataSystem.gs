@@ -2243,8 +2243,10 @@ function appPull_(u) {
   if (u.role === 'reader1' || u.role === 'reader2') {
     const [rs, rdef] = appTarget_(u.role, 'R_SCORES'), cols = READER.cols.map(function (c) { return c.key; });
     out.tabs.R_SCORES = { cols: cols, rows: appRows_(rs, rdef, cols) };
+    const imgs = {};                                         // which films have a covered radiograph photo the reader can open (photos switched on only)
+    if (photosOn_()) { try { photoRows_(photoSheet_()).forEach(function (p) { if (photoVisible_(u, p)) { const k = str_(p.study_id); imgs[k] = imgs[k] || { n: 0, poor: false }; imgs[k].n++; imgs[k].poor = !!str_(p.flag); } }); } catch (e) { /* no photo index yet */ } }
     out.films = readTab_(dataSS_(), defOf_('S3_CXR')).filter(function (r) { return r.study_id; })
-      .map(function (r) { return { study_id: r.study_id, cxr_date: r.cxr_date, repeat: r.repeat_read === 'Y' }; });
+      .map(function (r) { const im = imgs[str_(r.study_id)]; return { study_id: r.study_id, cxr_date: r.cxr_date, repeat: r.repeat_read === 'Y', img: im ? im.n : 0, poor: im ? im.poor : false }; });
     return out;
   }
   const ss = dataSS_();
