@@ -276,7 +276,6 @@ main h2 { background: var(--brand-soft); color: var(--brand-ink); padding: 8px 1
 .top .icon.locking .ico { animation: padpulse .42s ease-out; } .top .icon.locking .shackle { animation: shackle .42s ease-out; }
 @media (prefers-reduced-motion: reduce) { .sync .syncbtn.spin .ico, .top .icon.locking .ico, .top .icon.locking .shackle { animation: none; } }
 
-.row.guiderow .main > div:first-child { color: var(--brand-ink); font-weight: 700; }
 
 /* Pull down to sync */
 #ptr { position: fixed; top: calc(var(--safe-top) + 64px); left: 50%; z-index: 7; width: 40px; height: 40px; border-radius: 50%; background: var(--card); color: var(--brand-ink); box-shadow: 0 2px 10px rgba(0,0,0,.2); display: flex; align-items: center; justify-content: center; transform: translate(-50%,-50px); opacity: 0; transition: opacity .15s; pointer-events: none; }
@@ -290,3 +289,20 @@ main h2 { background: var(--brand-soft); color: var(--brand-ink); padding: 8px 1
 .top .tl { display: flex; align-items: center; justify-self: start; } .top .tr { display: flex; align-items: center; justify-self: end; }
 .top h1 { text-align: center; min-width: 0; }
 .top h1 small { display: block; font-size: 13px; font-weight: 600; opacity: .85; overflow: hidden; text-overflow: ellipsis; }
+
+/* Photos of source documents */
+.photocard .photorow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid var(--line); margin-top: 8px; }
+.photocard .photorow .grow { flex: 1; min-width: 120px; font-weight: 600; } .photocard .photorow small { display: block; font-weight: 400; color: var(--muted); }
+.btn.small { padding: 8px 12px; font-size: 14px; min-height: 40px; }
+.cover { position: fixed; inset: 0; z-index: 30; background: #0b1413; color: #fff; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: calc(var(--safe-top) + 12px) 12px calc(var(--safe-bot) + 12px); }
+.cover canvas { touch-action: none; background: #222; max-width: 100%; }
+.cover-head { text-align: center; } .cover-acts { display: flex; gap: 10px; width: 100%; max-width: 520px; } .cover-acts .btn { flex: 1; }
+.photo-full { position: fixed; inset: 0; z-index: 30; background: #000; color: #fff; display: flex; flex-direction: column; }
+.photo-full .pf-bar { display: flex; align-items: center; gap: 8px; padding: calc(var(--safe-top) + 10px) 12px 10px; background: #111; } .photo-full .pf-bar b { flex: 1; }
+.photo-full .pf-img { flex: 1; overflow: auto; touch-action: pan-x pan-y pinch-zoom; display: flex; align-items: flex-start; justify-content: center; }
+.photo-full .pf-img img { max-width: 100%; height: auto; }
+
+.cover .btn:not(.primary), .photo-full .btn { background: #fff; color: #14211f; }
+/* Visit header: the checklist for that visit opens from the icon on the right */
+main h2.vhead { display: flex; align-items: center; gap: 8px; } main h2.vhead .vguide { margin-left: auto; background: var(--card); color: var(--brand-ink); border: 1px solid var(--line); border-radius: 10px; width: 40px; height: 36px; display: inline-flex; align-items: center; justify-content: center; }
+main h2.vhead .vguide .ico, main h2.vhead .vguide svg { width: 22px; height: 22px; display: block; }

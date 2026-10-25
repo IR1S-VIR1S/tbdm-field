@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '8299548a58c1';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'c3e86e4cfbdb';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -278,9 +278,11 @@ async function sync() {
       await saveState();
     }
     await pushConf(still);
+    if (S.server && S.server.photos && (S.photoOut || []).length) await pushPhotos(still);
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], at: Date.now() };
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, at: Date.now() };
+    if (pull.photos && (S.photoOut || []).length) await pushPhotos(still);          // photos taken before the feature reached this phone
     if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
     T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email;
     S.lastSync = Date.now(); T.syncError = ''; T.revoked = false;
@@ -998,7 +1000,8 @@ function linkScreen(p) {
           el('a', { class: 'btn block', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp'))) : show('Telephone', ''),
       show('Name', d.name), show('Record number (MRN)', d.mrn), show('Father or husband name', d.guardian), show('Address', d.address), show('Note', d.note),
       d.updated ? el('div', { class: 'small muted' }, 'Last changed ' + d.updated) : null,
-      el('button', { class: 'btn block', type: 'button', disabled: off && !st.offline, onclick: () => { st.edit = true; st.msg = ''; render(); } }, 'Edit')] : null,
+      el('button', { class: 'btn block', type: 'button', disabled: off && !st.offline, onclick: () => { st.edit = true; st.msg = ''; render(); } }, 'Edit'),
+      role() === 'dots' ? photoViewCard(sid) : null] : null,
     d && st.edit ? [field('name', 'Participant name', 60), field('mrn', 'Record number (MRN), required', 30), field('phone', 'Telephone, required, e.g. 03001234567', 16), field('guardian', 'Father or husband name', 60), field('address', 'Address', 200), field('note', 'Note', 200),
       el('button', { class: 'btn primary block', type: 'button', disabled: (off && !st.offline) || st.busy, onclick: () => linkSave() }, st.busy ? 'Saving…' : (off ? 'Save on this phone' : 'Save'))] : null
   )]);
@@ -1255,9 +1258,9 @@ function participant(p) {
   const visits = ['V1', 'V2', 'V3', 'V4', 'V5'].map((v) => {
     const w = CFG.WINDOWS[v], range = d0 !== null ? dmy(isoOf_(d0 + w[1])) + ' to ' + dmy(isoOf_(d0 + w[2])) : 'set the date ATT started';
     const st = sched[v];
-    return [el('h2', null, v + ' · ' + (v === 'V1' ? 'baseline' : 'month ' + ({ V2: 1, V3: 2, V4: 3, V5: 6 })[v]) + ' ', st ? el('span', { class: 'chip ' + (st === 'overdue' ? 'bad' : st === 'due now' ? 'warn' : '') }, st) : null),
-      el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)),
-        hasGuide() && VISIT_GUIDE[v] ? el('button', { class: 'row guiderow', onclick: () => go('visitguide', { v: v }) }, el('div', { class: 'main' }, el('div', null, 'What to order and do'), el('div', { class: 'sub' }, VISIT_GUIDE[v].name.replace(' · ', ' | '))), el('span', { class: 'chev' })) : null, (curV = v, VISIT_FORMS[v].map((f) => formRow(f[0], f[1]))))];
+    return [el('h2', { class: 'vhead' }, v + ' · ' + (v === 'V1' ? 'baseline' : 'month ' + ({ V2: 1, V3: 2, V4: 3, V5: 6 })[v]) + ' ', st ? el('span', { class: 'chip ' + (st === 'overdue' ? 'bad' : st === 'due now' ? 'warn' : '') }, st) : null,
+        hasGuide() && VISIT_GUIDE[v] ? el('button', { class: 'vguide', type: 'button', 'aria-label': 'Checklist for ' + v, title: 'What to order and do at ' + v, onclick: () => go('visitguide', { v: v }) }, icon('list')) : null),
+      el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)), (curV = v, VISIT_FORMS[v].map((f) => formRow(f[0], f[1]))))];
   });
   const usedU = view('LABS').filter((r) => r.study_id === sid && /^U/.test(r.visit)).map((r) => r.visit);
   const nextU = ['U1', 'U2', 'U3', 'U4', 'U5'].filter((u) => usedU.indexOf(u) < 0)[0];
@@ -1270,6 +1273,7 @@ function participant(p) {
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'calc' }, facts.map((f) => el('div', { class: f[0] === 'Item 9 positive' && f[1] === 'Y' ? 'bad' : '' }, el('span', { class: 'small' }, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
     role() === 'pi' && !T.practice ? el('div', { class: 'list conf' }, el('button', { class: 'row', onclick: () => go('link', { sid: sid }) }, el('div', { class: 'main' }, el('div', null, 'Contact'), el('div', { class: 'sub' }, 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : null,
+    role() === 'pi' || role() === 'qc' ? photoViewCard(sid) : null,
     visits,
     el('h2', null, 'Unscheduled and events'),
     el('div', { class: 'list' },
@@ -1628,6 +1632,7 @@ function formScreen(p) {
   T.refill = fill;
   fill();
   setTimeout(paintCalc, 0);
+  { const pc = photoCard(T.form); if (pc) main.append(pc); const pv = tab === 'R_SCORES' ? photoViewCard(s_(T.form.vals.study_id).toUpperCase()) : null; if (pv) main.prepend(pv); }
   const bar = F.ro ? null : el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => confirmLeave(back) }, 'Cancel'), el('button', { class: 'btn primary', id: 'savebtn', onclick: saveForm }, 'Save'));
   if (p.focus && !p._focused) { p._focused = true; setTimeout(() => focusField(p.focus), 120); }
   return topBar(title).concat([main, bar]);
@@ -2066,6 +2071,164 @@ function exportAsk() {
     el('div', { class: 'seg', id: 'export-kind' }, opts.map((o) => el('button', { type: 'button', 'data-k': o[0], class: o[0] === kind ? 'on' : '', onclick: (ev) => { kind = o[0]; ev.currentTarget.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.k === kind)); } }, o[1], el('small', null, o[2])))),
     el('p', { class: 'small muted' }, 'The file is not encrypted. Keep it on a protected device and delete it when you are done.' + (pending ? ' ' + pending + ' entr' + (pending === 1 ? 'y' : 'ies') + ' on this phone not yet sent are included.' : '')));
   modal('Export data', body, [['Cancel', null], ['Export', async () => { try { const f = await exportBuild(kind); await exportDeliver(f); toast('Exported ' + f.name); } catch (e) { toast('Could not export: ' + (e && e.message || e)); } }, 'primary']]);
+}
+
+// ------------------------------------------------------------------ photos of source documents (switched on by the PI)
+// A photo is shrunk, encrypted with the PIN key and kept on this phone until the next sync, then sent and deleted here.
+// Phones that take photos cannot view them; the PI, the verifier and the DOTS incharge can; radiograph readers see only
+// radiographs whose name label was covered on the phone. Nothing is written to the phone's gallery.
+const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
+const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'CORE'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
+const PHOTO_MAX_PX = 2000;
+function photosOn() { return !T.practice && !!(S && S.server && S.server.photos); }
+function photoTaker() { return ['pi', 'data', 'qc', 'nurse', 'dots'].indexOf(role()) >= 0; }
+function photoViewer() { return ['pi', 'qc', 'dots'].indexOf(role()) >= 0; }
+function hex(buf) { return Array.from(new Uint8Array(buf)).map((b) => ('0' + b.toString(16)).slice(-2)).join(''); }
+function rndHex(n) { return hex(crypto.getRandomValues(new Uint8Array(n))); }
+async function fileToCanvas(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('This file is not a picture the phone can read.')); i.src = url; });
+    const k = Math.min(1, PHOTO_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c;
+  } finally { URL.revokeObjectURL(url); }
+}
+const canvasJpeg = (c) => new Promise((res) => c.toBlob((b) => res(b), 'image/jpeg', 0.85));
+async function photoQueue(canvas, meta) {                  // encrypt and keep until the next sync
+  const blob = await canvasJpeg(canvas), bytes = new Uint8Array(await blob.arrayBuffer());
+  const sha = hex(await crypto.subtle.digest('SHA-256', bytes)), id = rndHex(16), iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, KEY, bytes);
+  await kvSet('ph_' + id, { iv, ct });
+  S.photoOut = S.photoOut || [];
+  S.photoOut.push(Object.assign({ id, sha, mime: 'image/jpeg', at: new Date().toISOString().slice(0, 16), status: 'pending' }, meta));
+  await saveState();
+}
+async function pushPhotos(still) {
+  const list = (S.photoOut || []).slice();
+  for (const ph of list) {
+    const box = await kvGet('ph_' + ph.id);
+    if (!box) { S.photoOut = S.photoOut.filter((x) => x.id !== ph.id); continue; }
+    const bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: box.iv }, KEY, box.ct));
+    const res = await api({ op: 'photo_put', token: S.cfg.token, photo_id: ph.id, study_id: ph.sid, doc: ph.doc, visit: ph.visit || '', covered: ph.covered || 'N', mime: ph.mime, data: b64(bytes), sha256: ph.sha, taken_at: ph.at, note: ph.note || '' }, 90000); still();
+    if (res.code === 401) throw Object.assign(new Error(res.error || 'not authorised'), { code: 401 });
+    const cur = (S.photoOut || []).filter((x) => x.id === ph.id)[0];
+    if (res.ok) {
+      await kvDel('ph_' + ph.id);
+      S.photoOut = S.photoOut.filter((x) => x.id !== ph.id);
+      S.photoSent = [{ sid: ph.sid, doc: ph.doc, visit: ph.visit || '', at: ph.at }].concat(S.photoSent || []).slice(0, 300);
+    } else if (cur) { cur.status = 'error'; cur.err = res.error || 'not accepted'; }
+    await saveState();
+  }
+}
+// The radiograph's name label is covered before anything leaves the phone: drag black boxes over it.
+function coverTool(canvas, done) {
+  const rects = [], ov = el('div', { class: 'cover', role: 'dialog', 'aria-label': 'Cover the name label' });
+  const view = document.createElement('canvas'), ctxv = view.getContext('2d');
+  const fit = () => { const w = Math.min(innerWidth - 24, 900), h = innerHeight - 190, k = Math.min(w / canvas.width, h / canvas.height); view.width = Math.round(canvas.width * k); view.height = Math.round(canvas.height * k); view._k = k; draw(); };
+  const draw = (tmp) => { ctxv.drawImage(canvas, 0, 0, view.width, view.height); ctxv.fillStyle = '#000'; rects.concat(tmp ? [tmp] : []).forEach((r) => ctxv.fillRect(r.x * view._k, r.y * view._k, r.w * view._k, r.h * view._k)); };
+  let start = null;
+  const pt = (e) => { const b = view.getBoundingClientRect(); return { x: (e.clientX - b.left) / view._k, y: (e.clientY - b.top) / view._k }; };
+  const box = (a, b) => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
+  view.addEventListener('pointerdown', (e) => { start = pt(e); view.setPointerCapture(e.pointerId); e.preventDefault(); });
+  view.addEventListener('pointermove', (e) => { if (start) draw(box(start, pt(e))); });
+  view.addEventListener('pointerup', (e) => { if (!start) return; const r = box(start, pt(e)); start = null; if (r.w > 4 && r.h > 4) rects.push(r); draw(); count.textContent = rects.length ? rects.length + ' area' + (rects.length > 1 ? 's' : '') + ' covered' : 'Nothing covered yet'; });
+  const count = el('div', { class: 'small', id: 'cover-count' }, 'Nothing covered yet');
+  const close = () => ov.remove();
+  ov.append(el('div', { class: 'cover-head' }, el('b', null, 'Cover the name and record number'), el('div', { class: 'small' }, 'Drag a box over every label that shows who the patient is. Readers see only the covered copy.')),
+    view, count,
+    el('div', { class: 'cover-acts' },
+      el('button', { class: 'btn', onclick: close }, 'Cancel'),
+      el('button', { class: 'btn', onclick: () => { rects.pop(); draw(); count.textContent = rects.length ? rects.length + ' covered' : 'Nothing covered yet'; } }, 'Undo'),
+      el('button', { class: 'btn primary', id: 'cover-save', onclick: () => {
+        if (!rects.length) { toast('Cover the name label first.'); return; }
+        const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height; const g = c.getContext('2d');
+        g.drawImage(canvas, 0, 0); g.fillStyle = '#000'; rects.forEach((r) => g.fillRect(r.x, r.y, r.w, r.h));
+        close(); done(c);
+      } }, 'Save')));
+  document.body.append(ov); fit();
+  T.coverRects = rects;                                    // for the tests
+}
+async function photoTake(file, F, doc) {
+  const sid = s_(F.vals.study_id).toUpperCase(), visit = s_(F.vals.visit).toUpperCase();
+  let canvas;
+  try { canvas = await fileToCanvas(file); } catch (e) { toast(e.message); return; }
+  const base = { sid, doc, visit: /^(V[1-5]|U[1-5])$/.test(visit) ? visit : '', by: S.cfg.initials };
+  const finish = async () => { toast('Photo kept on this phone, locked with your PIN. It is sent at the next sync.'); paintPhotoCard(); if (navigator.onLine) sync(); };
+  if (doc === 'CXR') {
+    coverTool(canvas, async (covered) => {
+      await photoQueue(covered, Object.assign({}, base, { covered: 'Y' }));
+      await photoQueue(canvas, Object.assign({}, base, { covered: 'N' }));          // the uncovered original, for the PI, the verifier and the DOTS incharge only
+      finish();
+    });
+    return;
+  }
+  await photoQueue(canvas, Object.assign({}, base, { covered: 'N' }));
+  finish();
+}
+function photoCard(F) {
+  const docs = PHOTO_DOCS_FOR[F.tab];
+  if (!docs || !photosOn() || !photoTaker() || F.ro) return null;
+  const box = el('div', { class: 'card photocard', id: 'photocard' });
+  T.photoF = F;
+  paintPhotoCard(box);
+  return box;
+}
+function paintPhotoCard(target) {
+  const box = target || $('#photocard'), F = T.photoF;
+  if (!box || !F) return;
+  const sid = s_(F.vals.study_id).toUpperCase(), visit = s_(F.vals.visit).toUpperCase();
+  const mine = (x) => x.sid === sid && (x.visit || '') === (/^(V|U)\d$/.test(visit) ? visit : '');
+  const queued = (S.photoOut || []).filter(mine), sent = (S.photoSent || []).filter(mine);
+  const pick = (doc, capture) => {
+    const inp = el('input', { type: 'file', accept: 'image/*', capture: capture ? 'environment' : null, hidden: true, 'data-doc': doc, class: 'photoinput' + (capture ? ' cam' : ' file') });
+    inp.addEventListener('change', () => { const f = inp.files && inp.files[0]; inp.value = ''; if (f) photoTake(f, F, doc); });
+    return inp;
+  };
+  box.replaceChildren(el('b', null, 'Photos of the paper record'),
+    el('div', { class: 'small muted' }, sid ? 'Attached to ' + sid + (visit ? ' ' + visit : '') + '. Once sent, this phone cannot show them again.' : 'Enter the study number first.'),
+    ...(PHOTO_DOCS_FOR[F.tab] || []).map((doc) => {
+      const cam = pick(doc, true), file = pick(doc, false);
+      return el('div', { class: 'photorow' }, el('div', { class: 'grow' }, PHOTO_DOC_NAMES[doc], el('small', null, [
+        queued.filter((x) => x.doc === doc).length ? queued.filter((x) => x.doc === doc).length + ' waiting to send' : '',
+        sent.filter((x) => x.doc === doc).length ? sent.filter((x) => x.doc === doc).length + ' sent' : '',
+        queued.some((x) => x.doc === doc && x.status === 'error') ? 'not accepted: ' + queued.filter((x) => x.doc === doc && x.err)[0].err : ''].filter(Boolean).join(' · '))),
+        cam, file,
+        el('button', { class: 'btn small', type: 'button', disabled: !sid, onclick: () => cam.click() }, 'Take photo'),
+        el('button', { class: 'btn small', type: 'button', disabled: !sid, onclick: () => file.click() }, 'Choose file'));
+    }));
+}
+// Viewing: online only, nothing is kept on the phone.
+function photoViewCard(sid) {
+  if (!photosOn() || !(photoViewer() || /^reader/.test(role())) || !sid) return null;
+  const box = el('div', { class: 'card photoview', id: 'photoview' });
+  const load = async () => {
+    box.replaceChildren(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Photos of the paper record'), el('div', { class: 'small muted' }, 'Loading…'));
+    try {
+      const r = await api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 20000);
+      if (!r.ok) throw new Error(r.error || 'not available');
+      box.replaceChildren(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Photos of the paper record'),
+        r.photos.length ? el('div', { class: 'list' }, r.photos.map((ph) => el('button', { class: 'row', type: 'button', onclick: () => photoOpen(ph) },
+          el('div', { class: 'main' }, el('div', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '') + (ph.covered === 'Y' ? ' (label covered)' : '')), el('div', { class: 'sub' }, [s_(ph.taken_at).replace('T', ' '), ph.taken_by].filter(Boolean).join(' · '))),
+          ph.flag ? el('span', { class: 'chip bad' }, 'too poor') : null, el('span', { class: 'chev' })))) : el('div', { class: 'small muted' }, 'No photos yet.'));
+    } catch (e) { box.replaceChildren(el('b', null, 'Photos'), el('div', { class: 'small muted' }, navigator.onLine ? 'Could not load: ' + e.message : 'Photos open only with a signal.')); }
+  };
+  box.append(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Photos of the paper record'), el('button', { class: 'btn block', type: 'button', id: 'photo-show', onclick: load }, 'Show photos'));
+  return box;
+}
+async function photoOpen(ph) {
+  const ov = el('div', { class: 'photo-full', role: 'dialog', 'aria-label': 'Photo' }, el('div', { class: 'small' }, 'Loading…'));
+  const close = () => ov.remove();
+  document.body.append(ov);
+  try {
+    const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 45000);
+    if (!r.ok) throw new Error(r.error || 'not available');
+    const img = el('img', { src: 'data:' + r.mime + ';base64,' + r.data, alt: PHOTO_DOC_NAMES[ph.doc] });
+    ov.replaceChildren(el('div', { class: 'pf-bar' }, el('b', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '')),
+      el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked too poor to read. The PI is told.' : 'Could not mark it.'); } }, 'Too poor to read'),
+      el('button', { class: 'btn small', type: 'button', id: 'photo-close', onclick: close }, 'Close')), el('div', { class: 'pf-img' }, img));
+  } catch (e) { ov.replaceChildren(el('div', { class: 'small' }, 'Could not open: ' + e.message), el('button', { class: 'btn', onclick: close }, 'Close')); }
 }
 
 (async function start() {
