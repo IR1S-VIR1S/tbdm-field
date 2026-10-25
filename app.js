@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '6f4d8403c03c';                 // replaced by build.js with the build's hash
+const BUILD_ID = '6df6f31f82fd';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1249,13 +1249,33 @@ function regMatch(rows, qq) {                              // search by study nu
   return rows.filter((r) => [r.study_id, r.name, r.mrn].some((v) => s_(v).toUpperCase().indexOf(q) >= 0) || (qd.length >= 3 && dig(r.phone).indexOf(qd) >= 0) || s_(r.phone).replace(/\s/g, '').indexOf(q.replace(/\s/g, '')) >= 0
     || (/^\d{1,3}$/.test(q) && s_(r.study_id).toUpperCase().replace(/\D/g, '').replace(/^0+/, '') === q.replace(/^0+/, '')));
 }
+// Tap a telephone number: choose Call or WhatsApp.
+function contactAct(sid, c) {
+  const ph = s_(c.phone), done = () => setTimeout(() => { const m = $('#modal'); m.hidden = true; m.replaceChildren(); }, 400);
+  modal(sid + (c.name ? ' · ' + c.name : ''), el('div', null, el('p', { style: 'font-size:20px;font-weight:700' }, ph),
+    el('a', { class: 'btn primary block', id: 'act-call', href: 'tel:' + ph.replace(/[^\d+]/g, ''), onclick: done }, 'Call'), el('p'),
+    el('a', { class: 'btn block', id: 'act-wa', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer', onclick: done }, 'WhatsApp')), [['Cancel', null]]);
+}
 function linkPick() {
   if (role() !== 'pi' || T.practice) return topBar('Contact').concat([el('main', null, el('div', { class: 'card' }, 'Contact is for the PI only, and is not available in practice mode.'))]);
   const q = el('input', { class: 'search', type: 'search', placeholder: 'Study number, name, MRN or telephone', autocomplete: 'off', value: T.cq || '' });
   const list = el('div', { class: 'list conf' });
   const note = el('div', { class: 'card small muted', hidden: true });
+  // Who is due or overdue now, each with the telephone number on the register copy; tapping the number asks Call or WhatsApp.
+  const dueBox = el('div', { class: 'duebox' });
+  const paintDue = () => {
+    const L = confAsList(), byId = {}; (L ? L.rows : []).forEach((r) => { byId[s_(r.study_id).toUpperCase()] = r; });
+    const rows = derived().schedule.filter((r) => r[5] !== 'upcoming');
+    dueBox.hidden = !rows.length || !!s_(q.value);
+    dueBox.replaceChildren(el('h2', null, 'Due and overdue'), el('div', { class: 'list duec' }, rows.map((r) => {
+      const c = byId[s_(r[0]).toUpperCase()] || {}, ph = s_(c.phone);
+      return el('div', { class: 'row' },
+        el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r[0] }) }, el('div', null, dueLabel(r)), el('div', { class: 'sub' }, [c.name, 'window ' + r[3] + ' to ' + r[4], r[5]].filter(Boolean).join(' · '))),
+        ph ? el('button', { class: 'tel', type: 'button', onclick: () => contactAct(r[0], c) }, ph) : el('span', { class: 'sub notel' }, L ? 'no number yet' : 'not loaded'));
+    })));
+  };
   const fill = () => {
-    T.cq = q.value;
+    T.cq = q.value; paintDue();
     const L = confAsList(), have = {};
     const rows = L ? L.rows.slice() : [];
     rows.forEach((r) => { have[s_(r.study_id).toUpperCase()] = true; });
@@ -1268,7 +1288,7 @@ function linkPick() {
   };
   q.addEventListener('input', fill); fill();
   if (!confCopy() && navigator.onLine && !T.cqLoading && !T.cqTried) { T.cqLoading = true; T.cqTried = true; confRefresh(() => {}).catch(() => {}).then(() => { T.cqLoading = false; if (KEY && cur().name === 'linkpick') { const old = $('.search'); T.cq = old ? old.value : T.cq; render(); } }); }
-  return topBar('Contact').concat([el('main', null, q, note, list)]);
+  return topBar('Contact').concat([el('main', null, q, note, dueBox, list)]);
 }
 function measureFor(p) {
   const sid = p.sid; recordRecent(sid);

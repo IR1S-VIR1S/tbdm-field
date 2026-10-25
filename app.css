@@ -226,3 +226,9 @@ a.tel.big { color: var(--brand-ink); font-weight: 700; text-decoration: none; ma
 .card.todo b { display: block; margin: 8px 0 4px; } .card.todo b:first-child { margin-top: 0; } .card.todo .list { margin: 6px 0 8px; }
 .card.done { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
 .regstat.solo { justify-content: flex-end; border: 0; background: none; padding: 0; }
+
+/* Contact: the due and overdue list with a telephone number on each row */
+.list.duec { background: #3b2a6b; border-color: #3b2a6b; margin-bottom: 12px; } .list.duec .row { color: #fff; border-top-color: #54428a; align-items: center; } .list.duec .row .sub { color: #d8cff0; }
+.list.duec .row .main { text-align: left; background: none; border: 0; color: inherit; padding: 0; min-width: 0; flex: 1; }
+.row button.tel { font-size: 15px; color: var(--brand-ink); font-weight: 700; padding: 10px 10px; border: 0; border-radius: 10px; background: var(--brand-soft); white-space: nowrap; }
+.duec .notel { white-space: nowrap; font-size: 13px; }
