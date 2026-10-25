@@ -32,7 +32,7 @@
 
 const CFG = {
   VERSION: '1.2',
-  SCHEMA_VER: 2,                      // raised whenever a data tab gains, loses or reorders a column; phones compare it before sending
+  SCHEMA_VER: 3,                      // raised whenever a data tab gains, loses or reorders a column; phones compare it before sending
   ID_PREFIX: 'TBDM-',
   ID_MAX: 999,                     // three digits after the prefix; the format cannot go higher without changing the id rules
   BLOCK_SIZE: 10,                  // study numbers handed to one phone at a time, so two phones that are offline together never offer the same number
@@ -350,7 +350,13 @@ const READER = { tab: 'R_SCORES', kind: 'reader', rows: 600, title: 'Chest radio
   col('study_id', 'Study number of the film', 'rid', { pair: 'read_no' }),
   col('read_no', 'Read number: 1 first read, 2 repeat read (only films the PI marks)', 'pairlist', { values: ['1', '2'], pair: 'study_id', hint: 'Type 1 for the first read, 2 for a repeat read. One row per study number and read number' }),
   col('read_date', 'Date read', 'date'),
-  col('pct_lung', 'Percentage of the total lung field affected, 0 to 100', 'num', { min: 0, max: 100 }),
+  // Percentage of lung affected (Timika score, Ralph et al. Thorax 2010): each quadrant's abnormal opacification estimated by eye,
+  // the four added and divided by 4, as applied by Murthy et al. BMC Medicine 2018. [VERIFY against the full Ralph 2010 methods before training the readers.]
+  col('q_ru', 'Right upper quadrant: % of abnormal opacification, 0 to 100', 'num', { min: 0, max: 100 }),
+  col('q_rl', 'Right lower quadrant: % of abnormal opacification, 0 to 100', 'num', { min: 0, max: 100 }),
+  col('q_lu', 'Left upper quadrant: % of abnormal opacification, 0 to 100', 'num', { min: 0, max: 100 }),
+  col('q_ll', 'Left lower quadrant: % of abnormal opacification, 0 to 100', 'num', { min: 0, max: 100 }),
+  col('pct_lung', 'Percentage of the total lung field affected, 0 to 100: the mean of the four quadrants (calculated, not typed)', 'num', { min: 0, max: 100 }),
   col('cavity', 'Any cavity', 'list', { codes: YN }),
   col('n_cavities', 'Number of cavities', 'int', { min: 0, max: 20 }),
   col('reader_initials', 'Your initials', 'text', { max: 10 })] };
@@ -581,10 +587,19 @@ function validateValue_(c, v, row, ctx) {                   // '' when acceptabl
 }
 
 // A radiograph score is usable only when it is complete: date, lung percentage, cavity answer, and the count when there is a cavity.
-function readerGaps_(v) {
+const QUADRANTS = ['q_ru', 'q_rl', 'q_lu', 'q_ll'];
+// The percentage of lung affected from the four quadrant estimates: their mean, to 1 decimal; '' until all four are entered.
+function pctFromQuadrants_(v) {
+  const q = QUADRANTS.map(function (k) { return num_(v[k]); });
+  if (q.some(function (x) { return x === null; })) return '';
+  return String(round_((q[0] + q[1] + q[2] + q[3]) / 4, 1));
+}
+// strict (a new or changed read): all four quadrants are needed. Otherwise an older read typed as one percentage still counts.
+function readerGaps_(v, strict) {
   const g = {};
   if (str_(v.read_date) === '') g.read_date = 'is required';
-  if (str_(v.pct_lung) === '') g.pct_lung = 'is required';
+  if (strict || QUADRANTS.some(function (k) { return str_(v[k]) !== ''; })) QUADRANTS.forEach(function (k) { if (str_(v[k]) === '') g[k] = 'is required'; });
+  else if (str_(v.pct_lung) === '') g.pct_lung = 'is required';
   if (code_(v.cavity) === '') g.cavity = 'is required';
   else if (code_(v.cavity) === 'Y' && str_(v.n_cavities) === '') g.n_cavities = 'is required when there is a cavity';
   return g;
@@ -1883,7 +1898,7 @@ function pullReaders_(ss) {
     const next = cur.map(function (row, i) {
       const x = m[sids[i]];
       if (!x) return row;
-      const want = [x.pct_lung, x.cavity, x.n_cavities];
+      const want = [pctFromQuadrants_(x) || x.pct_lung, x.cavity, x.n_cavities];          // the quadrant mean wins over a typed percentage
       if (want.join('|') !== row.join('|')) changed.push(sids[i]);
       return want;
     });
@@ -2569,6 +2584,7 @@ const PHOTO_TAB = 'PHOTOS';
 const PHOTO_COLS = ['photo_id', 'study_id', 'doc', 'visit', 'covered', 'file_id', 'sha256', 'taken_at', 'taken_by', 'uploaded_at', 'flag', 'note', 'deleted'];
 const PHOTO_DOCS = { CONSENT: 'consent form', CORE: 'Core Per-Patient File', EXAM: 'examination sheet', SMEAR: 'sputum smear report', LAB_CBC: 'lab report: blood count', LAB_LFT: 'lab report: liver tests', LAB_HBA1C: 'lab report: HbA1c', LAB_LIPID: 'lab report: lipid profile', LAB_FPG: 'lab report: fasting glucose', LAB_HEP: 'lab report: viral serology (HBsAg, anti-HCV)', LAB_HIV: 'lab report: HIV', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
 const PHOTO_MAX = 4000000;                                // base64 characters, about 3 MB of image
+const PHOTO_MAX_CXR = 24000000;                           // radiographs keep full resolution for scoring: about 18 MB of image
 function photosOn_() { return props_().getProperty('PHOTOS_ENABLED') === 'Y'; }
 function photoTakeRole_(u) { return !!u && (u.role === 'pi' || !!userAccess_(u).photoTake); }
 function photoViewRole_(u) { return !!u && (u.role === 'pi' || !!userAccess_(u).photoView); }
@@ -2610,7 +2626,7 @@ function photoPut_(u, req) {
   const mime = str_(req.mime);
   if (['image/jpeg', 'image/png'].indexOf(mime) < 0) return { ok: false, error: 'only JPEG or PNG images' };
   const data = String(req.data || '');
-  if (!data || data.length > PHOTO_MAX) return { ok: false, error: 'the image is empty or too large' };
+  if (!data || data.length > (doc === 'CXR' ? PHOTO_MAX_CXR : PHOTO_MAX)) return { ok: false, error: 'the image is empty or too large' };
   const bytes = Utilities.base64Decode(data), sha = bytesHex_(bytes);
   if (str_(req.sha256).toLowerCase() !== sha) return { ok: false, error: 'the image was damaged on the way; it will be sent again' };
   const lock = LockService.getScriptLock();
@@ -2825,7 +2841,12 @@ function appApply_(u, ch, ss, today, keysSheet, touched) {
   const errors = {}, ctx = { enrolled: enrolled, today: today };
   if (def === READER) {                                          // a score is saved whole, and the cavity count follows the cavity answer
     if (code_(merged.cavity) === 'N' && str_(merged.n_cavities) === '') { merged.n_cavities = '0'; vals.n_cavities = '0'; }
-    const gaps = readerGaps_(merged);
+    const pq = pctFromQuadrants_(merged);                        // the reader never types the percentage: it is the mean of the quadrants
+    if (pq !== '') { merged.pct_lung = pq; vals.pct_lung = pq; }
+    const film = readTab_(ss, defOf_('S3_CXR')).filter(function (x) { return code_(x.study_id) === code_(merged.study_id); })[0];
+    if (!film) return { cid: ch.cid, status: 'rejected', errors: { study_id: 'is not on the film list (no chest radiograph recorded for it)' } };
+    if (str_(merged.read_no) === '2' && code_(film.repeat_read) !== 'Y') return { cid: ch.cid, status: 'rejected', errors: { read_no: '2 (repeat read) only for films the PI has marked for a repeat read' } };
+    const gaps = readerGaps_(merged, true);
     Object.keys(gaps).forEach(function (k) { errors[k] = gaps[k]; });
   }
   def.cols.forEach(function (c) {
@@ -2901,9 +2922,9 @@ function menuAppInvite() {
 // layout by column name, after saving a CSV backup of every tab. Phones keep their tokens, because those
 // live in the script properties of THIS project, and the web app address stays the same as long as the
 // new code is deployed as a new version of the existing deployment.
-function upgradePlan_(ss) {
+function upgradePlan_(ss, defs, label) {
   const plan = [];
-  SCHEMA.forEach(function (t) {
+  (defs || SCHEMA).forEach(function (t) {
     const sh = ss.getSheetByName(t.tab);
     if (!sh || sh.getLastColumn() === 0) return;
     const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0].map(function (x) { return String(x).trim(); }).filter(function (x) { return x !== ''; });
@@ -2911,7 +2932,7 @@ function upgradePlan_(ss) {
     if (!head.length || head.join('|') === want.join('|')) return;
     const shared = want.filter(function (k) { return head.indexOf(k) >= 0; }).length;
     if (shared < Math.ceil(want.length / 2)) throw new Error('Tab ' + t.tab + ' does not look like the study tab (only ' + shared + ' of ' + want.length + ' columns match). Nothing was changed.');
-    plan.push({ t: t, head: head, want: want, added: want.filter(function (k) { return head.indexOf(k) < 0; }), dropped: head.filter(function (k) { return want.indexOf(k) < 0; }) });
+    plan.push({ ss: ss, label: (label || '') + t.tab, t: t, head: head, want: want, added: want.filter(function (k) { return head.indexOf(k) < 0; }), dropped: head.filter(function (k) { return want.indexOf(k) < 0; }) });
   });
   return plan;
 }
@@ -2929,7 +2950,7 @@ function migrateTab_(ss, p) {
   if (out.length) sh.getRange(2, 1, out.length, p.want.length).setValues(out);
   return lost;
 }
-function backupBeforeUpgrade_(ss, why) {                         // every data tab as CSV, at the width it has NOW (not the new width)
+function backupBeforeUpgrade_(ss, why, readers) {                // every data tab (and the readers' score tabs) as CSV, at the width it has NOW (not the new width)
   const P = props_(), base = DriveApp.getFolderById(P.getProperty('FOLDER_ID'));
   const it = base.getFoldersByName(CFG.EXPORTS), exp = it.hasNext() ? it.next() : base.createFolder(CFG.EXPORTS);
   const f = exp.createFolder(Utilities.formatDate(new Date(), CFG.TZ, 'yyyy-MM-dd_HHmm') + '_' + why);
@@ -2939,36 +2960,45 @@ function backupBeforeUpgrade_(ss, why) {                         // every data t
     const matrix = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
     f.createFile(t.tab + '.csv', matrix.map(function (r) { return r.map(csvField_).join(','); }).join('\r\n') + '\r\n', MimeType.CSV);
   });
+  (readers || []).forEach(function (x) {
+    const sh = x.ss.getSheetByName(READER.tab);
+    if (!sh || sh.getLastRow() < 1 || sh.getLastColumn() < 1) return;
+    const matrix = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
+    f.createFile('CXR_Reader' + x.r + '_' + READER.tab + '.csv', matrix.map(function (r) { return r.map(csvField_).join(','); }).join('\r\n') + '\r\n', MimeType.CSV);
+  });
   logAudit_('EXPORT', '', '', '', f.getName(), 'backup before upgrade (' + why + ')', me_());
   return f;
 }
 function menuUpgrade() {
   requirePI_();
   const ui = SpreadsheetApp.getUi(), P = props_(), ss = dataSS_();
-  const plan = upgradePlan_(ss);
+  const readers = [1, 2].map(function (r) { const id = P.getProperty('READER' + r + '_ID'); return id ? { r: r, ss: SpreadsheetApp.openById(id) } : null; }).filter(Boolean);
+  let plan = upgradePlan_(ss);
+  readers.forEach(function (x) { plan = plan.concat(upgradePlan_(x.ss, [READER], 'CXR_Reader' + x.r + '/')); });      // the readers' files move with the workbook
   if (!plan.length) {
     P.setProperty('SCHEMA_VER', String(CFG.SCHEMA_VER)); P.setProperty('VERSION', CFG.VERSION);
     ui.alert('Already up to date', 'Every tab already has the columns this script expects. Nothing was changed. If a part of the workbook looks wrong, use "PI: set up or repair".', ui.ButtonSet.OK);
     return;
   }
-  const list = plan.map(function (p) { return p.t.tab + ':' + (p.added.length ? ' new ' + p.added.join(', ') + ';' : '') + (p.dropped.length ? ' removed ' + p.dropped.join(', ') + ';' : '') + (!p.added.length && !p.dropped.length ? ' column order;' : ''); }).join('\n');
+  const list = plan.map(function (p) { return p.label + ':' + (p.added.length ? ' new ' + p.added.join(', ') + ';' : '') + (p.dropped.length ? ' removed ' + p.dropped.join(', ') + ';' : '') + (!p.added.length && !p.dropped.length ? ' column order;' : ''); }).join('\n');
   const yes = ui.alert('Upgrade the workbook in place', 'These tabs will change:\n\n' + list + '\n\nA backup of every tab is saved first (CSV files in the exports folder). All rows are kept. ' +
     'Phones, their invitations and the web app address are not touched. Entries made on phones meanwhile wait on the phone and are sent afterwards.\n\nContinue?', ui.ButtonSet.YES_NO);
   if (yes !== ui.Button.YES) return;
-  const backup = backupBeforeUpgrade_(ss, 'before_upgrade_to_schema_' + CFG.SCHEMA_VER);
+  const backup = backupBeforeUpgrade_(ss, 'before_upgrade_to_schema_' + CFG.SCHEMA_VER, readers);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);                                         // phones cannot write while the rows are moved
   const report = [];
   try {
     plan.forEach(function (p) {
-      const lost = migrateTab_(ss, p);
+      const lost = migrateTab_(p.ss, p);
       SpreadsheetApp.flush();
-      logAudit_('SCHEMA_UPGRADE', '', '', 'removed: ' + (p.dropped.join(', ') || 'none'), 'added: ' + (p.added.join(', ') || 'none'), p.t.tab + ' moved to schema ' + CFG.SCHEMA_VER, me_());
-      report.push(p.t.tab + ': ' + lost.filter(function (l) { return l.filled > 0; }).map(function (l) { return l.key + ' held ' + l.filled + ' value(s), kept only in the backup'; }).join('; '));
+      logAudit_('SCHEMA_UPGRADE', '', '', 'removed: ' + (p.dropped.join(', ') || 'none'), 'added: ' + (p.added.join(', ') || 'none'), p.label + ' moved to schema ' + CFG.SCHEMA_VER, me_());
+      report.push(p.label + ': ' + lost.filter(function (l) { return l.filled > 0; }).map(function (l) { return l.key + ' held ' + l.filled + ' value(s), kept only in the backup'; }).join('; '));
     });
     P.setProperty('SCHEMA_VER', String(CFG.SCHEMA_VER));        // the rows now match this script
   } finally { lock.releaseLock(); }
   buildAll_(ss);
+  readers.forEach(function (x) { buildTab_(x.ss, READER); protectReader_(x.ss); });
   applyAccess_(null);
   installTriggers_();
   refreshAll();
