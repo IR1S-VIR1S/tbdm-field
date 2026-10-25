@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '11db4fb80811';                 // replaced by build.js with the build's hash
+const BUILD_ID = '11fd837e32d8';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -915,7 +915,9 @@ function rolesScreen() {
     el('thead', null, el('tr', null, el('th', { class: 'task' }, 'Task'), cols.map((r) => el('th', { title: isCustomRole_(r) ? R.c[r].name : ACCESS_ROLE_NAMES[r], class: isCustomRole_(r) ? 'custom' : null }, head(r))))),
     el('tbody', null,
       ACCESS_KEYS.map((k) => el('tr', { class: k.confidential ? 'conf' : '' }, el('th', { class: 'task', scope: 'row' }, k.label, k.need ? el('small', null, k.need === 'view' ? 'needs full clinical data' : 'needs names, MRN, telephone') : null), cols.map((r) => cell(r, k.key)))),
-      el('tr', { class: 'fixedrow' }, el('th', { class: 'task', scope: 'row' }, 'Score chest films', el('small', null, 'readers only, blinded')), cols.map((r) => el('td', { class: 'acc fixed' }, el('span', { class: 'tick' + (r === 'reader' ? ' on' : '') }))))));
+      el('tr', { class: 'fixedrow' }, el('th', { class: 'task', scope: 'row' }, 'Score chest films', el('small', null, 'readers only, blinded')), cols.map((r) => el('td', { class: 'acc fixed' }, el('span', { class: 'tick' + (r === 'reader' ? ' on' : '') })))),
+      // Readers open the label-covered radiograph for scoring without the "Open document photos" tick, which would also show consent forms and lab reports with names.
+      el('tr', { class: 'fixedrow', id: 'row-cxr-covered' }, el('th', { class: 'task', scope: 'row' }, 'Open the covered radiograph', el('small', null, 'label hidden; readers always have it, for scoring')), cols.map((r) => el('td', { class: 'acc fixed' }, el('span', { class: 'tick' + (r === 'pi' || r === 'reader' || (r !== 'reader' && rolesRow(R, r).photoView) ? ' on' : '') }))))));
   return topBar('Role manager').concat([el('main', null,
     el('div', { class: 'card small' }, 'Tap a box to switch a task on or off for everyone in that role. The PI and reader columns are fixed. The workbook enforces these ticks; phones pick them up at their next sync.'),
     el('div', { class: 'accwrap' }, table),
@@ -1564,7 +1566,7 @@ function measureFor(p) {
   const row = (tab, key, name) => {
     const opens = visitOpens(sid, key.visit || 'V1');
     if (opens && !find(tab, key)) return lockedRow(name, opens);
-    return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, name)), statusChip(find(tab, key)), el('span', { class: 'chev' }));
+    return el('button', { class: 'row', onclick: () => go('form', { tab, key, measure: tab !== 'S1_ENROL' }) }, el('div', { class: 'main' }, el('div', null, name)), statusChip(find(tab, key)), el('span', { class: 'chev' }));
   };
   const block = (v, rows) => {
     const w = CFG.WINDOWS[v], range = d0 !== null ? dmy(isoOf_(d0 + w[1])) + ' to ' + dmy(isoOf_(d0 + w[2])) : 'set the date ATT started';
@@ -1763,7 +1765,8 @@ function screenLocked(F, c) {
 }
 function visible(tab, c, v, vals) {
   if (c.pi && role() !== 'pi') return false;
-  if (accessLimited_(role(), acc()) && (tab === 'S1_ENROL' || tab === 'S2_BASELINE' || tab === 'VISITS') && !readOnly(tab) && !nurseCol_(tab, c.key)) return false;   // writing without 'forms': the measurement columns only
+  if (accessLimited_(role(), acc()) && (tab === 'S1_ENROL' || tab === 'S2_BASELINE' || tab === 'VISITS') && !readOnly(tab) && !nurseCol_(tab, c.key)) return false;
+  if (T.form && T.form.tab === tab && T.form.measureOnly && !nurseCol_(tab, c.key)) return false;      // opened from Measure: height, weight, waist and arm only   // writing without 'forms': the measurement columns only
   const visit = s_(vals.visit);
   if (tab === 'VISITS') {
     if (c.key === 'smear_date' || c.key === 'smear_result') return smearDue_(visit, (find('VISITS', { study_id: s_(vals.study_id), visit: 'V3' }) || {}).smear_result);   // V4 too while the V3 smear is not negative
@@ -1799,7 +1802,7 @@ function formScreen(p) {
       Object.keys(p.preset || {}).forEach((k) => { vals[k] = p.preset[k]; });
       def.cols.forEach((c) => { if (BY_FIELDS.indexOf(c.key) >= 0) vals[c.key] = S.cfg.initials; });
     }
-    T.form = { tab, def, existing, vals, dirty: false, errs: {}, ro: readOnly(tab), fixedKeys: existing ? keys : keys.filter((k) => s_(p.key[k])),
+    T.form = { tab, def, existing, vals, dirty: false, errs: {}, ro: readOnly(tab), measureOnly: !!p.measure && (tab === 'S2_BASELINE' || tab === 'VISITS'), fixedKeys: existing ? keys : keys.filter((k) => s_(p.key[k])),
       carried: existing ? [] : (p.carried || []), numberGiven: !existing && !!(p.preset && s_(p.preset.study_id)), autoExcl: tab === 'S0_SCREEN' && s_(vals.smear_grade) === 'N' && s_(vals.excl_code) === '8', autoNo: tab === 'S0_SCREEN' && s_(vals.excl_code) !== '' };
   }
   const F = T.form, ctxVisit = s_(F.vals.visit);
@@ -1826,13 +1829,13 @@ function formScreen(p) {
       });
       if (extra.length) fieldsBox.append(el('button', { class: 'toggle', onclick: () => { F.showAll = true; fill(); } }, '+ Show other results (' + extra.join(', ') + ')'));
     } else {
-      def.cols.filter((c) => visible(tab, c, null, F.vals)).forEach((c) => { if (tab === 'R_SCORES' && QUADRANTS.indexOf(c.key) >= 0) { if (c.key === 'q_ru') fieldsBox.append(el('div', { class: 'card small method', id: 'reader-method' }, el('b', null, 'Method'), el('div', null, 'Score each quadrant by eye: the share of it with abnormal opacification. The app averages the four; the workbook works out the Timika score.')), quadDiagram()); return; } fieldsBox.append(fieldEl(c)); });   // quadrants are scored in a pop-up from the diagram
+      def.cols.filter((c) => visible(tab, c, null, F.vals)).forEach((c) => { if (tab === 'R_SCORES' && QUADRANTS.indexOf(c.key) >= 0) { if (c.key === 'q_ru') fieldsBox.append(el('div', { class: 'card small method', id: 'reader-method' }, el('b', null, 'Method'), el('div', null, 'Score each quadrant by eye: the share of it with abnormal opacification. The app averages the four; the workbook works out the Timika score.')), ...[cxrPane(s_(F.vals.study_id).toUpperCase())].filter(Boolean), quadDiagram()); return; } fieldsBox.append(fieldEl(c)); });   // quadrants are scored in a pop-up from the diagram; under Date read come the method, the radiograph and the diagram
     }
   };
   T.refill = fill;
   fill();
   setTimeout(paintCalc, 0);
-  { const pc = photoCard(T.form); if (pc) main.append(pc); const pv = tab === 'R_SCORES' ? cxrPane(s_(T.form.vals.study_id).toUpperCase()) : null; if (pv) main.prepend(pv); }
+  { const pc = photoCard(T.form); if (pc) main.append(pc);  }
   const bar = F.ro ? null : el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => confirmLeave(back) }, 'Cancel'), el('button', { class: 'btn primary', id: 'savebtn', onclick: saveForm }, 'Save'));
   if (p.focus && !p._focused) { p._focused = true; setTimeout(() => focusField(p.focus), 120); }
   if (p.docFocus && !p._docFocused) { p._docFocused = true; setTimeout(() => { const c = $('#photocard'); if (!c) return; c.scrollIntoView({ block: 'center', behavior: 'smooth' }); c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash'); setTimeout(() => c.classList.remove('flash'), 2600); }, 150); }
@@ -1974,7 +1977,7 @@ function liveCalc() {
     const h = F.tab === 'S2_BASELINE' ? v.height_cm : (find('S2_BASELINE', { study_id: sid }) || {}).height_cm;
     const b = bmi_(v.weight_kg, h);
     if (b !== '') out.push(['BMI', b]);
-    if (!isNurse() && (F.tab === 'S2_BASELINE' || vis === 'V3' || vis === 'V5')) {
+    if (!isNurse() && !F.measureOnly && (F.tab === 'S2_BASELINE' || vis === 'V3' || vis === 'V5')) {
       const t9 = tbscore_(v, b, CFG.PULSE_PRIMARY), t1 = tbscore_(v, b, CFG.PULSE_SENSITIVITY);
       out.push(['TBscore', t9 === '' ? 'needs every item' : t9 + ' (pulse >100: ' + t1 + ')']);
     }
@@ -2386,9 +2389,11 @@ function photoTaker() { return can('photoTake'); }
 function photoViewer() { return can('photoView'); }
 function hex(buf) { return Array.from(new Uint8Array(buf)).map((b) => ('0' + b.toString(16)).slice(-2)).join(''); }
 function rndHex(n) { return hex(crypto.getRandomValues(new Uint8Array(n))); }
-// Document photos are made smaller (2000 px) to keep uploads quick. Chest radiographs are not: they are read for scoring, so they keep the
-// camera's full resolution, limited only by the largest picture a phone can draw (about 16 megapixels on iPhones).
-const CXR_MAX_AREA = 16000000;
+// Document photos are made smaller (2000 px) to keep uploads quick. Chest radiographs are exempt: they are read for scoring, so they keep the
+// camera's full resolution. The original goes up byte for byte; only the label-covered copy is redrawn, at full size and maximum JPEG quality,
+// limited only by the largest picture the phone's browser can draw (16.7 megapixels on iPhone and iPad, far more on Android).
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const CXR_MAX_AREA = IOS ? 16777216 : 60000000;
 async function fileToCanvas(file, full) {
   const url = URL.createObjectURL(file);
   try {
@@ -2416,7 +2421,7 @@ async function pushPhotos(still) {
     const box = await kvGet('ph_' + ph.id);
     if (!box) { S.photoOut = S.photoOut.filter((x) => x.id !== ph.id); continue; }
     const bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: box.iv }, KEY, box.ct));
-    const res = await api({ op: 'photo_put', token: S.cfg.token, photo_id: ph.id, study_id: ph.sid, doc: ph.doc, visit: ph.visit || '', covered: ph.covered || 'N', mime: ph.mime, data: b64(bytes), sha256: ph.sha, taken_at: ph.at, note: ph.note || '' }, ph.doc === 'CXR' ? 240000 : 90000); still();
+    const res = await api({ op: 'photo_put', token: S.cfg.token, photo_id: ph.id, study_id: ph.sid, doc: ph.doc, visit: ph.visit || '', covered: ph.covered || 'N', mime: ph.mime, data: b64(bytes), sha256: ph.sha, taken_at: ph.at, note: ph.note || '' }, ph.doc === 'CXR' ? 360000 : 90000); still();
     if (res.code === 401) throw Object.assign(new Error(res.error || 'not authorised'), { code: 401 });
     const cur = (S.photoOut || []).filter((x) => x.id === ph.id)[0];
     if (res.ok) {
@@ -2463,9 +2468,9 @@ async function photoTake(file, F, doc) {
   const finish = async () => { toast('Photo kept on this phone, locked with your PIN. It is sent at the next sync.'); paintPhotoCard(); if (navigator.onLine) sync(); };
   if (doc === 'CXR') {
     coverTool(canvas, async (covered) => {
-      await photoQueue(covered, Object.assign({}, base, { covered: 'Y' }), null, 0.95);   // the readers' copy: full resolution, near-lossless
+      await photoQueue(covered, Object.assign({}, base, { covered: 'Y' }), null, 1);      // the readers' copy: full resolution, maximum JPEG quality
       const asIs = /^image\/(jpeg|png)$/.test(file.type) ? file : null;                   // the original exactly as taken; other formats become a high-quality JPEG
-      await photoQueue(canvas, Object.assign({}, base, { covered: 'N' }), asIs, 0.95);   // for the PI, the verifier and the DOTS incharge only
+      await photoQueue(canvas, Object.assign({}, base, { covered: 'N' }), asIs, 1);      // for the PI, the verifier and the DOTS incharge only
       finish();
     });
     return;
@@ -2623,13 +2628,14 @@ function cxrPane(sid) {
           if (f.ok) { ph.flag = 'poor'; toast('Marked too poor to read. The PI has been told.'); draw(); } else toast('Could not mark it: ' + (f.error || 'no signal'));
         } }, 'Too poor')));
   };
+  const redraw = () => { const live = $('#cxrpane'); if (!live) return; if (live !== box) live.replaceWith(cxrPane(sid)); else draw(); };
   const fetchImg = async () => {
     const ph = C.list && C.list[C.i];
     if (!ph || C.img[ph.photo_id] || C.busy === ph.photo_id) return;
     C.busy = ph.photo_id;
-    try { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 120000); if (!r.ok) throw new Error(r.error || 'not available'); C.img[ph.photo_id] = 'data:' + r.mime + ';base64,' + r.data; }
+    try { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 240000); if (!r.ok) throw new Error(r.error || 'not available'); C.img[ph.photo_id] = 'data:' + r.mime + ';base64,' + r.data; }
     catch (e) { C.err = navigator.onLine ? 'Could not open the image: ' + e.message : 'The image opens only with a signal. You can still score from the film.'; }
-    C.busy = null; if ($('#cxrpane')) draw();
+    C.busy = null; redraw();
   };
   if (!C.list && !C.loading) {
     if (!navigator.onLine) C.err = 'The image opens only with a signal. You can still score from the film.';
@@ -2638,8 +2644,8 @@ function cxrPane(sid) {
       api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 20000).then((r) => {
         if (!r.ok) throw new Error(r.error || 'not available');
         C.list = r.photos.filter((x) => x.doc === 'CXR').sort((a, b) => (s_(a.taken_at) < s_(b.taken_at) ? 1 : -1));    // newest first
-        C.loading = false; draw(); fetchImg();
-      }).catch((e) => { C.loading = false; C.err = 'Could not load the radiograph: ' + e.message; if ($('#cxrpane')) draw(); });
+        C.loading = false; redraw(); fetchImg();
+      }).catch((e) => { C.loading = false; C.err = 'Could not load the radiograph: ' + e.message; redraw(); });
     }
   } else if (C.list) fetchImg();
   draw();
@@ -2724,12 +2730,12 @@ async function photoOpen(ph, have) {
   document.body.append(ov);
   try {
     let src = have;
-    if (!src) { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, ph.doc === 'CXR' ? 120000 : 45000); if (!r.ok) throw new Error(r.error || 'not available'); src = 'data:' + r.mime + ';base64,' + r.data; }
+    if (!src) { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, ph.doc === 'CXR' ? 240000 : 45000); if (!r.ok) throw new Error(r.error || 'not available'); src = 'data:' + r.mime + ';base64,' + r.data; }
     const img = el('img', { src, alt: PHOTO_DOC_NAMES[ph.doc] }), pane = el('div', { class: 'pf-img' }, img);
     let z = 1;
-    const zoom = (n) => { z = n; img.style.width = (100 * z) + '%'; img.style.maxWidth = 'none'; ov.querySelectorAll('.pf-z').forEach((b) => b.classList.toggle('primary', +b.dataset.z === z)); };
+    const zoom = (n) => { z = n; img.style.width = n === 0 ? img.naturalWidth + 'px' : (100 * z) + '%'; img.style.maxWidth = 'none'; ov.querySelectorAll('.pf-z').forEach((b) => b.classList.toggle('primary', +b.dataset.z === z)); };   // 0 = actual pixels (full resolution)
     ov.replaceChildren(el('div', { class: 'pf-bar' }, el('b', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '')),
-      [1, 2, 3].map((n) => el('button', { class: 'btn small pf-z' + (n === 1 ? ' primary' : ''), type: 'button', 'data-z': String(n), onclick: () => zoom(n) }, n + '×')),
+      [1, 2, 3, 0].map((n) => el('button', { class: 'btn small pf-z' + (n === 1 ? ' primary' : ''), type: 'button', 'data-z': String(n), title: n === 0 ? 'Actual pixels, full resolution' : '', onclick: () => zoom(n) }, n === 0 ? '1:1' : n + '×')),
       have ? null : el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked as too poor to read. The PI has been told.' : 'Could not mark it: ' + (f.error || 'no signal')); } }, 'Too poor'),
       el('button', { class: 'btn small', type: 'button', id: 'photo-close', onclick: close }, 'Close')), pane);
   } catch (e) { ov.replaceChildren(el('div', { class: 'small' }, 'Could not open: ' + e.message), el('button', { class: 'btn', onclick: close }, 'Close')); }
