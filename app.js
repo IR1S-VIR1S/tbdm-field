@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '8754a769a5e7';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'fd08342f532b';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1501,17 +1501,22 @@ function films() {
     el('button', { class: 'btn block', onclick: () => go('settings') }, 'Settings'))]);
 }
 // Manual update: asks the server for a newer version, then reloads once the new one is in place.
+// Update now: the background updater may already have fetched the new version and be waiting for the lock screen, so first
+// ask the server which build is current (sw.js names it), then switch straight away instead of saying "newest" while old code runs.
 function checkUpdate() {
   if (!('serviceWorker' in navigator)) { toast('This phone cannot update the app from here. Reopen it from the internet once.'); return; }
   if (!navigator.onLine) { toast('Connect to the internet first, then try again.'); return; }
+  if (updateReady) { location.reload(); return; }                    // already downloaded: switch now
   toast('Checking for an update…');
-  navigator.serviceWorker.getRegistration().then((reg) => {
-    if (!reg) { location.reload(); return; }
-    return reg.update().then(() => {
-      if (reg.installing || reg.waiting) {
-        navigator.serviceWorker.addEventListener('controllerchange', () => location.reload(), { once: true });
-        setTimeout(() => location.reload(), 10000);   // fallback if the switch is slow
-      } else toast('Already the newest version.');
+  const reloadSoon = () => { navigator.serviceWorker.addEventListener('controllerchange', () => location.reload(), { once: true }); setTimeout(() => location.reload(), 8000); };
+  fetch('sw.js?u=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((txt) => {
+    const m = /tbdm(?:test)?-([0-9a-f]{12})/.exec(txt), latest = m ? m[1] : '';
+    if (latest && latest === BUILD_ID) { toast('Already the newest version (build ' + BUILD_ID + ').'); return; }
+    toast('Updating to build ' + (latest || 'newest') + '…');
+    return navigator.serviceWorker.getRegistration().then((reg) => {
+      if (!reg) { location.reload(); return; }
+      reloadSoon();
+      return reg.update();
     });
   }).catch(() => toast('Could not check for an update. Try again when connected.'));
 }
