@@ -326,3 +326,14 @@ div.ctile { cursor: pointer; }
 .facts4 span { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .facts4 b { display: block; font-size: 15px; line-height: 1.25; margin-top: 2px; overflow-wrap: anywhere; }
 .facts4 .bad { background: var(--bad-soft); color: var(--bad-ink); } .facts4 .bad span { color: var(--bad-ink); }
+
+/* Document checklist on forms: a tick per page */
+.dmark { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; flex: none; color: #fff; }
+.dmark.sent { background: #1f7a4d; border-color: #1f7a4d; } .dmark.waiting { background: #b26b00; border-color: #b26b00; }
+.chip.docok { background: var(--ok-soft); color: var(--ok); margin-right: 6px; font-size: 11px; padding: 3px 7px; }
+
+.photocard .photorow { flex-wrap: nowrap; }
+.photocard .pbtns { display: flex; gap: 6px; flex: none; }
+.photocard .pbtn { width: 44px; height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--brand-ink); display: inline-flex; align-items: center; justify-content: center; }
+.photocard .pbtn:disabled { opacity: .4; } .photocard .pbtn .ico, .photocard .pbtn svg { width: 22px; height: 22px; display: block; }
+.photocard .photorow .grow { min-width: 0; }

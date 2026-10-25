@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'eb0db2525594';                 // replaced by build.js with the build's hash
+const BUILD_ID = '7ca275b88a8c';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -599,6 +599,7 @@ function findBox(short) {
 }
 // ---- PI home: a feed of what needs attention, with a bottom bar. Other roles keep the tile home.
 const ICONS = {
+  camera: '<path d="M4 8h3l1.5-2.5h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>',
   records: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><rect x="8.5" y="11" width="8" height="6.5" rx="1"/><path d="m8.5 16 2.5-2.5 2 2 1.5-1.5 2 2"/>',
   ruler: '<rect x="3" y="8" width="18" height="8" rx="1.5"/><path d="M7 8v3M11 8v4M15 8v3M19 8v4"/>',
   home: '<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
@@ -2089,6 +2090,20 @@ function exportAsk() {
 const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File', EXAM: 'Examination sheet', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
 const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'CORE'], S2_BASELINE: ['EXAM'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
 const PHOTO_MAX_PX = 2000;
+// A lab report comes as separate pages; each visit needs the pages of the tests ordered at it (visit checklist).
+const LAB_PAGES = { CBC: 'Blood count (CBC)', LFT: 'Liver tests (LFT)', HBA1C: 'HbA1c', LIPID: 'Lipid profile', FPG: 'Fasting glucose', HEP: 'Viral serology (HBsAg, anti-HCV)', HIV: 'HIV' };
+const LAB_PAGES_FOR = { V1: ['CBC', 'LFT', 'HBA1C', 'LIPID', 'FPG', 'HEP', 'HIV'], V2: ['LFT'], V3: ['CBC', 'LFT'], V4: ['HBA1C', 'CBC', 'LFT'], V5: ['CBC', 'LFT'], U: ['LFT'] };
+Object.keys(LAB_PAGES).forEach((k) => { PHOTO_DOC_NAMES['LAB_' + k] = LAB_PAGES[k]; });
+function labDocs(visit) { const v = s_(visit).toUpperCase(); return (LAB_PAGES_FOR[/^U/.test(v) ? 'U' : v] || []).map((k) => 'LAB_' + k); }
+function docsFor(tab, visit) { return tab === 'LABS' ? labDocs(visit) : (PHOTO_DOCS_FOR[tab] || []); }
+// Where each document stands for one participant and visit: on the server (from the cached list or this phone's sent log), waiting on this phone, or missing.
+function docState(sid, doc, visit) {
+  const same = (x) => x.doc === doc && (x.visit || '') === (visit || '');
+  if ((S.photoOut || []).some((x) => x.sid === sid && same(x))) return 'waiting';
+  const c = T.phc && T.phc[sid];
+  if ((c && c.list.some(same)) || (S.photoSent || []).some((x) => x.sid === sid && same(x))) return 'sent';
+  return 'missing';
+}
 function photosOn() { return !T.practice && !!(S && S.server && S.server.photos); }
 function photoTaker() { return ['pi', 'data', 'qc', 'nurse', 'dots'].indexOf(role()) >= 0; }
 function photoViewer() { return ['pi', 'qc', 'dots'].indexOf(role()) >= 0; }
@@ -2177,8 +2192,8 @@ async function photoTake(file, F, doc) {
   finish();
 }
 function photoCard(F) {
-  const docs = PHOTO_DOCS_FOR[F.tab];
-  if (!docs || !photosOn() || !photoTaker() || F.ro) return null;
+  const docs = docsFor(F.tab, F.vals.visit);
+  if (!docs.length || !photosOn() || !photoTaker() || F.ro) return null;
   const box = el('div', { class: 'card photocard', id: 'photocard' });
   T.photoF = F;
   paintPhotoCard(box);
@@ -2195,18 +2210,19 @@ function paintPhotoCard(target) {
     inp.addEventListener('change', () => { const f = inp.files && inp.files[0]; inp.value = ''; if (f) photoTake(f, F, doc); });
     return inp;
   };
+  const v = /^(V|U)\d$/.test(visit) ? visit : '', docs = docsFor(F.tab, F.vals.visit), states = docs.map((d) => docState(sid, d, v));
+  const done = states.filter((x) => x !== 'missing').length;
+  const mark = (st) => el('span', { class: 'dmark ' + st, 'aria-label': st === 'sent' ? 'sent' : st === 'waiting' ? 'waiting to send' : 'not attached yet' }, st === 'missing' ? '' : '✓');
   box.replaceChildren(el('b', null, 'Source documents'),
-    el('div', { class: 'small muted' }, sid ? 'Attached to ' + sid + (visit ? ' ' + visit : '') + '. Once sent, this phone cannot show them again.' : 'Enter the study number first.'),
-    ...(PHOTO_DOCS_FOR[F.tab] || []).map((doc) => {
-      const cam = pick(doc, true), file = pick(doc, false);
-      return el('div', { class: 'photorow' }, el('div', { class: 'grow' }, PHOTO_DOC_NAMES[doc], el('small', null, [
-        queued.filter((x) => x.doc === doc).length ? queued.filter((x) => x.doc === doc).length + ' waiting to send' : '',
-        sent.filter((x) => x.doc === doc).length ? sent.filter((x) => x.doc === doc).length + ' sent' : '',
-        queued.some((x) => x.doc === doc && x.status === 'error') ? 'not accepted: ' + queued.filter((x) => x.doc === doc && x.err)[0].err : ''].filter(Boolean).join(' · '))),
+    el('div', { class: 'small muted' }, sid ? (docs.length > 1 ? done + ' of ' + docs.length + ' attached for ' + sid + (visit ? ' ' + visit : '') + '. ' : 'Attached to ' + sid + (visit ? ' ' + visit : '') + '. ') + 'Once sent, this phone cannot show them again.' : 'Enter the study number first.'),
+    ...docs.map((doc, i) => {
+      const cam = pick(doc, true), file = pick(doc, false), st = states[i], err = queued.filter((x) => x.doc === doc && x.status === 'error' && x.err)[0];
+      return el('div', { class: 'photorow' }, mark(st), el('div', { class: 'grow' }, PHOTO_DOC_NAMES[doc], el('small', null, err ? 'not accepted: ' + err.err : st === 'sent' ? 'sent' : st === 'waiting' ? 'waiting to send' : 'not attached yet')),
         cam, file,
-        el('button', { class: 'btn small', type: 'button', disabled: !sid, onclick: () => cam.click() }, 'Take photo'),
-        el('button', { class: 'btn small', type: 'button', disabled: !sid, onclick: () => file.click() }, 'Choose file'));
-    }));
+        el('div', { class: 'pbtns' },
+          el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': st === 'missing' ? 'Take photo' : 'Add page', title: 'Take photo', onclick: () => cam.click() }, icon('camera')),
+          el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': 'Choose file', title: 'Choose file (screenshot)', onclick: () => file.click() }, icon('export'))));
+    }))
 }
 // Viewing: online only, nothing is kept on the phone.
 function photoViewCard(sid) {
@@ -2240,13 +2256,19 @@ function photoNeeds(sid) {                                 // one document per o
   const need = [['CONSENT', '', 'consent']], label = { EXAM: 'examination', LAB: 'lab', CXR: 'radiograph', SPIRO: 'spirometry' };
   Object.keys(VISIT_FORMS).forEach((v) => {
     if (visitOpens(sid, v)) return;
-    VISIT_FORMS[v].forEach((f) => { const d = DOC_FOR[f[0]]; if (d && label[d] && (f[0] !== 'SPIRO' || find('SPIRO', { study_id: sid }) || spiroOk(sid))) need.push([d, f[1] || '', label[d] + (f[1] ? ' ' + f[1] : '')]); });
+    VISIT_FORMS[v].forEach((f) => {
+      if (f[0] === 'LABS') { labDocs(f[1]).forEach((d) => need.push([d, f[1], 'lab ' + f[1] + ' ' + LAB_PAGES[d.slice(4)].replace(/ \(.*\)$/, '')])); return; }
+      const d = DOC_FOR[f[0]]; if (d && label[d] && (f[0] !== 'SPIRO' || find('SPIRO', { study_id: sid }) || spiroOk(sid))) need.push([d, f[1] || '', label[d] + (f[1] ? ' ' + f[1] : '')]);
+    });
   });
   if (view('END_STUDY').some((r) => r.study_id === sid && r.status === 'W')) need.push(['WITHDRAW', '', 'withdrawal record']);
   return need;
 }
 function photoSummary(sid, list) {
-  const missing = photoNeeds(sid).filter((n) => !list.some((ph) => ph.doc === n[0] && (!n[1] || ph.visit === n[1]))).map((n) => n[2]);
+  const miss = photoNeeds(sid).filter((n) => docState(sid, n[0], n[1]) === 'missing' && !list.some((ph) => ph.doc === n[0] && (!n[1] || ph.visit === n[1])));
+  const labs = {}, missing = [];
+  miss.forEach((n) => { if (/^LAB_/.test(n[0])) { if (!labs[n[1]]) { labs[n[1]] = 0; missing.push('lab ' + n[1]); } labs[n[1]]++; } else missing.push(n[2]); });
+  missing.forEach((m, i) => { const v = /^lab (V\d|U\d)$/.exec(m); if (v && labs[v[1]] > 1) missing[i] = m + ' (' + labs[v[1]] + ' pages)'; });
   const poor = list.filter((ph) => ph.flag).length;
   const head = (list.length ? list.length + ' attached' : 'None attached') + (poor ? ' · ' + poor + ' too poor' : '');
   const tail = missing.length ? 'Missing: ' + missing.slice(0, 2).join(', ') + (missing.length > 2 ? ' and ' + (missing.length - 2) + ' more' : '') : (list.length ? 'All documents attached' : '');
@@ -2267,13 +2289,14 @@ function photoFetch(sid, after) {
 // "No document" pill beside a form's status pill on the participant page, for every form whose visit is open: its source document has not reached the server.
 const DOC_FOR = { S1_ENROL: 'CONSENT', S2_BASELINE: 'EXAM', LABS: 'LAB', S3_CXR: 'CXR', SPIRO: 'SPIRO', END_STUDY: 'WITHDRAW' };
 function docPill(sid, tab, visit, row) {
-  const doc = DOC_FOR[tab], c = T.phc && T.phc[sid];
-  if (!doc || !c || !photosOn() || !photoTaker()) return null;          // shown for every open form, entered or not
+  const c = T.phc && T.phc[sid];
+  if (!DOC_FOR[tab] || !c || !photosOn() || !photoTaker()) return null;          // shown for every open form, entered or not
   if (tab === 'END_STUDY' && !(row && row.status === 'W')) return null;
-  const queued = (S.photoOut || []).some((x) => x.sid === sid && x.doc === doc && (!visit || x.visit === visit));
-  if (queued || c.list.some((ph) => ph.doc === doc && (!visit || ph.visit === visit))) return null;
+  const docs = tab === 'LABS' ? labDocs(visit) : [DOC_FOR[tab]], have = docs.filter((d) => docState(sid, d, visit || '') !== 'missing').length;
   const key = visit ? { study_id: sid, visit } : { study_id: sid };
-  return el('button', { class: 'chip docmiss', type: 'button', onclick: (e) => { e.stopPropagation(); go('form', { tab, key, docFocus: true }); } }, 'no doc');
+  const open = (e) => { e.stopPropagation(); go('form', { tab, key, docFocus: true }); };
+  if (have === docs.length) return el('span', { class: 'chip docok', title: 'All documents attached' }, docs.length > 1 ? docs.length + '/' + docs.length + ' ✓' : 'doc ✓');
+  return el('button', { class: 'chip docmiss', type: 'button', onclick: open }, have ? have + '/' + docs.length + ' docs' : 'no doc');
 }
 function photosTile(sid) {
   T.phc = T.phc || {};
