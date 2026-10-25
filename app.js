@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '018928ffa29f';                 // replaced by build.js with the build's hash
+const BUILD_ID = '6f4d8403c03c';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -586,6 +586,7 @@ const ICONS = {
   phone: '<path d="M6.5 3.5h3l1.5 4-2 1.3a11 11 0 0 0 6.2 6.2l1.3-2 4 1.5v3a2 2 0 0 1-2 2A15.5 15.5 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>',
   lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5M12 14.5v2.5"/>',
   sync: '<path d="M20 11a8 8 0 0 0-14.3-4.6L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.3 4.6l1.7-2.1M20 20v-4.5h-4.5"/>',
+  export: '<path d="M12 14.5v-11M7.5 8 12 3.5 16.5 8M4.5 16.5v2a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2"/>',
   update: '<path d="M12 3.5v11M7.5 10l4.5 4.5 4.5-4.5M4.5 16.5v2a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2"/>',
   face: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.2 15.6a4 4 0 0 0 5.6 0"/>',
   practice: '<path d="M2.5 9 12 4.5 21.5 9 12 13.5z"/><path d="M6.5 11v4.5c0 1.5 2.5 3 5.5 3s5.5-1.5 5.5-3V11M21.5 9v5"/>',
@@ -673,7 +674,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
       canData() ? enrolTile() : null),
     el('h2', null, 'Needs attention'),
     feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
-      due.map((r) => ({ main: r[0] + ' · ' + r[1], sub: 'window ' + r[3] + ' to ' + r[4], chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due'),
+      due.map((r) => ({ main: dueLabel(r), sub: 'window ' + r[3] + ' to ' + r[4], chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due'),
     feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
       qkeys.map((g) => ({ main: g, sub: group[g][0][4] + (group[g].length > 1 ? ' and ' + (group[g].length - 1) + ' more' : ''), chip: String(group[g].length), chipCls: 'bad', go: () => openQuery(group[g][0]) })), () => go('queries'), 'No queries'),
     w.length ? feedCard('wait', 'Waiting to enrol', w.length, w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => findPatient(id) })), () => go('form', { tab: 'S1_ENROL', key: {} }), '') : null,
@@ -1093,6 +1094,8 @@ const M_V1 = ['Height in cm, shoes off'].concat(M_ALL);
 const E_ALL = ['Temperature (axillary)', 'Pulse, counted for a full minute', 'Conjunctival pallor', 'Chest auscultation'];
 const S_TB = 'TBscore symptoms: cough, haemoptysis, breathlessness, chest pain, night sweats';
 const S_HEP = 'Liver symptoms: nausea, vomiting, loss of appetite, abdominal pain, dark urine, yellow eyes or skin, unexplained tiredness';
+// "TBDM-001 | Visit 1 | Baseline": the study number and the visit as the checklist names it
+function dueLabel(r) { const g = VISIT_GUIDE[r[1]]; return r[0] + ' | ' + (g ? g.name.replace(' · ', ' | ') : r[1]); }
 const VISIT_GUIDE = {
   V1: { name: 'Visit 1 · Baseline', when: 'Day 0 to 7 after ATT started', measure: M_V1, examine: E_ALL, symptoms: [S_TB, 'How many weeks the symptoms have lasted', S_HEP],
     order: [['Fasting bloods, 08:00 to 10:00. Write the draw time on the slip', BLOOD_FULL], ['Chest radiograph', 'The routine film. Tell the PI when it is ready']],
@@ -1284,7 +1287,7 @@ function due() {
   const out = derived();
   const rows = out.schedule.filter((r) => r[5] !== 'upcoming').concat(out.schedule.filter((r) => r[5] === 'upcoming'));
   return topBar('Due and overdue').concat([el('main', null, el('div', { class: 'list' }, rows.length ? rows.map((r) => el('button', { class: 'row', onclick: () => go('participant', { sid: r[0] }) },
-    el('div', { class: 'main' }, el('div', null, r[0] + ' · ' + r[1]), el('div', { class: 'sub' }, 'window ' + r[3] + ' to ' + r[4])),
+    el('div', { class: 'main' }, el('div', null, dueLabel(r)), el('div', { class: 'sub' }, 'window ' + r[3] + ' to ' + r[4])),
     el('span', { class: 'chip ' + (r[5] === 'overdue' ? 'bad' : r[5] === 'due now' ? 'warn' : '') }, r[5]), el('span', { class: 'chev' }))) : el('div', { class: 'empty' }, 'Nothing due')))]);
 }
 // ---- query navigation: open the exact form, scroll to the field and flash it, with the query shown on top
@@ -1403,6 +1406,7 @@ function settings() {
     pi ? toolTile('logs', 'Screening log', view('S0_SCREEN').length + ' screened', () => go('screening')) : null,
     pi ? toolTile('check', 'Verification log', view('QC_LOG').length + ' checks', () => go('qclog')) : null,
     role() !== 'dots' ? toolTile('practice', 'Practice mode', 'Made-up patients', practiceAsk) : null,
+    pi && !T.practice ? toolTile('export', 'Export data', 'Excel, CSV, SPSS', exportAsk, 'export-data') : null,
     toolTile('sync', 'Sync now', pending ? pending + ' waiting' : 'All sent', () => sync()),
     toolTile('update', 'Update app', 'Get newest', () => confirmLeave(checkUpdate), 'update-now'),
     bioTile()];
@@ -1839,6 +1843,138 @@ function readJoin(given) {
   return given ? ok : true;
 }
 window.addEventListener('hashchange', () => { if (readJoin() && !KEY) render(); });
+// ------------------------------------------------------------------ data export (PI only): Excel, CSV, SPSS
+// Study data only. The names, record numbers and telephone numbers of the confidential register are never part of it.
+// Everything is built on the phone: no server, no library. A zip of stored (uncompressed) files is enough for all three formats.
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+const utf8 = (s) => new TextEncoder().encode(s);
+function zipStore(files) {                                          // files: [{ name, data: Uint8Array | string }]
+  const parts = [], central = []; let off = 0;
+  const u16 = (n) => [n & 255, (n >> 8) & 255], u32 = (n) => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
+  const d = new Date(), dt = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(), tm = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  files.forEach((f) => {
+    const name = utf8(f.name), data = typeof f.data === 'string' ? utf8(f.data) : f.data, crc = crc32(data);
+    const head = Uint8Array.from([0x50, 0x4b, 3, 4, 20, 0, 0, 8, 0, 0].concat(u16(tm), u16(dt), u32(crc), u32(data.length), u32(data.length), u16(name.length), [0, 0]));      // bit 11 set: names are UTF-8
+    parts.push(head, name, data);
+    central.push(Uint8Array.from([0x50, 0x4b, 1, 2, 20, 0, 20, 0, 0, 8, 0, 0].concat(u16(tm), u16(dt), u32(crc), u32(data.length), u32(data.length), u16(name.length), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], u32(off))), name);
+    off += head.length + name.length + data.length;
+  });
+  const cdLen = central.reduce((a, b) => a + b.length, 0);
+  const end = Uint8Array.from([0x50, 0x4b, 5, 6, 0, 0, 0, 0].concat(u16(files.length), u16(files.length), u32(cdLen), u32(off), [0, 0]));
+  const all = parts.concat(central, [end]), out = new Uint8Array(all.reduce((a, b) => a + b.length, 0)); let p = 0;
+  all.forEach((b) => { out.set(b, p); p += b.length; });
+  return out;
+}
+// The tables: every data tab as entered, then the calculated tabs. Each is { name, cols: [{ key, label, type, codes }], rows: [[...]] }.
+function exportTables() {
+  const tables = [];
+  defs().forEach((def) => {
+    const rows = view(def.tab).filter((r) => def.cols.some((c) => s_(r[c.key]) !== ''));
+    const cols = def.cols.map((c) => ({ key: c.key, label: c.label, type: c.type, codes: c.codes || null }));
+    tables.push({ name: def.tab, title: def.title || NAMES[def.tab] || def.tab, cols, rows: rows.map((r) => cols.map((c) => s_(r[c.key]))) });
+  });
+  const out = derived(), map = { DERIVED_PARTICIPANT: out.participant, DERIVED_LABS: out.labs, DERIVED_VISITS: out.visits };
+  Object.keys(map).forEach((name) => {
+    const spec = DERIVED[name], rows = map[name] || [];
+    tables.push({ name, title: 'Calculated by the app', cols: spec.map((c) => ({ key: c[0], label: c[1], type: c[2] === 'd' ? 'date' : c[2] === 'n' ? 'num' : 'text', codes: null })), rows: rows.map((r) => spec.map((c, i) => s_(r[i]))) });
+  });
+  return tables;
+}
+const NUMRE = /^-?\d+(\.\d+)?$/;
+// Is the column numeric? A coded list is numeric only when every code is a number (so value labels never mix types); an empty column
+// takes the type its form gives it; otherwise it is decided from what is in it, so one odd entry makes the column text, never a wrong number.
+function exportIsNum(t, j) {
+  const c = t.cols[j]; if (c.type === 'date' || c.type === 'time') return false;
+  if (c.codes && c.codes.length) return c.codes.every((x) => NUMRE.test(s_(x[0])));
+  if (['sid', 'sidnew', 'sidl', 'rid', 'text', 'regex', 'pairlist', 'list'].indexOf(c.type) >= 0) return false;
+  return t.rows.map((r) => r[j]).filter((v) => v !== '').every((v) => NUMRE.test(v));
+}
+const isoSerial = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v); return m ? Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 864e5) : null; };
+function csvText(t, flat) {          // flat: line breaks inside a value become a space (SPSS reads one case per line)
+  if (flat) t = { cols: t.cols, rows: t.rows.map((r) => r.map((v) => v.replace(/[\r\n]+/g, ' '))) };
+  const q = (v) => (/[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v);
+  // free text that starts with = + @ (or - and then a letter) would be run as a formula by Excel: a leading apostrophe stops that
+  const safe = (v, c) => (c && (c.type === 'text' || c.type === 'regex') && /^([=+@]|-(?![\d.]))/.test(v) ? "'" + v : v);
+  return '\ufeff' + [t.cols.map((c) => q(c.key)).join(',')].concat(t.rows.map((r) => r.map((v, j) => q(safe(v, t.cols[j]))).join(','))).join('\r\n') + '\r\n';
+}
+const xmlEsc = (v) => String(v).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').replace(/\r/g, '&#13;');
+function colLetter(n) { let s = ''; for (n++; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s; return s; }
+function codebookRows(tables) { return [].concat.apply([], tables.map((t) => t.cols.map((c) => [t.name, c.key, c.label, c.type, c.codes ? c.codes.map((x) => x[0] + ' = ' + x[1]).join('; ') : '']))); }
+const CODEBOOK_COLS = ['table', 'variable', 'label', 'type', 'codes'].map((k) => ({ key: k, label: k, type: 'text', codes: null }));
+function xlsxBytes(tables) {
+  const all = [{ name: 'Codebook', t: { cols: CODEBOOK_COLS, rows: codebookRows(tables) } }].concat(tables.map((t) => ({ name: t.name, t })));
+  const cell = (ref, v, kind, style) => kind === 'n' ? '<c r="' + ref + '"' + (style ? ' s="' + style + '"' : '') + '><v>' + v + '</v></c>' : '<c r="' + ref + '" t="inlineStr"' + (style ? ' s="' + style + '"' : '') + '><is><t xml:space="preserve">' + xmlEsc(v) + '</t></is></c>';
+  const files = [
+    { name: '[Content_Types].xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' + all.map((s, i) => '<Override PartName="/xl/worksheets/sheet' + (i + 1) + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join('') + '</Types>' },
+    { name: '_rels/.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+    { name: 'xl/workbook.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + all.map((s, i) => '<sheet name="' + xmlEsc(s.name) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>').join('') + '</sheets></workbook>' },
+    { name: 'xl/_rels/workbook.xml.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + all.map((s, i) => '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>').join('') + '<Relationship Id="rId' + (all.length + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
+    { name: 'xl/styles.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy\\-mm\\-dd"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>' }];
+  all.forEach((s, si) => {
+    const t = s.t, num = t.cols.map((c, j) => (s.name === 'Codebook' ? false : exportIsNum(t, j))), isDate = t.cols.map((c) => c.type === 'date');
+    let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetData>';
+    xml += '<row r="1">' + t.cols.map((c, j) => cell(colLetter(j) + '1', c.key, 's', 2)).join('') + '</row>';
+    t.rows.forEach((r, i) => {
+      xml += '<row r="' + (i + 2) + '">' + r.map((v, j) => {
+        if (v === '') return '';
+        const ref = colLetter(j) + (i + 2);
+        if (num[j]) return cell(ref, v, 'n');
+        if (isDate[j]) { const n = isoSerial(v); if (n !== null) return cell(ref, n, 'n', 1); }
+        return cell(ref, v, 's');
+      }).join('') + '</row>';
+    });
+    files.push({ name: 'xl/worksheets/sheet' + (si + 1) + '.xml', data: xml + '</sheetData></worksheet>' });
+  });
+  return zipStore(files);
+}
+// SPSS: one CSV per table and one syntax file that reads them all, with variable labels and value labels, and saves a .sav for each.
+function spsText(tables, stamp) {
+  const lit = (v) => "'" + String(v).replace(/'/g, "''").replace(/[\r\n]+/g, ' ') + "'";
+  let s = '* TBDM study data. Exported ' + stamp + ' from the TBDM Field app.\r\n* 1. Put this file and all the .csv files in one folder.  2. Change the folder in the next line.  3. Run all (Run > All).\r\nCD ' + lit('C:\\TBDM') + '.\r\n\r\n';
+  tables.forEach((t) => {
+    const nums = t.cols.map((c, j) => exportIsNum(t, j));
+    const fmt = t.cols.map((c, j) => {
+      if (c.type === 'date' && t.rows.every((r) => r[j] === '' || isoSerial(r[j]) !== null)) return 'SDATE10';
+      if (nums[j]) { let w = 1, d = 0; t.rows.forEach((r) => { const v = r[j]; if (v !== '') { w = Math.max(w, v.length); const p = v.indexOf('.'); if (p >= 0) d = Math.max(d, v.length - p - 1); } }); return 'F' + (w + 1) + '.' + d; }
+      let w = 1; (c.codes || []).forEach((x) => { w = Math.max(w, utf8(s_(x[0])).length); }); t.rows.forEach((r) => { w = Math.max(w, utf8(r[j]).length); }); return 'A' + Math.min(Math.max(w, 1), 32767);
+    });
+    s += '* ---- ' + t.name + ' (' + t.rows.length + ' rows)\r\nGET DATA /TYPE=TXT /FILE=' + lit(t.name + '.csv') + " /ENCODING='UTF8' /DELCASE=LINE /DELIMITERS=\",\" /QUALIFIER='\"' /ARRANGEMENT=DELIMITED /FIRSTCASE=2 /VARIABLES=\r\n";
+    s += t.cols.map((c, j) => '  ' + c.key + ' ' + fmt[j]).join('\r\n') + '.\r\n';
+    s += 'VARIABLE LABELS\r\n' + t.cols.map((c) => '  ' + c.key + ' ' + lit(String(c.label).slice(0, 250))).join('\r\n') + '.\r\n';
+    const vl = t.cols.map((c, j) => c.codes && c.codes.length ? '  ' + c.key + '\r\n' + c.codes.map((x) => '    ' + (nums[j] ? x[0] : lit(x[0])) + ' ' + lit(String(x[1] || x[0]).slice(0, 120))).join('\r\n') : null).filter(Boolean);
+    if (vl.length) s += 'VALUE LABELS\r\n' + vl.join(' /\r\n') + '.\r\n';
+    s += 'EXECUTE.\r\nSAVE OUTFILE=' + lit(t.name + '.sav') + '.\r\n\r\n';
+  });
+  return s;
+}
+async function exportBuild(kind) {
+  const tables = exportTables(), stamp = todayIso(), base = 'TBDM_data_' + stamp;
+  if (kind === 'xlsx') return { name: base + '.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', data: xlsxBytes(tables) };
+  const csvOf = (flat) => tables.map((t) => ({ name: t.name + '.csv', data: csvText(t, flat) })).concat([{ name: 'codebook.csv', data: csvText({ cols: CODEBOOK_COLS, rows: codebookRows(tables) }, flat) }]);
+  if (kind === 'csv') return { name: base + '_csv.zip', type: 'application/zip', data: zipStore(csvOf(false)) };
+  return { name: base + '_spss.zip', type: 'application/zip', data: zipStore(csvOf(true).concat([{ name: 'TBDM_import.sps', data: '\ufeff' + spsText(tables, stamp) }])) };
+}
+async function exportDeliver(file) {
+  if (T.exportHook) { T.exportHook(file); return; }
+  const blob = new Blob([file.data], { type: file.type }), f = new File([blob], file.name, { type: file.type });
+  const phone = /iPhone|iPad|Android/i.test(navigator.userAgent || '');
+  if (phone && navigator.canShare && navigator.canShare({ files: [f] })) {           // the share sheet is how a home-screen app hands a file to Files, Mail or Drive
+    try { await navigator.share({ files: [f], title: file.name }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  const a = el('a', { href: URL.createObjectURL(blob), download: file.name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+function exportAsk() {
+  let kind = 'xlsx';
+  const pending = S.outbox.length;
+  const opts = [['xlsx', 'Excel', '.xlsx, one sheet per form'], ['csv', 'CSV', 'one file per form, in a zip'], ['spss', 'SPSS', 'CSV files and a syntax file that adds the labels']];
+  const body = el('div', null,
+    el('p', null, 'Study data from all forms, plus the values the app calculates, with a codebook of every variable. Names, record numbers and telephone numbers are never included.'),
+    el('div', { class: 'seg', id: 'export-kind' }, opts.map((o) => el('button', { type: 'button', 'data-k': o[0], class: o[0] === kind ? 'on' : '', onclick: (ev) => { kind = o[0]; ev.currentTarget.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.k === kind)); } }, o[1], el('small', null, o[2])))),
+    el('p', { class: 'small muted' }, 'The file is not encrypted. Keep it on a protected device and delete it when you are done.' + (pending ? ' ' + pending + ' entr' + (pending === 1 ? 'y' : 'ies') + ' on this phone not yet sent are included.' : '')));
+  modal('Export data', body, [['Cancel', null], ['Export', async () => { try { const f = await exportBuild(kind); await exportDeliver(f); toast('Exported ' + f.name); } catch (e) { toast('Could not export: ' + (e && e.message || e)); } }, 'primary']]);
+}
+
 (async function start() {
   readJoin();
   try { T.hasVault = !!(await kvGet('vault')); T.hasBio = T.hasVault && !!(await kvGet('bio')); } catch (e) { T.hasVault = false; T.hasBio = false; }
