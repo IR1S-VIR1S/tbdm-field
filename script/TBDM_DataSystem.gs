@@ -1830,6 +1830,7 @@ function sendAlert_(a) {
 // ---------------------------------------------------------------- scheduled jobs
 function hourlyJob() {
   const ss = dataSS_();
+  if (props_().getProperty('ACCESS_PENDING') === 'Y') applyAccessJob();
   try { pullReaders_(ss); } catch (e) { console.error('pullReaders_: ' + e); }
   refreshAll();
 }
@@ -2983,8 +2984,10 @@ function appInvite_(u, req) {
     });
     if (changed) { stored.custom = custom; P.setProperty('ACCESS', JSON.stringify(stored)); }
   } finally { lock.releaseLock(); }
-  let shared = '';
-  try { const res = applyAccess_(null); shared = (res.added || []).join(', '); } catch (e) { shared = 'sharing not changed: ' + (e && e.message ? e.message : e); }
+  // Sharing the files and rebuilding the sheet protections takes minutes, longer than a phone waits, so it runs in the background a moment later.
+  const needsFiles = ['data', 'qc', 'reader1', 'reader2'].indexOf(role) >= 0;
+  if (needsFiles) accessLater_();
+  const shared = needsFiles ? 'the files this role uses are shared within a few minutes (Google e-mails the person)' : '';
   try {                                                                  // someone moved out of a role loses the files that role used
     const allow = { DATA_ID: emails_('DATA_EMAILS').concat(emails_('QC_EMAILS')), READER1_ID: emails_('READER1_EMAIL'), READER2_ID: emails_('READER2_EMAIL') };
     Object.keys(allow).forEach(function (k) {
@@ -3000,6 +3003,19 @@ function appInvite_(u, req) {
   logAudit_('APP', '', '', before ? accessRoleName_(before, stored) : '', email, 'phone app invitation issued from the PI phone (' + rname + ')', u.email);
   return { ok: true, email: email, role: role, roleName: rname, moved: before && before !== role ? accessRoleName_(before, stored) : '', shared: shared,
     link: appUrl.replace(/#.*$/, '') + '#join=' + encodeURIComponent(api) + '~' + code, days: APP_JOIN_DAYS };
+}
+function accessLater_() {
+  props_().setProperty('ACCESS_PENDING', 'Y');
+  try {
+    ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === 'applyAccessJob'; }).forEach(function (t) { ScriptApp.deleteTrigger(t); });
+    ScriptApp.newTrigger('applyAccessJob').timeBased().after(5000).create();
+  } catch (e) { console.error('accessLater_: ' + e); }        // the hourly job picks it up anyway
+}
+function applyAccessJob() {
+  ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === 'applyAccessJob'; }).forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  if (props_().getProperty('ACCESS_PENDING') !== 'Y') return;
+  props_().deleteProperty('ACCESS_PENDING');
+  try { applyAccess_(null); } catch (e) { props_().setProperty('ACCESS_PENDING', 'Y'); console.error('applyAccessJob: ' + e); }
 }
 // ---------------------------------------------------------------- in-place upgrade (keeps phones, invitations and the web app address)
 // A new script version can add, remove or reorder columns. This moves every existing row into the new
