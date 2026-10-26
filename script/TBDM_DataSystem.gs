@@ -2210,6 +2210,7 @@ function doPost(e) {
     if (req.op === 'pull') return appJson_(appPull_(u));
     if (req.op === 'access_set') return appJson_(accessSet_(u, req));
     if (req.op === 'nav_set') return appJson_(navSet_(u, req));
+    if (req.op === 'invite') return appJson_(appInvite_(u, req));
     if (req.op === 'push') {
       const theirs = req.schema === undefined ? 1 : Number(req.schema);   // apps older than the handshake send none
       if (theirs < CFG.SCHEMA_VER) return appJson_({ ok: false, error: 'This app is out of date. Close it and open it again while online.', code: 409 });
@@ -2951,6 +2952,54 @@ function menuAppInvite() {
   const rname = accessRoleName_(role, accessStored_());
   logAudit_('APP', '', '', '', email, 'phone app invitation issued (' + rname + ')', '');
   ui.alert('Invitation for ' + email + ' (' + rname + ')', 'Send this link to ' + email + ' privately. It works once, on one phone, and expires in ' + APP_JOIN_DAYS + ' days:\n\n' + link, ui.ButtonSet.OK);
+}
+// The PI invites from the phone: the person is put in the chosen role (taken out of any other), shared on the files that role uses,
+// exactly as "PI: manage users and sharing" would, and a one-time invitation link is made, the same as the workbook menu makes.
+const INVITE_LISTS = { data: 'DATA_EMAILS', qc: 'QC_EMAILS', reader1: 'READER1_EMAIL', reader2: 'READER2_EMAIL', dots: 'DOTS_EMAILS', nurse: 'NURSE_EMAILS' };
+function appInvite_(u, req) {
+  if (!u || u.role !== 'pi') return { ok: false, error: 'only the PI can invite', code: 401 };
+  const P = props_(), email = str_(req.email).trim().toLowerCase(), role = str_(req.role);
+  if (!/^[^@\s,]+@[^@\s,]+\.[^@\s,]+$/.test(email)) return { ok: false, error: 'that is not an e-mail address' };
+  if (email === piEmail_()) return { ok: false, error: 'the PI is already in the study' };
+  const stored = accessStored_(), custom = stored.custom || {};
+  if (!INVITE_LISTS[role] && !(isCustomRole_(role) && custom[role])) return { ok: false, error: 'choose a role' };
+  let api = P.getProperty('API_URL') || '', appUrl = P.getProperty('APP_URL') || '';
+  if (!api && /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(str_(req.api))) { api = str_(req.api); P.setProperty('API_URL', api); }   // the PI phone knows both addresses
+  if (!appUrl && /^(https:\/\/\S+|http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/\S*)$/.test(str_(req.app_url))) { appUrl = str_(req.app_url).replace(/[#?].*$/, ''); P.setProperty('APP_URL', appUrl); }
+  if (!api || !appUrl) return { ok: false, error: 'the web app or phone app address is not known yet; make one invitation from the workbook menu first' };
+  const before = roleOf_(email), lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    Object.keys(INVITE_LISTS).forEach(function (r) {                     // one role per person: out of every other list
+      const k = INVITE_LISTS[r], list = emails_(k).filter(function (x) { return x !== email; });
+      if (r === role) list.push(email);
+      P.setProperty(k, list.join(','));
+    });
+    let changed = false;
+    Object.keys(custom).forEach(function (id) {
+      const em = (custom[id].emails || []).filter(function (x) { return x !== email; });
+      if (id === role) em.push(email);
+      if (em.join(',') !== (custom[id].emails || []).join(',')) { custom[id].emails = em; changed = true; }
+    });
+    if (changed) { stored.custom = custom; P.setProperty('ACCESS', JSON.stringify(stored)); }
+  } finally { lock.releaseLock(); }
+  let shared = '';
+  try { const res = applyAccess_(null); shared = (res.added || []).join(', '); } catch (e) { shared = 'sharing not changed: ' + (e && e.message ? e.message : e); }
+  try {                                                                  // someone moved out of a role loses the files that role used
+    const allow = { DATA_ID: emails_('DATA_EMAILS').concat(emails_('QC_EMAILS')), READER1_ID: emails_('READER1_EMAIL'), READER2_ID: emails_('READER2_EMAIL') };
+    Object.keys(allow).forEach(function (k) {
+      const id = P.getProperty(k); if (!id || allow[k].indexOf(email) >= 0) return;
+      const f = DriveApp.getFileById(id);
+      if (f.getEditors().some(function (x) { return (x.getEmail() || '').toLowerCase() === email; })) f.removeEditor(email);
+      if (f.getViewers().some(function (x) { return (x.getEmail() || '').toLowerCase() === email; })) f.removeViewer(email);
+    });
+  } catch (e) { /* the daily check and "manage users" still report extra access */ }
+  const code = randomHex_(32), expires = Date.now() + APP_JOIN_DAYS * 864e5;
+  P.setProperty('APPJOIN_' + sha256_(code), JSON.stringify({ email: email, expires: expires }));
+  const rname = accessRoleName_(role, accessStored_());
+  logAudit_('APP', '', '', before ? accessRoleName_(before, stored) : '', email, 'phone app invitation issued from the PI phone (' + rname + ')', u.email);
+  return { ok: true, email: email, role: role, roleName: rname, moved: before && before !== role ? accessRoleName_(before, stored) : '', shared: shared,
+    link: appUrl.replace(/#.*$/, '') + '#join=' + encodeURIComponent(api) + '~' + code, days: APP_JOIN_DAYS };
 }
 // ---------------------------------------------------------------- in-place upgrade (keeps phones, invitations and the web app address)
 // A new script version can add, remove or reorder columns. This moves every existing row into the new
