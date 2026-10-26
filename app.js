@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '4cf41cceefb0';                 // replaced by build.js with the build's hash
+const BUILD_ID = '839d8e5e16ca';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -307,7 +307,7 @@ async function sync() {
 
 // ------------------------------------------------------------------ locking
 function bumpIdle() { clearTimeout(T.idle); if (KEY) { T.idle = setTimeout(lock, IDLE_LOCK_MS); sessTouch(); } }
-function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.roles = null; T.preview = null; T.cxr = {}; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
+function lock() { T.bioTried = false; sessClear(); T.practice = false; T.real = null; KEY = null; S = null; T.form = null; T.reg = null; T.link = null; T.roles = null; T.inv = null; T.preview = null; T.cxr = {}; resetNav(); T.pin = ''; clearTimeout(T.idle); render(); applyUpdateIfSafe(); }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, bumpIdle, { passive: true }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) T.hiddenAt = Date.now();
@@ -365,7 +365,7 @@ function render() {
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
   const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
-    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen, photos: photosScreen, roles: rolesScreen };
+    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen, photos: photosScreen, roles: rolesScreen, invite: inviteScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
   const hasNav = !!(S && S.server) && navIds().concat(c.name === 'tools' ? ['tools'] : []).indexOf(c.name) >= 0;
@@ -636,6 +636,7 @@ const ICONS = {
   practice: '<path d="M2.5 9 12 4.5 21.5 9 12 13.5z"/><path d="M6.5 11v4.5c0 1.5 2.5 3 5.5 3s5.5-1.5 5.5-3V11M21.5 9v5"/>',
   check: '<path d="M9 3.5h6l1 2h2.5a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1H8z"/><path d="m8.5 13 2.4 2.4 4.6-4.8"/>',
   debug: '<path d="M8.5 8.5a3.5 3.5 0 0 1 7 0v1h-7z"/><rect x="7" y="9.5" width="10" height="10" rx="5"/><path d="M12 12v6M3.5 13H7M17 13h3.5M4.5 8l2.8 2M19.5 8l-2.8 2M4.5 19l2.8-2M19.5 19l-2.8-2"/>',
+  invite: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-6 6.5-6s5.9 2.4 6.5 6"/><path d="M18.5 8v6M15.5 11h6"/>',
   eye: '<path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
   roles: '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 3.5v17"/><path d="m12.2 12 1.3 1.3 2.6-2.6"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
@@ -974,6 +975,46 @@ function rolesScreen() {
     el('div', { class: 'row2' },
       el('button', { class: 'btn block', type: 'button', disabled: R.busy, onclick: () => { ACCESS_ROLES.forEach((r) => { R.d[r] = accessFor_(r, null); }); R.dirty = true; R.msg = ''; render(); } }, 'Standard roles to defaults'),
       el('button', { class: 'btn primary block', type: 'button', id: 'rolesave', disabled: R.busy || !R.dirty, onclick: rolesSave }, R.busy ? 'Saving…' : 'Save')))]);
+}
+// ---- Invite a member (PI only): choose the role, get a one-time link to send. The workbook puts the person in that role (out of any
+// other) and shares the files that role uses, as "PI: manage users and sharing" does. The link works once, on one phone, for 7 days.
+function inviteScreen() {
+  if (role() !== 'pi' || T.practice) return topBar('Invite a member').concat([el('main', null, el('div', { class: 'card' }, 'Invitations are made by the PI only.'))]);
+  const I = T.inv || (T.inv = { email: '', role: '', busy: false, err: '', res: null });
+  const stored = (S.server && S.server.accessStored) || {}, cu = stored.custom || {};
+  const roles = [['data', accessRoleName_('data', stored)], ['qc', accessRoleName_('qc', stored)], ['nurse', accessRoleName_('nurse', stored)], ['dots', accessRoleName_('dots', stored)],
+    ['reader1', accessRoleName_('reader1', stored) + ' 1'], ['reader2', accessRoleName_('reader2', stored) + ' 2']].concat(Object.keys(cu).filter(isCustomRole_).map((id) => [id, cu[id].name]));
+  if (I.res) {
+    const r = I.res, msg = 'TBDM Field: your invitation. Open this link on your phone, then add the app to your Home Screen. It works once and expires in ' + r.days + ' days.';
+    const copy = () => { (navigator.clipboard ? navigator.clipboard.writeText(r.link) : Promise.reject()).then(() => toast('Link copied.'), () => { const t = $('#inv-link'); t.select(); toast('Select the link and copy it.'); }); };
+    return topBar('Invite a member').concat([el('main', null,
+      el('div', { class: 'card ok' }, el('b', null, 'Invitation ready for ' + r.email), el('div', { class: 'small' }, r.roleName + (r.moved ? ' (moved from ' + r.moved + ')' : '') + '. Send it to that person only. It works once, on one phone, for ' + r.days + ' days.')),
+      el('textarea', { class: 'search', id: 'inv-link', rows: '4', readonly: 'readonly' }, r.link),
+      el('div', { class: 'row2' },
+        navigator.share ? el('button', { class: 'btn primary block', type: 'button', id: 'inv-share', onclick: () => navigator.share({ title: 'TBDM Field invitation', text: msg, url: r.link }).catch(() => {}) }, 'Share') : null,
+        el('a', { class: 'btn block', id: 'inv-wa', href: 'https://wa.me/?text=' + encodeURIComponent(msg + '\n' + r.link), target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp'),
+        el('button', { class: 'btn block', type: 'button', id: 'inv-copy', onclick: copy }, 'Copy')),
+      r.shared ? el('div', { class: 'card small muted' }, 'Shared: ' + r.shared) : null,
+      el('button', { class: 'btn block', type: 'button', onclick: () => { T.inv = null; render(); } }, 'Invite someone else'))]);
+  }
+  const send = async () => {
+    const em = s_(I.email).trim().toLowerCase();
+    if (!/^[^@\s,]+@[^@\s,]+\.[^@\s,]+$/.test(em)) { I.err = 'Type the person\'s Google account e-mail.'; render(); return; }
+    if (!I.role) { I.err = 'Choose a role.'; render(); return; }
+    if (!navigator.onLine) { I.err = 'Connect to the internet to make an invitation.'; render(); return; }
+    I.busy = true; I.err = ''; render();
+    try { const r = await api({ op: 'invite', token: S.cfg.token, email: em, role: I.role, api: S.cfg.api, app_url: location.href.replace(/[#?].*$/, '') }, 60000); if (!r.ok) throw new Error(r.error || 'not made'); I.res = r; }
+    catch (e) { I.err = 'Not made: ' + (e.message || e); }
+    I.busy = false; render();
+  };
+  return topBar('Invite a member').concat([el('main', null,
+    el('div', { class: 'field' }, el('label', { class: 'lab', for: 'inv-email' }, 'Google account e-mail'), el('div', { class: 'hint' }, 'The person signs in to nothing; the e-mail decides their role.'),
+      el('input', { id: 'inv-email', type: 'email', autocomplete: 'off', autocapitalize: 'off', value: I.email, placeholder: 'name@gmail.com', oninput: (ev) => { I.email = ev.target.value; } })),
+    el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Role'), el('div', { class: 'hint' }, 'Access follows the Role manager. Someone already in another role is moved.'),
+      el('div', { class: 'list', id: 'inv-roles' }, roles.map((x) => el('button', { class: 'row' + (I.role === x[0] ? ' on' : ''), type: 'button', 'data-role': x[0], 'aria-pressed': I.role === x[0] ? 'true' : 'false', onclick: () => { I.role = x[0]; render(); } },
+        el('div', { class: 'main' }, el('div', null, x[1])), I.role === x[0] ? el('span', { class: 'chip ok' }, 'chosen') : null)))),
+    I.err ? el('div', { class: 'card warn', id: 'inv-err' }, I.err) : null,
+    el('button', { class: 'btn primary block', type: 'button', id: 'inv-make', disabled: I.busy, onclick: send }, I.busy ? 'Making the invitation…' : 'Make invitation'))]);
 }
 // ---- study numbers register (PI and DOTS incharge). Online only. Nothing about it is kept on the phone.
 const REG_STATUS_OPTS = [['E', 'Enrolled'], ['D', 'Declined'], ['S', 'Spoiled']];
@@ -1751,6 +1792,7 @@ function settings() {
     can('verify') && holds('QC_LOG') ? toolTile('check', 'Verification log', view('QC_LOG').length + ' checks', () => go('qclog')) : null,
     !T.preview && (can('screen') || can('view') || can('measure') || isReader()) ? toolTile('practice', 'Practice mode', 'Made-up patients', practiceAsk) : null,
     pi ? toolTile('roles', 'Role manager', 'Who can do what', () => { T.roles = null; go('roles'); }, 'role-manager') : null,
+    pi && !T.practice ? toolTile('invite', 'Invite a member', 'One-time link', () => { T.inv = null; go('invite'); }, 'invite-member') : null,
     pi ? toolTile('eye', 'Surveillance', 'A role\'s view, read only', () => previewAsk('watch'), 'surveil') : null,
     pi ? toolTile('debug', 'Debugging', 'A role on made-up data', () => previewAsk('debug'), 'debug') : null,
     can('export') && !T.practice ? toolTile('export', 'Export data', 'Excel, CSV, SPSS', exportAsk, 'export-data') : null,

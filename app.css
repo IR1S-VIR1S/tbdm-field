@@ -407,3 +407,6 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .top h1 .salam { display: block; font-size: 17px; line-height: 1.35; font-family: "Noto Naskh Arabic", "Geeza Pro", "Segoe UI", Arial, serif; }
 .top h1 .salam { white-space: nowrap; overflow: visible; text-overflow: clip; font-size: 13.5px; }
 .top h1:has(.salam) { white-space: normal; overflow: visible; }
+#inv-email { width: 100%; height: var(--tap); border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; background: var(--card); color: var(--ink); }
+#inv-roles .row.on { background: var(--brand-soft); }
+#inv-link { height: auto; padding: 10px 12px; font-size: 13px; word-break: break-all; resize: none; }
