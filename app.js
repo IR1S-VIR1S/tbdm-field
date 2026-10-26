@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '839d8e5e16ca';                 // replaced by build.js with the build's hash
+const BUILD_ID = '72962603102b';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1003,7 +1003,7 @@ function inviteScreen() {
     if (!I.role) { I.err = 'Choose a role.'; render(); return; }
     if (!navigator.onLine) { I.err = 'Connect to the internet to make an invitation.'; render(); return; }
     I.busy = true; I.err = ''; render();
-    try { const r = await api({ op: 'invite', token: S.cfg.token, email: em, role: I.role, api: S.cfg.api, app_url: location.href.replace(/[#?].*$/, '') }, 60000); if (!r.ok) throw new Error(r.error || 'not made'); I.res = r; }
+    try { const r = await api({ op: 'invite', token: S.cfg.token, email: em, role: I.role, api: S.cfg.api, app_url: location.href.replace(/[#?].*$/, '') }, 90000); if (!r.ok) throw new Error(r.error || 'not made'); I.res = r; }
     catch (e) { I.err = 'Not made: ' + (e.message || e); }
     I.busy = false; render();
   };
