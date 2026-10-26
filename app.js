@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'e33fa8ee747b';                 // replaced by build.js with the build's hash
+const BUILD_ID = '4cf41cceefb0';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -284,7 +284,7 @@ async function sync() {
     if (S.server && S.server.photos && (S.photoOut || []).length) await pushPhotos(still);
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, navOrder: pull.navOrder || null, navOrders: pull.navOrders || null, at: Date.now() };
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, navOrder: pull.navOrder || null, navOrders: pull.navOrders || null, roleName: pull.roleName || '', at: Date.now() };
     if (pull.photos && (S.photoOut || []).length) await pushPhotos(still);          // photos taken before the feature reached this phone
     if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
     T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email;
@@ -880,12 +880,12 @@ function rolesDraft() {
     const st = (S.server && S.server.accessStored) || {}, d = {}, c = {};
     ACCESS_ROLES.forEach((r) => { d[r] = accessFor_(r, st); });
     Object.keys(st.custom || {}).filter(isCustomRole_).forEach((id) => { const x = st.custom[id]; c[id] = { name: x.name, emails: (x.emails || []).slice(), access: accessFor_(id, st) }; });
-    T.roles = { d, c, dirty: false, busy: false, msg: '' };
+    T.roles = { d, c, n: Object.assign({}, st.names || {}), dirty: false, busy: false, msg: '' };
   }
   return T.roles;
 }
 const rolesRow = (R, r) => (isCustomRole_(r) ? R.c[r].access : R.d[r]);
-const rolesName = (R, r) => (isCustomRole_(r) ? R.c[r].name : ACCESS_ROLE_NAMES[r]);
+const rolesName = (R, r) => (isCustomRole_(r) ? R.c[r].name : R.n[r === 'reader' ? 'reader' : r] || (r === 'reader' ? 'Radiograph reader' : ACCESS_ROLE_NAMES[r]));
 function rolesToggle(r, k) {
   const R = rolesDraft(), row = rolesRow(R, r), on = !row[k], key = ACCESS_KEYS.filter((x) => x.key === k)[0];
   const apply = () => {
@@ -919,13 +919,20 @@ function rolesEdit(id) {
   if (id) btns.splice(1, 0, ['Remove role', () => modal('Remove ' + cur.name + '?', [el('p', null, 'Its people lose access at their next request, unless they are also in a standard user list. Saved only when you press Save.')], [['Cancel', null], ['Remove', () => { delete R.c[id]; R.dirty = true; render(); }, 'danger']])]);
   modal(id ? 'Change ' + cur.name : 'Add a role', [el('p', { class: 'small' }, 'For particular people with particular needs. They start with no ticks; set them in the grid. A person in an extra role takes its access instead of their usual role.'), name, people, err], btns);
 }
+// Rename a standard role: the new name shows in the grid, Surveillance and Debugging, and on that role's Home after its next sync.
+function roleRename(k) {
+  const R = rolesDraft(), usual = k === 'reader' ? 'Radiograph reader' : ACCESS_ROLE_NAMES[k];
+  const box = el('input', { class: 'search', id: 'rn-name', maxlength: '30', placeholder: usual, value: R.n[k] || '' });
+  modal('Rename ' + (R.n[k] || usual), [el('p', { class: 'small' }, 'Shown on their Home and in this Role manager. Access does not change. Leave blank for the usual name.'), box],
+    [['Cancel', null], R.n[k] ? ['Usual name', () => { delete R.n[k]; R.dirty = true; render(); }] : null, ['Done', () => { const v = s_(box.value).replace(/\s+/g, ' ').trim(); if (v && v !== usual) R.n[k] = v; else delete R.n[k]; R.dirty = true; R.msg = ''; render(); }, 'primary']].filter(Boolean));
+}
 async function rolesSave() {
   const R = rolesDraft();
   if (R.busy) return;
   if (!navigator.onLine) { R.msg = 'Connect to the internet to save. Your ticks are kept until you leave this page.'; render(); return; }
   R.busy = true; R.msg = ''; render();
   try {
-    const res = await api({ op: 'access_set', token: S.cfg.token, access: Object.assign({}, R.d, { custom: R.c }) });
+    const res = await api({ op: 'access_set', token: S.cfg.token, access: Object.assign({}, R.d, { custom: R.c, names: R.n }) });
     if (!res.ok) throw new Error(res.error || 'not saved');
     S.server.accessStored = res.accessStored; await saveState();
     T.roles = null; const R2 = rolesDraft();
@@ -938,7 +945,7 @@ function rolesScreen() {
   if (!S.server || !S.server.accessStored) return topBar('Role manager').concat([el('main', null, el('div', { class: 'card warn' }, el('b', null, 'Update the workbook script first.'), el('div', { class: 'small' }, 'The workbook is still on a version without role access. Run PI: update script from GitHub in the workbook, then sync this phone. Until then every role keeps its usual access.')))]);
   const R = rolesDraft(), cids = Object.keys(R.c).sort((a, b) => +a.slice(1) - +b.slice(1)), cols = ['pi'].concat(ACCESS_ROLES).concat(cids).concat(['reader']);
   const short = { pi: 'PI', data: 'Data', qc: 'Verif.', nurse: 'Nurse', dots: 'DOTS', reader: 'Reader' };
-  const head = (r) => (isCustomRole_(r) ? (R.c[r].name.length > 7 ? R.c[r].name.slice(0, 6) + '…' : R.c[r].name) : short[r]);
+  const cut = (t) => (t.length > 7 ? t.slice(0, 6) + '…' : t), head = (r) => (isCustomRole_(r) ? cut(R.c[r].name) : r !== 'pi' && R.n[r] ? cut(R.n[r]) : short[r]);
   const cell = (r, k) => {
     if (r === 'pi') return el('td', { class: 'acc fixed' }, el('span', { class: 'tick on', 'aria-label': 'on, fixed' }));
     if (r === 'reader') return el('td', { class: 'acc fixed' }, el('span', { class: 'tick', 'aria-label': 'off, fixed' }));
@@ -946,7 +953,7 @@ function rolesScreen() {
     return el('td', { class: 'acc' + (isCustomRole_(r) ? ' custom' : '') }, el('button', { type: 'button', class: 'tick' + (on ? ' on' : ''), 'data-r': r, 'data-k': k, 'aria-pressed': on ? 'true' : 'false', 'aria-label': rolesName(R, r) + ': ' + ACCESS_KEYS.filter((x) => x.key === k)[0].label, onclick: () => rolesToggle(r, k) }));
   };
   const table = el('table', { class: 'accgrid' },
-    el('thead', null, el('tr', null, el('th', { class: 'task' }, 'Task'), cols.map((r) => el('th', { title: isCustomRole_(r) ? R.c[r].name : ACCESS_ROLE_NAMES[r], class: isCustomRole_(r) ? 'custom' : null }, head(r))))),
+    el('thead', null, el('tr', null, el('th', { class: 'task' }, 'Task'), cols.map((r) => el('th', { title: r === 'pi' ? 'PI' : rolesName(R, r), class: isCustomRole_(r) ? 'custom' : null }, head(r))))),
     el('tbody', null,
       ACCESS_KEYS.map((k) => el('tr', { class: k.confidential ? 'conf' : '' }, el('th', { class: 'task', scope: 'row' }, k.label, k.need ? el('small', null, k.need === 'view' ? 'needs full clinical data' : 'needs names, MRN, telephone') : null), cols.map((r) => cell(r, k.key)))),
       el('tr', { class: 'fixedrow' }, el('th', { class: 'task', scope: 'row' }, 'Score chest films', el('small', null, 'readers only, blinded')), cols.map((r) => el('td', { class: 'acc fixed' }, el('span', { class: 'tick' + (r === 'reader' ? ' on' : '') })))),
@@ -955,6 +962,9 @@ function rolesScreen() {
   return topBar('Role manager').concat([el('main', null,
     el('div', { class: 'card small' }, 'Tap a box to switch a task on or off for everyone in that role. The PI and reader columns are fixed. The workbook enforces these ticks; phones pick them up at their next sync.'),
     el('div', { class: 'accwrap' }, table),
+    el('h2', null, 'Role names'),
+    el('div', { class: 'list', id: 'rolenames' }, RENAMABLE.map((k) => { const usual = k === 'reader' ? 'Radiograph reader' : ACCESS_ROLE_NAMES[k];
+      return el('button', { class: 'row', type: 'button', 'data-rn': k, onclick: () => roleRename(k) }, el('div', { class: 'main' }, el('div', null, R.n[k] || usual), el('div', { class: 'sub' }, R.n[k] ? 'Usual name: ' + usual : 'Tap to rename' + (k === 'reader' ? ' (both readers)' : ''))), el('span', { class: 'chev' })); })),
     el('h2', null, 'Extra roles'),
     el('div', { class: 'list', id: 'customroles' },
       cids.map((id) => el('button', { class: 'row', type: 'button', 'data-cid': id, onclick: () => rolesEdit(id) }, el('div', { class: 'main' }, el('div', null, R.c[id].name), el('div', { class: 'sub' }, R.c[id].emails.length ? R.c[id].emails.join(', ') : 'No people yet')), el('span', { class: 'chev' }))),
@@ -2168,7 +2178,7 @@ function practiceStop() { if (!T.practice) return; S = T.real; T.real = null; T.
 const PREVIEW_ROLES = [['data', 'Data entry'], ['qc', 'Verifier'], ['nurse', 'Nurse'], ['dots', 'DOTS incharge'], ['reader1', 'Radiograph reader']];
 const PMODE = { watch: { name: 'Surveillance', tag: 'read only', what: 'the real study data on this phone, exactly as that role receives it. Read only: nothing can be entered, saved or sent.' },
   debug: { name: 'Debugging', tag: 'nothing is saved or sent', what: 'made-up participants. You can enter data and follow every step; it stays here and nothing is sent.' } };
-function previewList() { const st = ((T.preview ? T.real : S) || {}).server; const cu = (st && st.accessStored && st.accessStored.custom) || {}; return PREVIEW_ROLES.concat(Object.keys(cu).filter(isCustomRole_).map((id) => [id, cu[id].name])); }
+function previewList() { const st = ((T.preview ? T.real : S) || {}).server, stored = (st && st.accessStored) || {}, cu = stored.custom || {}; return PREVIEW_ROLES.map((x) => [x[0], accessRoleName_(x[0], stored)]).concat(Object.keys(cu).filter(isCustomRole_).map((id) => [id, cu[id].name])); }
 function previewName(r) { return (previewList().filter((x) => x[0] === r)[0] || [r, r])[1]; }
 const watching = () => !!T.preview && T.pmode === 'watch';
 function previewAsk(mode) {

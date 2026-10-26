@@ -1291,9 +1291,13 @@ const ACCESS_DEFAULT = {
 // Roles the PI adds in the Role manager ('c1', 'c2' ...) for particular people: a name, the people's e-mails and their own ticks (none by default).
 const CUSTOM_ROLE_RX = /^c\d{1,3}$/, CUSTOM_MAX = 12, CUSTOM_PEOPLE_MAX = 20;
 function isCustomRole_(role) { return CUSTOM_ROLE_RX.test(String(role || '')); }
+// The standard roles can be renamed by the PI (stored.names, e.g. { data: 'Data officer' }); both readers share the name under 'reader'.
+const RENAMABLE = ['data', 'qc', 'nurse', 'dots', 'reader'];
 function accessRoleName_(role, stored) {
   if (isCustomRole_(role)) { const c = stored && stored.custom && stored.custom[role]; return c ? String(c.name) : 'Removed role'; }
-  return ACCESS_ROLE_NAMES[role] || (/^reader/.test(role) ? 'Radiograph reader' : String(role || ''));
+  const key = /^reader/.test(String(role || '')) ? 'reader' : role, nm = stored && stored.names && stored.names[key];
+  if (nm) return String(nm);
+  return key === 'reader' ? 'Radiograph reader' : ACCESS_ROLE_NAMES[role] || String(role || '');
 }
 function accessFor_(role, stored) {
   const out = {};
