@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '4e633da4f568';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'afea4869c2cf';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -16,7 +16,7 @@ const LAB_GROUPS = [
   ['Blood count', ['hb', 'tlc', 'neut_abs', 'neut_pct', 'lymph_abs', 'lymph_pct', 'mono_abs', 'eos_pct', 'plt', 'rdw', 'mpv'], ['V1', 'V3', 'V5']],
   ['HbA1c', ['hba1c_unit', 'hba1c'], ['V1', 'V4']],      // no HbA1c at V5 (PI, 30 Oct 2026)
   ['Glucose and lipids (fasting)', ['glucose_unit', 'fpg', 'lipid_unit', 'tg', 'hdl', 'tc', 'ldl'], ['V1']],
-  ['Liver tests', ['alt', 'alt_uln', 'ast', 'ast_uln', 'alp', 'alp_uln', 'tbili', 'bili_uln', 'albumin', 'tprotein'], ['V1', 'V2', 'V3', 'V5', 'U']],
+  ['LFTs', ['alt', 'alt_uln', 'ast', 'ast_uln', 'alp', 'alp_uln', 'tbili', 'bili_uln', 'albumin', 'tprotein'], ['V1', 'V2', 'V3', 'V5', 'U']],
   ['Serology', ['hbsag', 'anti_hcv', 'hiv'], ['V1']],
   ['Entered by', ['entered_by'], null]];
 const VISIT_FORMS = { V1: [['S2_BASELINE'], ['LABS', 'V1'], ['PHQ_GAD', 'V1'], ['S3_CXR']], V2: [['VISITS', 'V2'], ['LABS', 'V2']],
@@ -1446,7 +1446,7 @@ function infoBtn(key) {
 }
 
 // ---- visit checklist: what to do and order at each visit (from manual Part 3). Fixed text, no patient data.
-const BLOOD_FULL = 'Blood count with differential (CBC), liver tests (ALT, AST, ALP, total bilirubin), HbA1c, lipids (triglycerides, HDL, total and LDL cholesterol), HBsAg, anti-HCV, HIV';
+const BLOOD_FULL = 'Blood count with differential (CBC), LFTs (ALT, AST, ALP, total bilirubin), HbA1c, lipids (triglycerides, HDL, total and LDL cholesterol), HBsAg, anti-HCV, HIV';
 const M_ALL = ['Weight in kg, light clothing, shoes off', 'Waist in cm, midway between the lowest rib and the hip bone, after a normal breath out', 'Mid-upper arm circumference (MUAC) in mm, left arm'];
 const M_V1 = ['Height in cm, shoes off'].concat(M_ALL);
 const E_ALL = ['Temperature (axillary)', 'Pulse, counted for a full minute', 'Conjunctival pallor', 'Chest auscultation'];
@@ -1462,11 +1462,11 @@ const VISIT_GUIDE = {
     do: ['Consent, then assign the next study number', 'Copy the diagnostic sputum smear grade from the NTP card', 'History: smoking, alcohol, diabetes, hypertension', 'Questionnaires PHQ-9 and GAD-7, unless declined'],
     enter: ['Enrolment first', 'Baseline form', 'Laboratory results when they return', 'Chest radiograph date', 'Questionnaires (V1)'] },
   V2: { name: 'Visit 2 · Month 1', when: 'Day 21 to 35', measure: [], examine: [], symptoms: [S_HEP],
-    order: [['Liver tests (ALT, AST, ALP, total bilirubin)', 'If any symptom is present, draw them the same day']],
+    order: [['LFTs (ALT, AST, ALP, total bilirubin)', 'If any symptom is present, draw them the same day']],
     do: ['Ask about each liver symptom directly', 'Treatment status and adherence'],
     enter: ['Visit form (V2)', 'Laboratory results when they return', 'Check the liver injury definition as soon as the result is back'] },
   V3: { name: 'Visit 3 · Month 2', when: 'Day 49 to 70 · end of intensive phase', measure: M_ALL, examine: E_ALL, symptoms: [S_TB, S_HEP],
-    order: [['Blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', ''], ['Sputum smear', 'Record the date and result']],
+    order: [['Blood count (CBC) and LFTs (ALT, AST, ALP, total bilirubin)', ''], ['Sputum smear', 'Record the date and result']],
     do: ['Treatment status and adherence', 'Sputum conversion: Y, N or U. Never leave it blank'],
     enter: ['Visit form (V3), with the sputum smear date and result', 'Laboratory results when they return', 'Check the liver injury definition'] },
   V4: { name: 'Visit 4 · Month 3', when: 'Day 77 to 98', measure: [], examine: [], symptoms: [S_HEP],
@@ -1474,7 +1474,7 @@ const VISIT_GUIDE = {
     do: ['Treatment status and adherence', 'New diabetes found: refer for diabetes care and record it'],
     enter: ['Visit form (V4)', 'Laboratory results when they return'] },
   V5: { name: 'Visit 5 · Month 6', when: 'Day 154 to 182 · treatment completion', measure: M_ALL, examine: E_ALL, symptoms: [S_TB, S_HEP],
-    order: [['Blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', ''], ['Sputum smear', 'Record the date and result'], ['Spirometry', 'Only if smear negative and not declined']],
+    order: [['Blood count (CBC) and LFTs (ALT, AST, ALP, total bilirubin)', ''], ['Sputum smear', 'Record the date and result'], ['Spirometry', 'Only if smear negative and not declined']],
     do: ['Treatment status and adherence', 'Treatment outcome', 'Questionnaires PHQ-9 and GAD-7, unless declined'],
     enter: ['Visit form (V5), with the sputum smear date and result', 'Laboratory results when they return', 'Spirometry', 'Questionnaires (V5)', 'End of study: status C and the date'] }
 };
@@ -1545,7 +1545,7 @@ function participants() {
 // ---- Laboratory order: per participant and visit, the tests the lab form expects at that visit (LAB_GROUPS), each checked against what is
 // entered (Entered, Partly entered with the missing values named, Not entered), with the report photo where photos are on. Nothing new is
 // stored: it reads the laboratory row, the visit form (sputum smear) and the photo list.
-const GROUP_PAGES = { 'Blood count': ['CBC'], HbA1c: ['HBA1C'], 'Glucose and lipids (fasting)': ['FPG', 'LIPID'], 'Liver tests': ['LFT'], Serology: ['HEP', 'HIV'] };
+const GROUP_PAGES = { 'Blood count': ['CBC'], HbA1c: ['HBA1C'], 'Glucose and lipids (fasting)': ['FPG', 'LIPID'], LFTs: ['LFT'], Serology: ['HEP', 'HIV'] };
 // On the order checklist some form groups are ordered as separate tests: [name, values, report pages] (PI, 30 Oct 2026).
 const ORDER_SPLIT = { 'Glucose and lipids (fasting)': [['Fasting glucose', ['glucose_unit', 'fpg'], ['FPG']], ['Fasting lipids', ['lipid_unit', 'tg', 'hdl', 'tc', 'ldl'], ['LIPID']]],
   Serology: [['HBsAg', ['hbsag'], ['HEP']], ['Anti-HCV', ['anti_hcv'], ['HEP']], ['HIV', ['hiv'], ['HIV']]] };
@@ -2235,7 +2235,7 @@ function liveCalc() {
       const t9 = tbscore_(v, b, CFG.PULSE_PRIMARY), t1 = tbscore_(v, b, CFG.PULSE_SENSITIVITY);
       out.push(['TBscore', t9 === '' ? 'needs every item' : t9 + ' (pulse >100: ' + t1 + ')']);
     }
-    if (F.tab === 'VISITS' && hepAny_(v) === true) out.push(['Liver symptoms', 'YES: liver tests today', true]);
+    if (F.tab === 'VISITS' && hepAny_(v) === true) out.push(['Liver symptoms', 'YES: LFTs today', true]);
   }
   if (F.tab === 'EVENTS' && s_(v.event_type) === 'E2') {
     const rl = rucamLive(v); out.push(['RUCAM score', rl || 'choose the injury pattern and answer every item']);
@@ -2339,7 +2339,7 @@ async function saveForm() {
     if (/^MET/.test(dl)) return modal('Liver injury definition met', [el('p', null, dl + '.'), el('ol', null, el('li', null, 'Tell the treating team today. Treatment decisions are theirs.'), el('li', null, 'Complete form E2 and enter it as an event.'))], [['Understood', after, 'danger']], true);
     if (/^CHECK/.test(dl)) return modal('Symptom enquiry missing', [el('p', null, 'ALT is 3 times the upper limit or more, and the liver symptom enquiry for this visit is not recorded. Ask about the symptoms today: if any is present, the definition is met.')], [['Understood', after, 'danger']], true);
   }
-  if (F.tab === 'VISITS' && hepAny_(F.vals) === true) return modal('Liver symptoms reported', [el('p', null, 'Make sure liver tests are drawn today, whether or not they were due.')], [['Understood', after]], false);
+  if (F.tab === 'VISITS' && hepAny_(F.vals) === true) return modal('Liver symptoms reported', [el('p', null, 'Make sure LFTs are drawn today, whether or not they were due.')], [['Understood', after]], false);
   if (F.tab === 'S0_SCREEN' && F.vals.enrolled === 'Y' && F.vals.study_id && !enrolledMap()[s_(F.vals.study_id).toUpperCase()]) {
     return modal('Enrol now?', [el('p', null, F.vals.study_id + ' is not enrolled yet. Enter the enrolment record next.')], [['Later', after], ['Enrol', () => { T.nav.pop(); go('form', { tab: 'S1_ENROL', key: {}, preset: carryPreset(F.vals.study_id, F.vals), carried: carryKeys(F.vals) }); if (navigator.onLine) sync(); }, 'primary']]);
   }
@@ -2630,7 +2630,7 @@ const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File'
 const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'SMEAR', 'CORE'], S2_BASELINE: ['EXAM'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
 const PHOTO_MAX_PX = 2000;
 // A lab report comes as separate pages; each visit needs the pages of the tests ordered at it (visit checklist).
-const LAB_PAGES = { CBC: 'Blood count (CBC)', LFT: 'Liver tests (LFT)', HBA1C: 'HbA1c', LIPID: 'Lipid profile', FPG: 'Fasting glucose', HEP: 'Viral serology (HBsAg, anti-HCV)', HIV: 'HIV' };
+const LAB_PAGES = { CBC: 'Blood count (CBC)', LFT: 'LFTs', HBA1C: 'HbA1c', LIPID: 'Lipid profile', FPG: 'Fasting glucose', HEP: 'Viral serology (HBsAg, anti-HCV)', HIV: 'HIV' };
 const LAB_PAGES_FOR = { V1: ['CBC', 'LFT', 'HBA1C', 'LIPID', 'FPG', 'HEP', 'HIV'], V2: ['LFT'], V3: ['CBC', 'LFT'], V4: ['HBA1C'], V5: ['CBC', 'LFT'], U: ['LFT'] };
 Object.keys(LAB_PAGES).forEach((k) => { PHOTO_DOC_NAMES['LAB_' + k] = LAB_PAGES[k]; });
 function labDocs(visit) { const v = s_(visit).toUpperCase(); return (LAB_PAGES_FOR[/^U/.test(v) ? 'U' : v] || []).map((k) => 'LAB_' + k); }
