@@ -415,3 +415,7 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .field .btn.pickbtn:not(.set) { color: var(--muted, #667); }
 .listpicks { display: flex; flex-direction: column; gap: 8px; }
 .listpicks .btn.listpick { text-align: left; justify-content: flex-start; white-space: normal; }
+/* Home tile titles carry an icon */
+.tile b.tt { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; } .tile b.tt .ico { width: 22px; height: 22px; flex: none; } .tile b.tt .ico svg { width: 22px; height: 22px; display: block; }
+/* initials filled from the log-in: shown, faded, not editable */
+.field.auto { opacity: .55; } .field.auto label.lab { color: var(--muted); }

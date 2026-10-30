@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '71d42102ac78';                 // replaced by build.js with the build's hash
+const BUILD_ID = '9af6670c6a90';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -569,7 +569,7 @@ function identifiersPending(L) { return L && L.link ? L.rows.filter((r) => r.sta
 function screenedToday() { const t = todayIso(), n = view('S0_SCREEN').filter((r) => s_(r.screen_date) === t).length; return n ? n + ' screened today' : 'None screened today'; }
 function enrolTile() {
   const w = waitingEnrol();
-  return el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', null, 'Enrolment'),
+  return el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', { class: 'tt' }, icon('invite'), 'Enrolment'),
     el('span', null, w.length ? ['Waiting now:', el('br'), w[0] + (w.length > 1 ? ' and ' + (w.length - 1) + ' more' : '')] : 'Patient Study Number'));
 }
 // Every patient carries a card with the study number. Typing it here opens whatever that person needs next, whatever the role.
@@ -587,7 +587,7 @@ function findPatient(raw) {
   if (e) { if (can('view')) go('participant', { sid }); else if (can('measure')) go('measurefor', { sid }); else toast(sid + ' is enrolled.'); return; }
   if (sc && sc.eligible === 'Y' && sc.enrolled === 'Y') {
     modal(sid + ' is screened and waiting', [el('p', null, 'Eligible and agreed, not enrolled yet.')],
-      [['Close', null], ['Enrol', () => go('form', { tab: 'S1_ENROL', key: {}, preset: { study_id: sid, age_years: sc.age, sex: sc.sex }, carried: ['age_years', 'sex'] }), 'primary']]);
+      [['Close', null], ['Enrol', () => go('form', { tab: 'S1_ENROL', key: {}, preset: carryPreset(sid, sc), carried: carryKeys(sc) }), 'primary']]);
     return;
   }
   if (sc) { modal(sid + ' was screened', [el('p', null, sc.eligible === 'N' ? 'Not eligible' + (sc.excl_code ? ' (exclusion ' + sc.excl_code + ')' : '') + ', so not enrolled.' : 'Screened, not enrolled.')], [['Close', null]]); return; }
@@ -800,7 +800,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
     homeWarn(bad, waiting, oldest),
     el('div', { class: 'homerow' + (canData() ? '' : ' solo') },
       findBox(true),
-      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', null, 'Screen a patient'), el('span', null, screenedToday())) : null,
+      canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', { class: 'tt' }, icon('check'), 'Screen a patient'), el('span', null, screenedToday())) : null,
       canData() ? enrolTile() : null),
     can('numbers') && !canData() ? el('div', { class: 'homerow solo' }, assignTile()) : null,
     nurse ? feedCard('due ' + (md.length ? 'hot' : 'calm'), 'Measurements to take', md.length,
@@ -1393,7 +1393,7 @@ const E_ALL = ['Temperature (axillary)', 'Pulse, counted for a full minute', 'Co
 const S_TB = 'TBscore symptoms: cough, haemoptysis, breathlessness, chest pain, night sweats';
 const S_HEP = 'Liver symptoms: nausea, vomiting, loss of appetite, abdominal pain, dark urine, yellow eyes or skin, unexplained tiredness';
 // "TBDM-001 | Visit 1 | Baseline": the study number and the visit as the checklist names it
-function dmy(d) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s_(d)); return m ? m[3] + '-' + m[2] + '-' + m[1].slice(2) : s_(d); }   // 2026-10-25 -> 25-10-26
+function dmy(d) { return dateTxt_(s_(d)); }   // 2026-10-25 -> 25 Oct 2026, the one date style shown to people
 function winTxt(r) { return 'window ' + dmy(r[3]) + ' to ' + dmy(r[4]); }
 function dueLabel(r) { const g = VISIT_GUIDE[r[1]]; return r[0] + ' | ' + (g ? g.name.replace(' · ', ' | ') : r[1]); }
 const VISIT_GUIDE = {
@@ -1830,7 +1830,8 @@ function resetPhone() {
 // Fields that do not apply to this participant stay on the form, faded and not typeable:
 // years since diabetes diagnosis only when the diagnosis is known (K); pack-years never for a never-smoker.
 function notApplicable(tab, c, vals) {
-  if (tab === 'S0_SCREEN') return c.key === 'not_enrolled_reason' && s_(vals.eligible) === 'N';   // no reason is needed for someone who is not eligible
+  if (tab === 'S0_SCREEN') return c.key === 'not_enrolled_reason' && (s_(vals.eligible) === 'N' || s_(vals.enrolled) !== 'N');   // a reason only for an eligible patient who was not enrolled
+  if (tab === 'LABS') return c.key === 'time_analysed';                  // filled only by report reading (OCR) once that is built
   if (tab !== 'S1_ENROL') return false;
   if (c.key === 'dm_years') return s_(vals.dm_status) !== 'K';
   if (c.key === 'dm_drugs') return s_(vals.dm_status) === '0';           // not diabetic: no diabetes drugs, so the choice is closed (saved as 0, none)
@@ -1842,6 +1843,10 @@ function screenDerive(v) {
   if (s_(v.smear_grade) === 'N' && !s_(v.excl_code)) v.excl_code = '8';   // sputum smear negative = exclusion 8
   if (s_(v.excl_code)) { v.eligible = 'N'; v.enrolled = 'N'; v.not_enrolled_reason = ''; }
 }
+// Copied from the screening line into enrolment and shown fixed: [screening column, enrolment column].
+const CARRY = [['age', 'age_years'], ['sex', 'sex'], ['smear_grade', 'smear_grade']];
+function carryKeys(sc) { return CARRY.filter((p) => s_(sc[p[0]])).map((p) => p[1]); }
+function carryPreset(sid, sc) { const o = { study_id: sid }; CARRY.forEach((p) => { if (s_(sc[p[0]])) o[p[1]] = s_(sc[p[0]]); }); return o; }
 // Screening answers the rules decide: shown as text, not chosen. Age and sex copied from screening into enrolment are shown the same way.
 function screenLocked(F, c) {
   if (F.tab !== 'S0_SCREEN') return false;
@@ -1887,8 +1892,8 @@ function formScreen(p) {
     if (!existing) {
       Object.keys(p.key).forEach((k) => { if (k[0] !== '_') vals[k] = s_(p.key[k]); });
       Object.keys(p.preset || {}).forEach((k) => { vals[k] = p.preset[k]; });
-      def.cols.forEach((c) => { if (BY_FIELDS.indexOf(c.key) >= 0) vals[c.key] = S.cfg.initials; });
     }
+    def.cols.forEach((c) => { if (BY_FIELDS.indexOf(c.key) >= 0 && !vals[c.key]) vals[c.key] = s_(S.cfg.initials); });      // initials come from the log-in; an older entry keeps the initials of whoever made it
     T.form = { tab, def, existing, vals, dirty: false, errs: {}, ro: readOnly(tab), measureOnly: !!p.measure && (tab === 'S2_BASELINE' || tab === 'VISITS'), fixedKeys: existing ? keys : keys.filter((k) => s_(p.key[k])),
       carried: existing ? [] : (p.carried || []), numberGiven: !existing && !!(p.preset && s_(p.preset.study_id)), autoExcl: tab === 'S0_SCREEN' && s_(vals.smear_grade) === 'N' && s_(vals.excl_code) === '8', autoNo: tab === 'S0_SCREEN' && s_(vals.excl_code) !== '' };
   }
@@ -1916,7 +1921,7 @@ function formScreen(p) {
       });
       if (extra.length) fieldsBox.append(el('button', { class: 'toggle', onclick: () => { F.showAll = true; fill(); } }, '+ Show other results (' + extra.join(', ') + ')'));
     } else {
-      def.cols.filter((c) => visible(tab, c, null, F.vals)).forEach((c) => { if (tab === 'R_SCORES' && QUADRANTS.indexOf(c.key) >= 0) { if (c.key === 'q_ru') fieldsBox.append(el('div', { class: 'card small method', id: 'reader-method' }, el('b', null, 'Method'), el('div', null, 'Score each quadrant by eye: the share of it with abnormal opacification. The app averages the four; the workbook works out the Timika score.')), ...[cxrPane(s_(F.vals.study_id).toUpperCase())].filter(Boolean), quadDiagram()); return; } fieldsBox.append(fieldEl(c)); });   // quadrants are scored in a pop-up from the diagram; under Date read come the method, the radiograph and the diagram
+      fieldOrder(tab, def.cols).filter((c) => visible(tab, c, null, F.vals)).forEach((c) => { if (tab === 'R_SCORES' && QUADRANTS.indexOf(c.key) >= 0) { if (c.key === 'q_ru') fieldsBox.append(el('div', { class: 'card small method', id: 'reader-method' }, el('b', null, 'Method'), el('div', null, 'Score each quadrant by eye: the share of it with abnormal opacification. The app averages the four; the workbook works out the Timika score.')), ...[cxrPane(s_(F.vals.study_id).toUpperCase())].filter(Boolean), quadDiagram()); return; } fieldsBox.append(fieldEl(c)); });   // quadrants are scored in a pop-up from the diagram; under Date read come the method, the radiograph and the diagram
     }
   };
   T.refill = fill;
@@ -1928,6 +1933,17 @@ function formScreen(p) {
   if (p.docFocus && !p._docFocused) { p._docFocused = true; setTimeout(() => { const c = $('#photocard'); if (!c) return; c.scrollIntoView({ block: 'center', behavior: 'smooth' }); c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash'); setTimeout(() => c.classList.remove('flash'), 2600); }, 150); }
   return topBar(title).concat([main, bar]);
 }
+// Screen order where it differs from the workbook column order: on screening, the study number sits just above the initials.
+function fieldOrder(tab, cols) {
+  if (tab !== 'S0_SCREEN') return cols;
+  const sid = cols.filter((c) => c.key === 'study_id'), rest = cols.filter((c) => c.key !== 'study_id'), at = rest.findIndex((c) => c.key === 'screened_by');
+  return at < 0 ? cols : rest.slice(0, at).concat(sid, rest.slice(at));
+}
+// Words, not codes, on every choice: "known" not K, "Yes" not Y. Text after a colon becomes the small line.
+function optMain(o) { const t = s_(o[1]).split(':')[0].trim(); return t ? t.charAt(0).toUpperCase() + t.slice(1) : o[0]; }
+function optSub(o) { const i = s_(o[1]).indexOf(':'); return i >= 0 ? s_(o[1]).slice(i + 1).trim() : ''; }
+function optText(o) { const sub = optSub(o); return optMain(o) + (sub ? ': ' + sub : ''); }
+function codeText(c, v) { const o = c && c.codes ? c.codes.filter((x) => x[0] === s_(v))[0] : null; return o ? optText(o) : s_(v); }
 function ctx() { return { enrolled: enrolledMap(), today: dayNo_(todayIso()) }; }
 function fieldMsg(c) {
   const F = T.form, v = F.vals[c.key];
@@ -1951,8 +1967,8 @@ function fieldEl(c) {
     if (F.tab !== 'S1_ENROL' || c.key !== 'study_id' || F.existing) return;
     const v = s_(F.vals.study_id), sc = idOk_(v) ? view('S0_SCREEN').filter((r) => code_(r.study_id) === v)[0] : null;
     F.carried = F.carried || [];
-    if (sc) { F.vals.age_years = sc.age; F.vals.sex = sc.sex; ['age_years', 'sex'].forEach((k) => { if (F.carried.indexOf(k) < 0) F.carried.push(k); }); T.refill(); }
-    else if (F.carried.length) { F.carried = []; F.vals.age_years = ''; F.vals.sex = ''; T.refill(); }
+    if (sc) { F.carried = []; CARRY.forEach((p) => { F.vals[p[1]] = s_(sc[p[0]]); if (F.vals[p[1]]) F.carried.push(p[1]); }); T.refill(); }
+    else if (F.carried.length) { F.carried.forEach((k) => { F.vals[k] = ''; }); F.carried = []; T.refill(); }
   };
   const set = (v, rerender) => {
     F.vals[c.key] = v; F.dirty = true;
@@ -1962,6 +1978,7 @@ function fieldEl(c) {
       if (v === '0') { F.vals.dm_drugs = '0'; F.autoDrugs = true; }
       else if (F.autoDrugs) { F.vals.dm_drugs = ''; F.autoDrugs = false; }
     }
+    if (F.tab === 'S0_SCREEN' && c.key === 'enrolled' && v !== 'N') F.vals.not_enrolled_reason = '';   // enrolled (or not answered): no reason not enrolled
     if (F.tab === 'S0_SCREEN') {                                  // smear negative fills the exclusion; any exclusion makes the candidate not eligible
       if (c.key === 'smear_grade') {
         if (v === 'N' && !s_(F.vals.excl_code)) { F.vals.excl_code = '8'; F.autoExcl = true; }
@@ -1978,11 +1995,12 @@ function fieldEl(c) {
   // Enrolment and screening: the study number box reads the same as in the Link register ("Assign a study number", blank = the next free number).
   const nidBox = c.type === 'sidnew' && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN') && !F.ro && !fixed && !F.numberGiven, nid0 = nidBox ? nextId(F.tab) : '';
   box.append(el('label', { class: 'lab', for: 'i-' + c.key }, nidBox ? 'Assign a study number' : c.label), ...[itemWording(c.key)].filter(Boolean),
-    el('div', { class: 'hint' }, nidBox ? (nid0 ? 'Leave blank to use the next free number: ' + nid0 + (F.tab === 'S0_SCREEN' ? ' (only if the patient is enrolled)' : '') + '. If the patient\'s card shows a different number, type that one.' : 'Type the number from the patient\'s card. There are no spare numbers on this phone: to get more, connect to the internet and press Sync.') : helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
+    el('div', { class: 'hint' }, c.codes || c.key === 'dm_drugs' || BY_FIELDS.indexOf(c.key) >= 0 ? '' : c.key === 'time_analysed' ? 'Filled in from the report photo once report reading is built' : nidBox ? (nid0 ? 'Leave blank to use the next free number: ' + nid0 + (F.tab === 'S0_SCREEN' ? ' (only if the patient is enrolled)' : '') + '. If the patient\'s card shows a different number, type that one.' : 'Type the number from the patient\'s card. There are no spare numbers on this phone: to get more, connect to the internet and press Sync.') : c.type === 'date' ? 'Pick it from the calendar. Not before ' + dateTxt_(CFG.EARLIEST) : helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
   const val = s_(F.vals[c.key]);
-  const carried = (F.carried || []).indexOf(c.key) >= 0, locked = carried || screenLocked(F, c);
+  const carried = (F.carried || []).indexOf(c.key) >= 0, byLogin = BY_FIELDS.indexOf(c.key) >= 0 && !F.ro, locked = carried || screenLocked(F, c) || byLogin;
   if (locked || (fixed && (APP_KEYS[F.tab].indexOf(c.key) >= 0 || F.ro))) {
-    box.append(el('div', null, el('b', null, val || '–')), ...(locked ? [el('div', { class: 'hint' }, carried ? 'copied from the screening line' : 'decided by the screening answers')] : []));
+    if (byLogin) box.classList.add('auto');
+    box.append(el('div', null, el('b', null, (c.codes ? codeText(c, val) : val) || '–')), ...(locked ? [el('div', { class: 'hint' }, byLogin ? (val === s_(S.cfg.initials) ? 'from your log-in' : 'entered by ' + val) : carried ? 'copied from the screening line' : 'decided by the screening answers')] : []));
     return box;
   }
   const relayout = ['visit', 'declined', 'event_type', 'phq9', 'hba1c_unit', 'glucose_unit', 'lipid_unit', 'smear_result', 'eligible', 'enrolled', 'e2_rucam_type', 'dm_status', 'smoking', 'smear_grade', 'excl_code'].indexOf(c.key) >= 0 || (F.tab === 'R_SCORES' && c.key === 'cavity');
@@ -1992,27 +2010,27 @@ function fieldEl(c) {
     const opts = rn ? [['1', 'First read'], ['2', 'Repeat read']] : c.codes || c.values.map((x) => [x, '']);
     if (opts.length <= 7) {
       const seg = el('div', { class: 'seg' + (opts.length === 2 ? ' yn' : ''), role: 'radiogroup', 'aria-label': c.label });
-      opts.forEach((o) => seg.append(el('button', { type: 'button', role: 'radio', 'aria-checked': String(val === o[0]), class: val === o[0] ? 'on' : '', disabled: rn && o[0] === '2' && !(film && film.repeat) ? true : null,
+      opts.forEach((o) => seg.append(el('button', { type: 'button', role: 'radio', 'data-v': o[0], 'aria-checked': String(val === o[0]), class: val === o[0] ? 'on' : '', disabled: rn && o[0] === '2' && !(film && film.repeat) ? true : null,
         onclick: (ev) => { const now = F.vals[c.key] === o[0] ? '' : o[0]; seg.querySelectorAll('button').forEach((b) => { b.classList.remove('on'); b.setAttribute('aria-checked', 'false'); });
           if (now) { ev.currentTarget.classList.add('on'); ev.currentTarget.setAttribute('aria-checked', 'true'); } set(now, relayout); } },
-        o[0], o[1] ? el('small', null, o[1]) : null)));
+        optMain(o), optSub(o) ? el('small', null, optSub(o)) : null)));
       box.append(seg);
     } else {      // long lists open the app's own pop-up, not the phone's drop-down: some Android phones would not close theirs without a pick
       const cur = opts.find((o) => o[0] === val);
       box.append(el('button', { type: 'button', id: 'i-' + c.key, class: 'btn block pickbtn' + (cur ? ' set' : ''), disabled: na ? true : null,
         onclick: (ev) => { const b = ev.currentTarget; listPick(c.label, opts, s_(F.vals[c.key]), (v) => {
-          const o = opts.find((x) => x[0] === v); b.textContent = o ? o[0] + ' = ' + o[1] : 'Tap to choose'; b.classList.toggle('set', !!o); set(v, relayout); }); } },
-        cur ? cur[0] + ' = ' + cur[1] : val ? val : 'Tap to choose'));
+          const o = opts.find((x) => x[0] === v); b.textContent = o ? optText(o) : 'None'; b.classList.toggle('set', !!o); set(v, relayout); }); } },
+        cur ? optText(cur) : val ? val : 'None'));
     }
   } else if (c.type === 'regex') {                                  // diabetes drugs: tick boxes composed in M S I O order
     const letters = [['M', 'metformin'], ['S', 'sulfonylurea'], ['I', 'insulin'], ['O', 'other']];
     const seg = el('div', { class: 'seg' });
     const cur = () => s_(F.vals[c.key]);
     const paint = () => seg.querySelectorAll('button').forEach((b) => { const k = b.dataset.k, v = cur(); b.classList.toggle('on', k === '0' ? v === '0' : v.indexOf(k) >= 0); });
-    letters.concat([['0', 'none']]).forEach((l) => seg.append(el('button', { type: 'button', 'data-k': l[0], disabled: na, onclick: () => {
+    letters.concat([['0', 'none']]).forEach((l) => seg.append(el('button', { type: 'button', 'data-k': l[0], 'aria-label': l[1], disabled: na, onclick: () => {
       let v = cur(); if (l[0] === '0') v = v === '0' ? '' : '0';
       else { v = v.replace('0', ''); v = v.indexOf(l[0]) >= 0 ? v.replace(l[0], '') : v + l[0]; v = letters.map((x) => x[0]).filter((x) => v.indexOf(x) >= 0).join(''); }
-      set(v); paint(); } }, l[0], el('small', null, l[1]))));
+      set(v); paint(); } }, optMain(l))));
     box.append(seg); paint();
   } else {
     const isNum = ['num', 'int', 'uniqueint', 'unitnum'].indexOf(c.type) >= 0;
@@ -2175,9 +2193,23 @@ async function saveForm() {
   }
   if (F.tab === 'VISITS' && hepAny_(F.vals) === true) return modal('Liver symptoms reported', [el('p', null, 'Make sure liver tests are drawn today, whether or not they were due.')], [['Understood', after]], false);
   if (F.tab === 'S0_SCREEN' && F.vals.enrolled === 'Y' && F.vals.study_id && !enrolledMap()[s_(F.vals.study_id).toUpperCase()]) {
-    return modal('Enrol now?', [el('p', null, F.vals.study_id + ' is not enrolled yet. Enter the enrolment record next.')], [['Later', after], ['Enrol', () => { T.nav.pop(); go('form', { tab: 'S1_ENROL', key: {}, preset: { study_id: F.vals.study_id, age_years: F.vals.age, sex: F.vals.sex }, carried: ['age_years', 'sex'] }); if (navigator.onLine) sync(); }, 'primary']]);
+    return modal('Enrol now?', [el('p', null, F.vals.study_id + ' is not enrolled yet. Enter the enrolment record next.')], [['Later', after], ['Enrol', () => { T.nav.pop(); go('form', { tab: 'S1_ENROL', key: {}, preset: carryPreset(F.vals.study_id, F.vals), carried: carryKeys(F.vals) }); if (navigator.onLine) sync(); }, 'primary']]);
+  }
+  const missing = docsMissingAtSave(F);
+  if (missing.length) {                // the entry is saved already; the documents are asked for now, on the same screen, not after enrolment is complete
+    const key = {}; APP_KEYS[F.tab].forEach((k) => { if (APP_SERIAL[F.tab] !== k) key[k] = F.vals[k]; });
+    return modal('Photograph the documents now?', [el('p', null, 'Saved. Still to photograph for ' + s_(F.vals.study_id).toUpperCase() + ':'), el('ul', null, missing.map((d) => el('li', null, PHOTO_DOC_NAMES[d] || d))),
+      el('p', { class: 'small muted' }, 'Each photo is kept and sent the moment it is taken.')],
+      [['Later', after], ['Take them now', () => { if (navigator.onLine) sync(); T.form = null; T.nav[T.nav.length - 1].p = { tab: F.tab, key, docFocus: true }; render(); }, 'primary']]);
   }
   after();
+}
+// Documents the form needs that are neither sent nor waiting on this phone (only where this person takes photos and photos are switched on).
+function docsMissingAtSave(F) {
+  if (F.ro || T.practice || !photosOn() || !photoTaker()) return [];
+  const sid = s_(F.vals.study_id).toUpperCase(), visit = s_(F.vals.visit).toUpperCase(), v = /^(V|U)\d$/.test(visit) ? visit : '';
+  if (!sid) return [];
+  return requiredDocs(F.tab, F.vals.visit, sid).filter((d) => docsFor(F.tab, F.vals.visit, sid).indexOf(d) >= 0 && docState(sid, d, v) === 'missing');
 }
 
 
@@ -2659,7 +2691,7 @@ function quadPick(k) {
 function listPick(title, opts, cur, pick) {
   const close = () => { const m = $('#modal'); m.hidden = true; m.replaceChildren(); };
   modal(title.split(',')[0], [el('div', { class: 'listpicks' }, opts.map((o) => el('button', { type: 'button', class: 'btn block listpick' + (o[0] === cur ? ' primary' : ''), 'data-v': o[0],
-    onclick: () => { close(); pick(o[0]); } }, o[0] + ' = ' + o[1])))],
+    onclick: () => { close(); pick(o[0]); } }, optText(o))))],
     cur ? [['None', () => pick('')], ['Cancel', null]] : [['Cancel', null]]);
   const m = $('#modal');
   m.onclick = (ev) => { if (ev.target === m) { m.onclick = null; close(); } };

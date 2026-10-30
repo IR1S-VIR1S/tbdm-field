@@ -534,7 +534,7 @@ function validateValue_(c, v, row, ctx) {                   // '' when acceptabl
     case 'date': {
       const d = dayNo_(s);
       if (d === null) return 'is not a date';
-      if (d < dayNo_(CFG.EARLIEST)) return 'is before ' + CFG.EARLIEST;
+      if (d < dayNo_(CFG.EARLIEST)) return 'is before ' + dateTxt_(CFG.EARLIEST);
       return ctx && ctx.today !== null && ctx.today !== undefined && d > ctx.today ? 'is in the future' : '';
     }
     case 'time': return minutes_(s) === null ? 'is not a time (hh:mm)' : '';
@@ -1178,6 +1178,9 @@ function validationFormula_(c, L, def) {
   }
   return null;
 }
+// One date style everywhere people read a date: 29 Oct 2026. Stored dates stay ISO (2026-10-29).
+const MONTHS_ = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function dateTxt_(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso === null || iso === undefined ? '' : iso)); return m ? (+m[3]) + ' ' + MONTHS_[+m[2] - 1] + ' ' + m[1] : String(iso === null || iso === undefined ? '' : iso); }
 function helpText_(c) {
   if (c.hint) return c.hint;
   if (c.codes) return c.codes.map(function (p) { return p[0] + (p[1] ? ' = ' + p[1] : ''); }).join('; ');
@@ -1185,7 +1188,7 @@ function helpText_(c) {
     case 'num': return 'Number from ' + c.min + ' to ' + c.max;
     case 'int': return 'Whole number from ' + c.min + ' to ' + c.max;
     case 'uniqueint': return 'Whole number, not used before in this tab';
-    case 'date': return 'Date: pick it from the calendar or type it as 14/10/2026. Not before ' + CFG.EARLIEST;
+    case 'date': return 'Date: pick it from the calendar or type it as 29 Oct 2026. Not before ' + dateTxt_(CFG.EARLIEST);
     case 'time': return '24-hour time, hh:mm, for example 08:30';
     case 'text': return 'Text, at most ' + c.max + ' characters. Never a name or any other identifier';
     case 'sidnew': return 'Study number ' + idOf_(1) + ' to ' + idOf_(CFG.ID_MAX) + ', exactly as in the paper linking log. Once only in this tab';
