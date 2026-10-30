@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'b122981a4e1a';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'c620d10ea339';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -2159,8 +2159,10 @@ function fieldEl(c) {
     } else {      // long lists open the app's own pop-up, not the phone's drop-down: some Android phones would not close theirs without a pick
       const cur = opts.find((o) => o[0] === val);
       box.append(el('button', { type: 'button', id: 'i-' + c.key, class: 'btn block pickbtn' + (cur ? ' set' : ''), disabled: na ? true : null,
-        onclick: (ev) => { const b = ev.currentTarget; listPick(c.label, opts, s_(F.vals[c.key]), (v) => {
-          const o = opts.find((x) => x[0] === v); b.textContent = o ? optText(o) : 'None'; b.classList.toggle('set', !!o); set(v, relayout); }); } },
+        onclick: (ev) => { const b = ev.currentTarget, excl = F.tab === 'S0_SCREEN' && c.key === 'excl_code'; listPick(c.label, opts, s_(F.vals[c.key]), (v, none) => {
+          const o = opts.find((x) => x[0] === v); b.textContent = o ? optText(o) : 'None'; b.classList.toggle('set', !!o); set(v, relayout);
+          if (none && excl) { F.vals.eligible = 'Y'; F.dirty = true; const y = window.scrollY; T.refill(); window.scrollTo(0, y); }      // None = no exclusion criterion met: eligible, so Enrolled can be answered
+        }, excl ? 'None: no exclusion criterion met' : ''); } },
         cur ? optText(cur) : val ? val : 'None'));
     }
   } else if (c.type === 'regex') {                                  // diabetes drugs: tick boxes composed in M S I O order
@@ -2873,11 +2875,12 @@ function quadPick(k) {
     cur ? [['Clear', () => quadSet(k, '')], ['Cancel', null]] : [['Cancel', null]]);
 }
 // A long code list as a pop-up: tap a line to choose it; None clears a choice; Cancel (or tapping outside) closes without changing anything.
-function listPick(title, opts, cur, pick) {
+function listPick(title, opts, cur, pick, noneLine) {
   const close = () => { const m = $('#modal'); m.hidden = true; m.replaceChildren(); };
-  modal(title.split(',')[0], [el('div', { class: 'listpicks' }, opts.map((o) => el('button', { type: 'button', class: 'btn block listpick' + (o[0] === cur ? ' primary' : ''), 'data-v': o[0],
-    onclick: () => { close(); pick(o[0]); } }, optText(o))))],
-    cur ? [['None', () => pick('')], ['Cancel', null]] : [['Cancel', null]]);
+  const first = noneLine ? [el('button', { type: 'button', class: 'btn block listpick none', 'data-v': '', onclick: () => { close(); pick('', true); } }, noneLine)] : [];
+  modal(title.split(',')[0], [el('div', { class: 'listpicks' }, first.concat(opts.map((o) => el('button', { type: 'button', class: 'btn block listpick' + (o[0] === cur ? ' primary' : ''), 'data-v': o[0],
+    onclick: () => { close(); pick(o[0]); } }, optText(o)))))],
+    cur && !noneLine ? [['None', () => pick('')], ['Cancel', null]] : [['Cancel', null]]);
   const m = $('#modal');
   m.onclick = (ev) => { if (ev.target === m) { m.onclick = null; close(); } };
 }
