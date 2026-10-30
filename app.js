@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'e022ee292397';                 // replaced by build.js with the build's hash
+const BUILD_ID = '6dcb334d5dca';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1160,8 +1160,11 @@ async function pushConf(still) {
 async function confRefresh(still) {
   if (!confRole() || T.practice) return;
   const res = await api({ op: 'register_list', token: S.cfg.token }); still();
-  if (res.ok) { await confSave(res); const st = T.reg; if (st && st.list) st.list = overlay(res); }
+  if (res.ok) { await confSave(res); const st = T.reg; if (st && st.list) regListSet(overlay(res)); }
 }
+// A new copy of the register replaces the one on screen; if the confidential link was switched meanwhile, the form changes (name, MRN and
+// telephone appear or go), so the screen is redrawn at once rather than at the next tap.
+function regListSet(L) { const st = regState(), was = !!(st.list && st.list.link); st.list = L; if (!!(L && L.link) !== was && cur().name === 'register' && !st.busy) render(); }
 function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', name: '', mrn: '', phone: '', reason: '', guardian: '', address: '', cnic: '', sid: '', pendingRid: null, q: '', read: null }); }
 async function regLoad() {
   const st = regState();
@@ -1171,7 +1174,7 @@ async function regLoad() {
   try {
     const res = await confApi({ op: 'register_list', token: S.cfg.token });
     if (!res.ok) throw new Error(res.error || 'could not load');
-    st.list = overlay(res); await confSave(res);
+    regListSet(overlay(res)); await confSave(res);
   } catch (e) {
     if (T.weak && confCopy()) { st.list = confAsList(); st.loading = false; render(); return; } st.err = 'Could not load the register. ' + e.message; }
   st.loading = false; render();
@@ -1181,6 +1184,7 @@ async function regAssign() {
   const st = regState();
   if (st.busy) return;
   if (!linkUp() && !confCopy()) { st.err = 'No internet connection. Nothing was assigned.'; render(); return; }
+  if (st.list && st.list.link && st.status !== 'S' && !$('#reg-name')) { st.err = 'The confidential link has just been switched on. Enter the participant name, the record number and the telephone below, then press Assign.'; render(); return; }      // never refuse fields the screen is not showing
   if (st.list && st.list.link && st.status !== 'S' && (!s_(st.name).trim() || !s_(st.mrn).trim() || !s_(st.phone).trim())) { st.err = 'Not assigned. The participant name, the record number and the telephone number are all required.'; render(); return; }
   st.pendingRid = st.pendingRid || rid();              // the same id on a retry, so a number is never assigned twice
   if (!linkUp()) {                              // offline: kept on this phone, encrypted, and sent at the next sync
@@ -1328,6 +1332,17 @@ async function readDoc(file, body) {
   if (!r.ok) throw new Error(r.error || 'not read');
   return r;
 }
+// The slip's barcode holds the MRN exactly. Phones whose browser can read barcodes (Chrome on Android) send the decoded number; others rely on
+// the two printed copies agreeing. Returns '' when there is no readable barcode or the browser cannot read one.
+async function readBarcode(file) {
+  try {
+    if (!('BarcodeDetector' in window)) return '';
+    const have = await BarcodeDetector.getSupportedFormats(), want = ['code_128', 'code_39', 'codabar', 'itf', 'ean_13'].filter((x) => have.indexOf(x) >= 0);
+    if (!want.length) return '';
+    const found = await new BarcodeDetector({ formats: want }).detect(await createImageBitmap(file));
+    return (found.map((x) => s_(x.rawValue).trim()).filter((x) => /^\d{10,20}$/.test(x))[0]) || '';
+  } catch (e) { return ''; }
+}
 function pickImage(onFile) {                                   // Take photo (the in-app camera on Android) or Choose file (a screenshot)
   const inp = el('input', { type: 'file', accept: 'image/*', hidden: true, onchange: () => { const f = inp.files && inp.files[0]; inp.value = ''; if (f) onFile(f); } });
   const cam = el('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true, onchange: () => { const f = cam.files && cam.files[0]; cam.value = ''; if (f) onFile(f); } });
@@ -1368,15 +1383,19 @@ function slipReadCard(st, apply) {
   const R = st.read || (st.read = { busy: false, msg: '', err: '', extra: null });
   const go = async (file) => {
     R.busy = true; R.err = ''; R.msg = ''; render();
-    try { const r = await readDoc(file, { kind: 'slip' }); apply(r.fields || {}); const n = ['name', 'mrn', 'cnic'].filter((k) => (r.fields || {})[k]).length;
+    try { const bc = await readBarcode(file), r = await readDoc(file, { kind: 'slip', barcode: bc }); apply(r.fields || {}); const n = ['name', 'mrn', 'cnic'].filter((k) => (r.fields || {})[k]).length;
       R.msg = n ? 'Filled ' + n + ' value' + (n > 1 ? 's' : '') + ' from the slip. Check each one against the slip before saving.' : 'Nothing could be read from this picture. Type the values.';
+      R.notes = r.notes || []; R.checks = r.checks || {};
       R.extra = r.fields && (r.fields.age || r.fields.sex) ? 'Slip also shows: ' + [r.fields.age ? 'age ' + r.fields.age : '', r.fields.sex ? (r.fields.sex === 'F' ? 'female' : 'male') : ''].filter(Boolean).join(', ') : null; }
     catch (e) { R.err = 'Not read: ' + e.message; }
     R.busy = false; render();
   };
   return el('div', { class: 'card readcard', id: 'slipread' }, el('b', null, 'Read from the OPD slip'), el('div', { class: 'small muted' }, 'Photograph the slip, or choose a screenshot. Name, MRN and CNIC are filled in for you to check. The picture is not kept.'),
     el('div', { class: 'row2' }, ...pickImage(go)), R.busy ? el('div', { class: 'small' }, 'Reading…') : null, R.msg ? el('div', { class: 'small', id: 'slipmsg' }, el('b', null, R.msg)) : null,
-    R.extra ? el('div', { class: 'small muted' }, R.extra) : null, R.err ? el('div', { class: 'small bad', id: 'sliperr' }, R.err) : null);
+    R.extra ? el('div', { class: 'small muted' }, R.extra) : null,
+    (R.notes || []).length ? el('ul', { class: 'small readnotes', id: 'slipnotes' }, R.notes.map((x) => el('li', null, x))) : null,
+    R.checks && R.checks.mrn ? el('div', { class: 'small muted', id: 'mrnhow' }, 'MRN: ' + ({ barcode: 'from the barcode (exact)', agree: 'both printed copies agree', single: 'one printed copy only', conflict: 'not filled, the copies disagree' })[R.checks.mrn]) : null,
+    R.err ? el('div', { class: 'small bad', id: 'sliperr' }, R.err) : null);
 }
 function waDigits(ph) {                                   // 0300... becomes 92300..., for WhatsApp
   let d = s_(ph).replace(/\D/g, '');
