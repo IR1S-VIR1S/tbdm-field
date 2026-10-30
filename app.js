@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'afea4869c2cf';                 // replaced by build.js with the build's hash
+const BUILD_ID = '85c56476cf92';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1999,6 +1999,7 @@ function screenLocked(F, c) {
 }
 function visible(tab, c, v, vals) {
   if (c.pi && role() !== 'pi') return false;
+  if (!watching() && autoField(tab, c.key, vals)) return false;      // filled by the app, not asked: shown only in Surveillance
   if (accessLimited_(role(), acc()) && (tab === 'S1_ENROL' || tab === 'S2_BASELINE' || tab === 'VISITS') && !readOnly(tab) && !nurseCol_(tab, c.key)) return false;
   if (T.form && T.form.tab === tab && T.form.measureOnly && !nurseCol_(tab, c.key)) return false;      // opened from Measure: height, weight, waist and arm only   // writing without 'forms': the measurement columns only
   const visit = s_(vals.visit);
@@ -2036,7 +2037,8 @@ function formScreen(p) {
       Object.keys(p.preset || {}).forEach((k) => { vals[k] = p.preset[k]; });
     }
     def.cols.forEach((c) => { if (BY_FIELDS.indexOf(c.key) >= 0 && !vals[c.key]) vals[c.key] = s_(S.cfg.initials); });
-    Object.keys(UNIT_DEF).forEach((k) => { if (k in vals && !vals[k]) vals[k] = UNIT_DEF[k].usual; });      // the usual unit unless the switch says the report uses the other      // initials come from the log-in; an older entry keeps the initials of whoever made it
+    Object.keys(UNIT_DEF).forEach((k) => { if (k in vals && !vals[k]) vals[k] = UNIT_DEF[k].usual; });
+    if (tab === 'PHQ_GAD' && !s_(vals.declined)) vals.declined = 'N';      // the usual unit unless the switch says the report uses the other      // initials come from the log-in; an older entry keeps the initials of whoever made it
     T.form = { tab, def, existing, vals, dirty: false, errs: {}, ro: readOnly(tab), measureOnly: !!p.measure && (tab === 'S2_BASELINE' || tab === 'VISITS'), fixedKeys: existing ? keys : keys.filter((k) => s_(p.key[k])),
       carried: existing ? [] : (p.carried || []), numberGiven: !existing && !!(p.preset && s_(p.preset.study_id)), autoExcl: tab === 'S0_SCREEN' && s_(vals.smear_grade) === 'N' && s_(vals.excl_code) === '8', autoNo: tab === 'S0_SCREEN' && s_(vals.excl_code) !== '' };
   }
@@ -2060,6 +2062,7 @@ function formScreen(p) {
       LAB_GROUPS.forEach((g) => {
         const cols = g[1].map((k) => def.cols.filter((c) => c.key === k)[0]).filter((c) => c && visible(tab, c, null, F.vals));
         const expected = !g[2] || g[2].indexOf(v) >= 0 || cols.some((c) => s_(F.vals[c.key]) !== '');
+        if (!cols.length) return;                                      // a group with nothing to show (Entered by)
         if (expected || F.showAll) fieldsBox.append(el('div', { class: 'group-title' }, g[0] + (expected ? '' : ' (not usually done at this visit)')), ...cols.map(fieldEl));
         else extra.push(g[0]);
       });
@@ -2076,6 +2079,13 @@ function formScreen(p) {
   if (p.focus && !p._focused) { p._focused = true; setTimeout(() => focusField(p.focus), 120); }
   if (p.docFocus && !p._docFocused) { p._docFocused = true; setTimeout(() => { const c = $('#photocard'); if (!c) return; c.scrollIntoView({ block: 'center', behavior: 'smooth' }); c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash'); setTimeout(() => c.classList.remove('flash'), 2600); }, 150); }
   return topBar(title).concat([main, bar]);
+}
+// Fields the app fills itself and no longer shows on the forms (PI, 30 Oct 2026): the initials (from the log-in) and "Declined the questionnaires
+// today" (always No: a questionnaire entered was not declined; an opt-out on the consent form is handled there). Both are still saved and visible in Surveillance.
+function autoField(tab, k, vals) {
+  if (BY_FIELDS.indexOf(k) >= 0) return true;
+  if (tab === 'PHQ_GAD' && k === 'declined') return s_(vals && vals.declined) !== 'Y';      // an older row recorded as declined still shows it
+  return false;
 }
 // Screen order where it differs from the workbook column order: on screening, the study number sits just above the initials.
 function fieldOrder(tab, cols) {
@@ -2292,7 +2302,7 @@ async function saveForm() {
     }
     const na = notApplicable(F.tab, c, F.vals);
     if (na) { F.vals[c.key] = c.key === 'dm_drugs' ? '0' : ''; return; }                 // faded fields that do not apply are blank when saved; the drugs of someone not diabetic are 0 (none)
-    if (!visible(F.tab, c, null, F.vals)) { if (!(APP_KEYS[F.tab].indexOf(c.key) >= 0) && !F.existing) F.vals[c.key] = ''; return; }
+    if (!visible(F.tab, c, null, F.vals)) { if (!(APP_KEYS[F.tab].indexOf(c.key) >= 0) && !F.existing && !autoField(F.tab, c.key, F.vals)) F.vals[c.key] = ''; return; }
     const m = fieldMsg(c); if (m) errs.push(c);
   });
   APP_KEYS[F.tab].forEach((k) => { if (APP_SERIAL[F.tab] !== k && !s_(F.vals[k])) errs.push(def.cols.filter((c) => c.key === k)[0]); });
