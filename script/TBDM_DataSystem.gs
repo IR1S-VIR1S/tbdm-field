@@ -2730,7 +2730,7 @@ function slipRead_(text) {
   const t = String(text || '').replace(/\r/g, ''), lines = t.split('\n').map(function (x) { return x.trim(); }).filter(Boolean), o = { mrn: [] };
   const age = /\b(\d{1,3})\s*y\b/i.exec(t); if (age && +age[1] <= 120) o.age = age[1];
   const sex = /\b(female|male)\b/i.exec(t); if (sex) o.sex = /^f/i.test(sex[1]) ? 'F' : 'M';
-  const cn = /\b(\d{5})\s*[-–]\s*(\d{7})\s*[-–]\s*(\d)\b/.exec(t); if (cn) o.cnic = cn[1] + '-' + cn[2] + '-' + cn[3];
+  const cn = /\b(\d{5})\s*[-\u2013]\s*(\d{7})\s*[-\u2013]\s*(\d)\b/.exec(t); if (cn) o.cnic = cn[1] + '-' + cn[2] + '-' + cn[3];
   const cnDigits = o.cnic ? o.cnic.replace(/-/g, '') : '';
   const lab = /MR[NM]\s*[:;.,]?\s*([\d ]{10,24})/i.exec(t);
   if (lab) o.mrn.push(lab[1].replace(/\s/g, ''));
@@ -3322,7 +3322,7 @@ function menuUpdateHelp() {
 // address stays the same because the existing deployment is moved to the new version, not replaced.
 const UPDATE_SRC = 'https://raw.githubusercontent.com/IR1S-VIR1S/tbdm-field/main/script/TBDM_DataSystem.gs';
 function hex_(bytes) { return bytes.map(function (b) { return ('0' + (b < 0 ? b + 256 : b).toString(16)).slice(-2); }).join(''); }
-function sha256hex_(text) { return hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text)); }
+function sha256hex_(text) { return hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)); }      // UTF-8, as GitHub stores the file (sha256sum)
 function scriptApi_(method, path, body) {
   const r = UrlFetchApp.fetch('https://script.googleapis.com/v1/' + path, { method: method, contentType: 'application/json', muteHttpExceptions: true,
     headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, payload: body ? JSON.stringify(body) : undefined });
