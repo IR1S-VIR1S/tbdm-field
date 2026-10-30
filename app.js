@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '03e37f6d0012';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'b122981a4e1a';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -14,7 +14,7 @@ const BY_FIELDS = ['entered_by', 'screened_by', 'examined_by', 'recorded_by', 'i
 const LAB_GROUPS = [
   ['Sample', ['sample_date', 'time_analysed', 'fasting', 'symptomatic', 'lab_status'], null],
   ['Blood count', ['hb', 'tlc', 'neut_abs', 'neut_pct', 'lymph_abs', 'lymph_pct', 'mono_abs', 'eos_pct', 'plt', 'rdw', 'mpv'], ['V1', 'V3', 'V5']],
-  ['HbA1c', ['hba1c_unit', 'hba1c'], ['V1', 'V4', 'V5']],
+  ['HbA1c', ['hba1c_unit', 'hba1c'], ['V1', 'V4']],      // no HbA1c at V5 (PI, 30 Oct 2026)
   ['Glucose and lipids (fasting)', ['glucose_unit', 'fpg', 'lipid_unit', 'tg', 'hdl', 'tc', 'ldl'], ['V1']],
   ['Liver tests', ['alt', 'alt_uln', 'ast', 'ast_uln', 'alp', 'alp_uln', 'tbili', 'bili_uln', 'albumin', 'tprotein'], ['V1', 'V2', 'V3', 'V5', 'U']],
   ['Serology', ['hbsag', 'anti_hcv', 'hiv'], ['V1']],
@@ -1470,7 +1470,7 @@ const VISIT_GUIDE = {
     do: ['Treatment status and adherence', 'Sputum conversion: Y, N or U. Never leave it blank'],
     enter: ['Visit form (V3), with the sputum smear date and result', 'Laboratory results when they return', 'Check the liver injury definition'] },
   V4: { name: 'Visit 4 · Month 3', when: 'Day 77 to 98', measure: [], examine: [], symptoms: [S_HEP],
-    order: [['HbA1c, blood count (CBC) and liver tests (ALT, AST, ALP, total bilirubin)', 'Enter the HbA1c with its unit'], ['Sputum smear, only if the V3 smear was not negative', 'Repeat the smear at each visit until a negative smear is documented']],
+    order: [['HbA1c', 'Reported in %; switch the unit only if the report uses mmol/mol'], ['Sputum smear, only if the V3 smear was not negative', 'Repeat the smear at each visit until a negative smear is documented']],
     do: ['Treatment status and adherence', 'New diabetes found: refer for diabetes care and record it'],
     enter: ['Visit form (V4)', 'Laboratory results when they return'] },
   V5: { name: 'Visit 5 · Month 6', when: 'Day 154 to 182 · treatment completion', measure: M_ALL, examine: E_ALL, symptoms: [S_TB, S_HEP],
@@ -2625,7 +2625,7 @@ const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'SMEAR', 'CORE'], S2_BASELINE: ['
 const PHOTO_MAX_PX = 2000;
 // A lab report comes as separate pages; each visit needs the pages of the tests ordered at it (visit checklist).
 const LAB_PAGES = { CBC: 'Blood count (CBC)', LFT: 'Liver tests (LFT)', HBA1C: 'HbA1c', LIPID: 'Lipid profile', FPG: 'Fasting glucose', HEP: 'Viral serology (HBsAg, anti-HCV)', HIV: 'HIV' };
-const LAB_PAGES_FOR = { V1: ['CBC', 'LFT', 'HBA1C', 'LIPID', 'FPG', 'HEP', 'HIV'], V2: ['LFT'], V3: ['CBC', 'LFT'], V4: ['HBA1C', 'CBC', 'LFT'], V5: ['CBC', 'LFT'], U: ['LFT'] };
+const LAB_PAGES_FOR = { V1: ['CBC', 'LFT', 'HBA1C', 'LIPID', 'FPG', 'HEP', 'HIV'], V2: ['LFT'], V3: ['CBC', 'LFT'], V4: ['HBA1C'], V5: ['CBC', 'LFT'], U: ['LFT'] };
 Object.keys(LAB_PAGES).forEach((k) => { PHOTO_DOC_NAMES['LAB_' + k] = LAB_PAGES[k]; });
 function labDocs(visit) { const v = s_(visit).toUpperCase(); return (LAB_PAGES_FOR[/^U/.test(v) ? 'U' : v] || []).map((k) => 'LAB_' + k); }
 function smearVisit(visit, sid) { const v = s_(visit).toUpperCase(); return smearDue_(v, sid ? (find('VISITS', { study_id: sid, visit: 'V3' }) || {}).smear_result : 'N'); }   // V3 and V5; V4 while the V3 smear is not negative

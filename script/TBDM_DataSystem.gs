@@ -987,7 +987,7 @@ function computeDerived_(data, today, held) {
   });
   // laboratory rows
   const REQ = { V1: ['tlc', 'plt', 'alt', 'ast', 'tbili', 'tg', 'hdl'], V2: ['alt', 'ast', 'tbili'],
-    V3: ['tlc', 'neut_abs', 'lymph_abs', 'plt', 'alt', 'ast', 'tbili'], V4: ['hba1c', 'tlc', 'neut_abs', 'lymph_abs', 'alt', 'ast', 'tbili'], V5: ['tlc', 'neut_abs', 'lymph_abs', 'plt', 'alt', 'ast', 'tbili'] };
+    V3: ['tlc', 'neut_abs', 'lymph_abs', 'plt', 'alt', 'ast', 'tbili'], V4: ['hba1c'], V5: ['tlc', 'neut_abs', 'lymph_abs', 'plt', 'alt', 'ast', 'tbili'] };   // as the lab form: V4 HbA1c only; no HbA1c at V5 (PI, 30 Oct 2026)
   const RESULTS = ['hb', 'tlc', 'neut_abs', 'lymph_abs', 'mono_abs', 'plt', 'hba1c', 'fpg', 'tg', 'hdl', 'tc', 'ldl', 'alt', 'ast', 'alp', 'tbili', 'albumin', 'tprotein'];
   T('LABS').forEach(function (r) {
     if (!r.study_id || gone(r.study_id)) return;
