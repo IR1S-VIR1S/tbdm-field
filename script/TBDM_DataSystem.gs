@@ -2209,6 +2209,7 @@ function doPost(e) {
     if (req.op === 'link_get') return appJson_(linkGet_(u, req));
     if (req.op === 'link_set') return appJson_(linkSet_(u, req));
     if (req.op === 'photo_put') return appJson_(photoPut_(u, req));
+    if (req.op === 'read_doc') return appJson_(readDoc_(u, req));
     if (req.op === 'photo_list') return appJson_(photoList_(u, req));
     if (req.op === 'photo_get') return appJson_(photoGet_(u, req));
     if (req.op === 'photo_flag') return appJson_(photoFlag_(u, req));
@@ -2387,7 +2388,7 @@ function regNums_() {                                       // study numbers and
 const REG_TAB = 'REGISTER';
 // One tab, one row per study number. The first six columns are the numbers register; the last eight are the confidential link
 // (record number, telephone, father or husband, name, address, note), filled only while the link switch is on.
-const REG_COLS = ['study_id', 'assigned_date', 'assigned_by', 'status', 'reason', 'rid', 'mrn', 'phone', 'guardian', 'name', 'address', 'note', 'updated', 'updated_by'];
+const REG_COLS = ['study_id', 'assigned_date', 'assigned_by', 'status', 'reason', 'rid', 'mrn', 'phone', 'guardian', 'name', 'address', 'note', 'updated', 'updated_by', 'cnic'];   // cnic added at the end (30 Oct 2026), so older registers keep their columns
 const REG_STATUS = [['E', 'enrolled'], ['D', 'declined'], ['S', 'spoiled']];
 function regAllowed_(u) { if (!u) return false; if (u.role === 'pi') return true; const a = userAccess_(u); return !!(a.numbers || a.ident); }
 function identAllowed_(u) { return !!u && (u.role === 'pi' || !!userAccess_(u).ident); }
@@ -2398,8 +2399,15 @@ function regSheet_() {
   let sh = ss.getSheetByName(REG_TAB) || ss.insertSheet(REG_TAB);
   if (sh.getLastRow() === 0) { sh.appendRow(REG_COLS); sh.getRange(1, 7, sh.getMaxRows(), 2).setNumberFormat('@'); }   // keep leading zeros in record number and telephone
   else if (str_(sh.getRange(1, 2).getValue()) !== REG_COLS[1]) sh = regMigrate_(ss, sh);      // an older two-tab layout: merge it once
+  if (str_(sh.getRange(1, REG_CNIC_COL).getValue()) !== 'cnic') {      // a register made before the CNIC column: add it, as text
+    if (sh.getMaxColumns() < REG_CNIC_COL) sh.insertColumnsAfter(sh.getMaxColumns(), REG_CNIC_COL - sh.getMaxColumns());
+    sh.getRange(1, REG_CNIC_COL).setValue('cnic').setFontWeight('bold'); sh.getRange(1, REG_CNIC_COL, sh.getMaxRows(), 1).setNumberFormat('@');
+  }
   return sh;
 }
+const REG_CNIC_COL = 15;
+// CNIC: 13 digits, kept as 12345-1234567-1. Blank is allowed (the field is optional). Returns null when it is not a CNIC.
+function cnicNorm_(v) { const d = str_(v).replace(/[\s\-]/g, ''); if (!d) return ''; return /^\d{13}$/.test(d) ? d.slice(0, 5) + '-' + d.slice(5, 12) + '-' + d.slice(12) : null; }
 function regMigrate_(ss, old) {                          // old REGISTER (age, sex ...) and LINKING tabs become one REGISTER tab; the old tabs are kept, renamed, until the PI deletes them
   const ov = old.getDataRange().getValues(), oh = ov[0].map(function (h) { return str_(h); });
   const lk = ss.getSheetByName('LINKING'), lv = lk ? lk.getDataRange().getValues() : [], links = {};
@@ -2411,11 +2419,11 @@ function regMigrate_(ss, old) {                          // old REGISTER (age, s
   for (let i = 1; i < ov.length; i++) {
     const sid = str_(ov[i][0]).toUpperCase(); if (!sid) continue;
     const l = links[sid] || {}; seen[sid] = true;
-    out.push([sid, regDate_(get(ov[i], 'assigned_date')), str_(get(ov[i], 'assigned_by')), str_(get(ov[i], 'status')), str_(get(ov[i], 'reason')), str_(get(ov[i], 'rid')), l.mrn || '', l.phone || '', l.guardian || '', l.name || '', l.address || '', l.note || '', l.updated || '', l.updated_by || '']);
+    out.push([sid, regDate_(get(ov[i], 'assigned_date')), str_(get(ov[i], 'assigned_by')), str_(get(ov[i], 'status')), str_(get(ov[i], 'reason')), str_(get(ov[i], 'rid')), l.mrn || '', l.phone || '', l.guardian || '', l.name || '', l.address || '', l.note || '', l.updated || '', l.updated_by || '', '']);
   }
   Object.keys(links).forEach(function (sid) {            // a link saved for a number that had no register row
     if (seen[sid]) return; const l = links[sid];
-    out.push([sid, l.updated || '', l.updated_by || '', 'E', '', '', l.mrn, l.phone, l.guardian, l.name, l.address, l.note, l.updated, l.updated_by]);
+    out.push([sid, l.updated || '', l.updated_by || '', 'E', '', '', l.mrn, l.phone, l.guardian, l.name, l.address, l.note, l.updated, l.updated_by, '']);
   });
   sh.getRange(1, 1, 1, REG_COLS.length).setValues([REG_COLS]).setFontWeight('bold');
   sh.setFrozenRows(1);
@@ -2502,7 +2510,7 @@ function regList_(u) {
   const sh = regSheet_(), on = linkOn_() && identAllowed_(u);     // names, record numbers and telephones only to a role ticked for them
   const rows = regRows_(sh).map(function (r) {
     const o = { study_id: str_(r.study_id), assigned_date: regDate_(r.assigned_date), status: str_(r.status), reason: str_(r.reason) };
-    if (on) { o.mrn = str_(r.mrn); o.phone = str_(r.phone); o.name = str_(r.name); o.guardian = str_(r.guardian); o.address = str_(r.address); o.note = str_(r.note); o.updated = regDate_(r.updated); }   // the PI phone keeps an encrypted copy for offline use
+    if (on) { o.mrn = str_(r.mrn); o.phone = str_(r.phone); o.name = str_(r.name); o.guardian = str_(r.guardian); o.address = str_(r.address); o.note = str_(r.note); o.cnic = str_(r.cnic); o.updated = regDate_(r.updated); }   // the PI phone keeps an encrypted copy for offline use
     return o;
   });
   const have = {}; rows.forEach(function (o) { have[o.study_id.toUpperCase()] = true; });
@@ -2528,9 +2536,11 @@ function regAdd_(u, req) {
   if (spoiled && !reason) return { ok: false, error: 'give the reason the number is spoiled' };
   const mrn = spoiled ? '' : str_(req.mrn).slice(0, 30), phone = spoiled ? '' : str_(req.phone).replace(/[\s\-()]/g, ''), name = spoiled ? '' : str_(req.name).slice(0, 60);
   const guardian = spoiled ? '' : str_(req.guardian).slice(0, 60), address = spoiled ? '' : str_(req.address).slice(0, 200);
+  const cnic = spoiled ? '' : cnicNorm_(req.cnic);
+  if (cnic === null) return { ok: false, error: 'CNIC: 13 digits, e.g. 35202-1234567-8' };
   const wanted = code_(req.study_id);                     // the number printed on the patient's card; blank means the next free number
   if (wanted && !idOk_(wanted)) return { ok: false, error: 'the card number must look like ' + idOf_(7) + ' (' + idOf_(1) + ' to ' + idOf_(CFG.ID_MAX) + ')' };
-  if ((mrn || phone || name || guardian || address) && !lk) return { ok: false, error: linkOn_() ? 'your role cannot record names, record numbers or telephones' : 'name, record number and telephone can be saved only while the confidential link is switched on' };
+  if ((mrn || phone || name || guardian || address || cnic) && !lk) return { ok: false, error: linkOn_() ? 'your role cannot record names, record numbers or telephones' : 'name, record number and telephone can be saved only while the confidential link is switched on' };
   if (!spoiled && lk && (!name.trim() || !mrn || !phone)) return { ok: false, error: 'the participant name, the record number and the telephone number are all required' };
   if (phone && !/^\+?\d{7,15}$/.test(phone)) return { ok: false, error: 'telephone: digits only, 7 to 15 of them, e.g. 03001234567' };
   const lock = LockService.getScriptLock();
@@ -2541,7 +2551,7 @@ function regAdd_(u, req) {
     if (again) {                                          // a retry: finish the link row if the first try stopped before writing it
       const aid = str_(again.study_id).toUpperCase();
       const af = regFind_(sh, aid);
-      if ((mrn || phone) && af && !str_(af.o.mrn) && !str_(af.o.phone)) { regLinkWrite_(sh, af.row, { mrn: mrn, phone: phone, guardian: guardian, name: name, address: address, note: '' }, u.email); logAudit_('LINK_SAVE', '', aid, '', '', 'confidential link created', u.email); }
+      if ((mrn || phone) && af && !str_(af.o.mrn) && !str_(af.o.phone)) { regLinkWrite_(sh, af.row, { mrn: mrn, phone: phone, guardian: guardian, name: name, address: address, note: '', cnic: cnic }, u.email); logAudit_('LINK_SAVE', '', aid, '', '', 'confidential link created', u.email); }
       return { ok: true, study_id: str_(again.study_id), again: true };
     }
     const used = regUsed_(sh);
@@ -2554,10 +2564,10 @@ function regAdd_(u, req) {
       if (n > CFG.ID_MAX) return { ok: false, error: 'all numbers up to ' + idOf_(CFG.ID_MAX) + ' are in use' };
       id = idOf_(n);
     }
-    sh.appendRow([id, todayIso_(), u.email, status, spoiled ? reason : '', rid, '', '', '', '', '', '', '', '']);
+    sh.appendRow([id, todayIso_(), u.email, status, spoiled ? reason : '', rid, '', '', '', '', '', '', '', '', '']);
     logAudit_('REGISTER', '', id, '', st[1], 'study number assigned (' + st[1] + ')', u.email);
     if (mrn || phone) {                                    // only while the confidential link is on; the values are never written to the audit log
-      regLinkWrite_(sh, sh.getLastRow(), { mrn: mrn, phone: phone, guardian: guardian, name: name, address: address, note: '' }, u.email);
+      regLinkWrite_(sh, sh.getLastRow(), { mrn: mrn, phone: phone, guardian: guardian, name: name, address: address, note: '', cnic: cnic }, u.email);
       logAudit_('LINK_SAVE', '', id, '', '', 'confidential link created', u.email);
     }
     return { ok: true, study_id: id, again: false };
@@ -2577,8 +2587,9 @@ function regFind_(sh, sid) {                              // the one row of a st
   for (let i = 1; i < v.length; i++) if (str_(v[i][0]).toUpperCase() === sid) { const o = {}; head.forEach(function (h, k) { o[h] = v[i][k]; }); return { row: i + 1, o: o }; }
   return null;
 }
-function regLinkWrite_(sh, row, l, by) {                  // the link columns of one register row: mrn, phone, guardian, name, address, note, updated, updated_by
+function regLinkWrite_(sh, row, l, by) {                  // the link columns of one register row: mrn, phone, guardian, name, address, note, updated, updated_by, and cnic
   sh.getRange(row, 7, 1, 8).setValues([[l.mrn, l.phone, l.guardian, l.name, l.address, l.note, todayIso_(), by]]);
+  if (l.cnic !== undefined) sh.getRange(row, REG_CNIC_COL).setNumberFormat('@').setValue(l.cnic);
 }
 function linkCheck_(u, req) {
   if (!identAllowed_(u)) return { ok: false, error: 'not authorised', code: 401 };
@@ -2592,7 +2603,7 @@ function linkGet_(u, req) {
   const c = linkCheck_(u, req); if (!c.ok) return c;
   const f = regFind_(regSheet_(), c.sid), o = f ? f.o : {};
   logAudit_('LINK_VIEW', '', c.sid, '', '', 'confidential link opened', u.email);
-  return { ok: true, study_id: c.sid, mrn: str_(o.mrn), phone: str_(o.phone), address: str_(o.address), note: str_(o.note), guardian: str_(o.guardian), name: str_(o.name), updated: regDate_(o.updated) };
+  return { ok: true, study_id: c.sid, mrn: str_(o.mrn), phone: str_(o.phone), address: str_(o.address), note: str_(o.note), guardian: str_(o.guardian), name: str_(o.name), cnic: str_(o.cnic), updated: regDate_(o.updated) };
 }
 function linkSet_(u, req) {
   const c = linkCheck_(u, req); if (!c.ok) return c;
@@ -2600,14 +2611,16 @@ function linkSet_(u, req) {
   const phone = str_(req.phone).replace(/[\s\-()]/g, ''), guardian = str_(req.guardian).slice(0, 60), name = str_(req.name).slice(0, 60);
   if (!mrn || !phone) return { ok: false, error: 'the record number and the telephone number are both required' };
   if (!/^\+?\d{7,15}$/.test(phone)) return { ok: false, error: 'telephone: digits only, 7 to 15 of them, e.g. 03001234567' };
+  const cnic = cnicNorm_(req.cnic);
+  if (cnic === null) return { ok: false, error: 'CNIC: 13 digits, e.g. 35202-1234567-8' };
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     const sh = regSheet_(), f = regFind_(sh, c.sid), had = !!(f && (str_(f.o.mrn) || str_(f.o.phone)));
     let row;
     if (f) row = f.row;
-    else { sh.appendRow([c.sid, todayIso_(), u.email, 'E', '', '', '', '', '', '', '', '', '', '']); row = sh.getLastRow(); }   // a number linked from the participant page gets its register row here
-    regLinkWrite_(sh, row, { mrn: mrn, phone: phone, guardian: guardian, name: name, address: address, note: note }, u.email);
+    else { sh.appendRow([c.sid, todayIso_(), u.email, 'E', '', '', '', '', '', '', '', '', '', '', '']); row = sh.getLastRow(); }   // a number linked from the participant page gets its register row here
+    regLinkWrite_(sh, row, { mrn: mrn, phone: phone, guardian: guardian, name: name, address: address, note: note, cnic: req.cnic === undefined ? undefined : cnic }, u.email);   // an older phone sends no CNIC: the stored one is kept
     logAudit_('LINK_SAVE', '', c.sid, '', '', 'confidential link ' + (had ? 'changed' : 'created'), u.email);
     return { ok: true };
   } finally { lock.releaseLock(); }
@@ -2689,6 +2702,69 @@ function photoPut_(u, req) {
     logAudit_('PHOTO_ADD', '', sid, '', '', PHOTO_DOCS[doc] + (visit ? ' ' + visit : '') + (covered === 'Y' ? ' (label covered)' : ''), u.email);
     return { ok: true, photo_id: pid };
   } finally { lock.releaseLock(); }
+}
+// ---------------------------------------------------------------- reading documents (OCR), off with the photo switch
+// The phone sends one picture; Google Drive's own text recognition turns it into a temporary Google Doc, the text is read, and the Doc is
+// deleted for good at once. Nothing of the text is kept or logged: only the names of the fields found go to the audit log. The person checks
+// every value before saving. Uses the script's existing Drive access over the web, so no Apps Script setting changes. [VERIFY on the test copy]
+function ocrText_(bytes, mime) {
+  const auth = { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, boundary = 'tbdm' + randomHex_(8);
+  const meta = JSON.stringify({ name: 'tbdm-read-' + randomHex_(4), mimeType: 'application/vnd.google-apps.document' });
+  const head = Utilities.newBlob('--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + meta + '\r\n--' + boundary + '\r\nContent-Type: ' + mime + '\r\n\r\n').getBytes();
+  const tail = Utilities.newBlob('\r\n--' + boundary + '--').getBytes();
+  const up = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&ocrLanguage=en&fields=id', { method: 'post', contentType: 'multipart/related; boundary=' + boundary,
+    payload: head.concat(bytes).concat(tail), headers: auth, muteHttpExceptions: true });
+  if (up.getResponseCode() >= 300) throw new Error('text recognition refused (' + up.getResponseCode() + ')');
+  const id = JSON.parse(up.getContentText()).id;
+  try {
+    const t = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + id + '/export?mimeType=text/plain', { headers: auth, muteHttpExceptions: true });
+    if (t.getResponseCode() >= 300) throw new Error('the recognised text could not be read (' + t.getResponseCode() + ')');
+    return t.getContentText();
+  } finally { try { UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + id, { method: 'delete', headers: auth, muteHttpExceptions: true }); } catch (e) { console.error('ocr cleanup: ' + e); } }
+}
+// LGH OPD registration slip (layout from the PI's sample receipt, 30 Oct 2026): MRN, name, CNIC, age, gender, date. Text recognition reads
+// the two columns in either order, so each value is found by its own shape, not by its position.
+const SLIP_STOP = /LAHORE|HOSPITAL|GENERAL|OPD|CLINIC|CONSULTANT|ROOM|VISIT|MRN|CNIC|AGE|GENDER|DISTRIC|FATHER|GUARDIAN|N\/A|WEDNESDAY|MONDAY|TUESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY|UROLOGY|MEDICINE|SENIOR|REGISTRAR|DR\b|FEMALE|MALE/;
+function parseSlip_(text) {
+  const t = String(text || '').replace(/\r/g, ''), lines = t.split('\n').map(function (x) { return x.trim(); }).filter(Boolean), f = {};
+  const cn = /\b(\d{5})\s*[-\u2013]\s*(\d{7})\s*[-\u2013]\s*(\d)\b/.exec(t); if (cn) f.cnic = cn[1] + '-' + cn[2] + '-' + cn[3];
+  const cnDigits = f.cnic ? f.cnic.replace(/-/g, '') : '';
+  const lab = /MR[NM]\s*[:;.,]?\s*(\d[\d ]{9,22})/i.exec(t), alone = lines.filter(function (x) { return /^\d{12,20}$/.test(x) && x !== cnDigits; });   // the number under the barcode is the cleanest copy
+  const mrn = alone.length ? alone[alone.length - 1] : lab ? lab[1].replace(/\s/g, '') : '';
+  if (mrn) f.mrn = mrn;
+  const age = /\b(\d{1,3})\s*y\b/i.exec(t); if (age && +age[1] <= 120) f.age = age[1];
+  const sex = /\b(female|male)\b/i.exec(t); if (sex) f.sex = /^f/i.test(sex[1]) ? 'F' : 'M';
+  const dt = /\b(\d{2})\/(\d{2})\/(\d{4})\b/.exec(t); if (dt) f.date = dt[3] + '-' + dt[2] + '-' + dt[1];
+  const fi = lines.findIndex(function (x) { return /father|guardian/i.test(x); });
+  const isName = function (x) { return /^[A-Z][A-Z .'-]{1,58}[A-Z.]$/.test(x) && !SLIP_STOP.test(x); };
+  const before = fi > 0 ? lines.slice(0, fi).filter(isName) : [], any = lines.filter(isName);
+  const nm = before.length ? before[before.length - 1] : any[0];
+  if (nm) f.name = nm.replace(/\s+/g, ' ');
+  return { fields: f, note: 'Read from the OPD slip. Check every value against the slip before saving.' };
+}
+// Lab reports: one layout per report type, written from the PI's sample reports. None yet: until then nothing is read (never a guessed layout).
+const LAB_LAYOUTS = {};
+function parseLab_(text, doc) {
+  const L = LAB_LAYOUTS[doc];
+  if (!L) return { fields: {}, note: 'This report layout is not set up yet, so nothing was read. Type the values.' };
+  return L(String(text || ''));
+}
+function readDoc_(u, req) {
+  if (!photosOn_()) return { ok: false, error: 'Reading documents is switched off, together with document photos.' };
+  const kind = str_(req.kind), doc = code_(req.doc);
+  if (kind === 'slip') { if (!identAllowed_(u) || !linkOn_()) return { ok: false, error: 'not authorised', code: 401 }; }
+  else if (kind === 'lab') { if (!photoTakeRole_(u)) return { ok: false, error: 'not authorised', code: 401 }; if (!/^LAB_/.test(doc) || !PHOTO_DOCS[doc]) return { ok: false, error: 'unknown report type' }; }
+  else return { ok: false, error: 'unknown kind of document' };
+  const mime = str_(req.mime);
+  if (['image/jpeg', 'image/png'].indexOf(mime) < 0) return { ok: false, error: 'only JPEG or PNG images' };
+  const data = String(req.data || '');
+  if (!data || data.length > PHOTO_MAX) return { ok: false, error: 'the image is empty or too large' };
+  let text;
+  try { text = ocrText_(Utilities.base64Decode(data), mime); } catch (e) { return { ok: false, error: 'the document could not be read: ' + (e && e.message ? e.message : e) }; }
+  const out = kind === 'slip' ? parseSlip_(text) : parseLab_(text, doc);
+  const sid = idOk_(code_(req.study_id)) ? code_(req.study_id) : '';
+  logAudit_('DOC_READ', '', sid, '', '', (kind === 'slip' ? 'OPD slip' : PHOTO_DOCS[doc]) + ' read by text recognition; fields found: ' + (Object.keys(out.fields).join(', ') || 'none'), u.email);
+  return { ok: true, fields: out.fields, note: out.note };
 }
 function photoList_(u, req) {
   if (!photoViewRole_(u) && !photoReader_(u) && !photoTakeRole_(u)) return { ok: false, error: 'not authorised', code: 401 };

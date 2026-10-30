@@ -452,3 +452,6 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .bn.navplus, .bn.navdone { color: var(--brand-ink); }
 .navstrip { position: fixed; left: 0; right: 0; bottom: calc(58px + var(--safe-bot)); z-index: 6; display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--card); border-top: 1px solid var(--line); box-shadow: 0 -2px 8px rgba(20,33,31,.08); }
 .navstrip .btn { padding: 8px 14px; }
+/* values read from a document: marked until the person checks and saves */
+.field.readfrom { border-color: #d39a3a; background: #fff8ec; } .readhint { color: #8a5a10; font-weight: 600; }
+.card.readcard .row2 { margin-top: 8px; } .pbtn.readbtn { font-size: 12px; font-weight: 700; padding: 0 8px; width: auto; }

@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '99a61e48e3e1';                 // replaced by build.js with the build's hash
+const BUILD_ID = '88018bf22ea2';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1133,8 +1133,8 @@ function overlay(L) {
   const rows = L.rows.map((r) => Object.assign({}, r)), by = {}; rows.forEach((r) => { by[s_(r.study_id).toUpperCase()] = r; });
   out.forEach((c) => {
     const id = s_(c.body.study_id).toUpperCase(), r = by[id];
-    if (c.kind === 'add' && !r) { const n = { study_id: id, assigned_date: todayIso(), status: c.body.status, reason: c.body.reason || '', mrn: c.body.mrn || '', phone: c.body.phone || '', name: c.body.name || '', guardian: c.body.guardian || '', address: c.body.address || '', note: '', pending: true }; rows.push(n); by[id] = n; }
-    else if (r && c.kind === 'set') Object.assign(r, { name: c.body.name, mrn: c.body.mrn, phone: c.body.phone, guardian: c.body.guardian, address: c.body.address, note: c.body.note, pending: true });
+    if (c.kind === 'add' && !r) { const n = { study_id: id, assigned_date: todayIso(), status: c.body.status, reason: c.body.reason || '', mrn: c.body.mrn || '', phone: c.body.phone || '', name: c.body.name || '', guardian: c.body.guardian || '', address: c.body.address || '', cnic: c.body.cnic || '', note: '', pending: true }; rows.push(n); by[id] = n; }
+    else if (r && c.kind === 'set') Object.assign(r, { name: c.body.name, mrn: c.body.mrn, phone: c.body.phone, guardian: c.body.guardian, address: c.body.address, note: c.body.note, cnic: c.body.cnic, pending: true });
   });
   rows.sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
   return Object.assign({}, L, { rows });
@@ -1157,7 +1157,7 @@ async function confRefresh(still) {
   const res = await api({ op: 'register_list', token: S.cfg.token }); still();
   if (res.ok) { await confSave(res); const st = T.reg; if (st && st.list) st.list = overlay(res); }
 }
-function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', name: '', mrn: '', phone: '', reason: '', guardian: '', address: '', sid: '', pendingRid: null, q: '' }); }
+function regState() { return T.reg || (T.reg = { list: null, loading: false, err: '', done: '', busy: false, status: 'E', name: '', mrn: '', phone: '', reason: '', guardian: '', address: '', cnic: '', sid: '', pendingRid: null, q: '', read: null }); }
 async function regLoad() {
   const st = regState();
   st.err = '';
@@ -1182,19 +1182,19 @@ async function regAssign() {
     const first = ownFree()[0], sid = normId(st.sid) || (first ? idOf_(first) : '');
     if (!sid || !idOk_(sid)) { st.err = 'No spare number on this phone. Type the number from the patient card.'; render(); return; }
     if ((S.confOut || []).some((c) => c.kind === 'add' && s_(c.body.study_id).toUpperCase() === sid) || ((S.conf && S.conf.rows) || []).some((r) => s_(r.study_id).toUpperCase() === sid)) { st.err = sid + ' is already in the register.'; render(); return; }
-    (S.confOut = S.confOut || []).push({ id: st.pendingRid, kind: 'add', at: Date.now(), err: '', body: { status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, study_id: sid } });
+    (S.confOut = S.confOut || []).push({ id: st.pendingRid, kind: 'add', at: Date.now(), err: '', body: { status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, cnic: st.cnic, study_id: sid } });
     await saveState();
     st.done = 'Saved on this phone: ' + sid + '. It is sent when you are back online.';
-    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.sid = ''; st.reason = ''; st.status = 'E';
+    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.cnic = ''; st.sid = ''; st.reason = ''; st.status = 'E'; st.read = null;
     st.list = confAsList(); render(); return;
   }
-  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, study_id: normId(st.sid) };
+  const body = { op: 'register_add', token: S.cfg.token, rid: st.pendingRid, status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, cnic: st.cnic, study_id: normId(st.sid) };
   st.busy = true; st.err = ''; st.done = ''; render();
   try {
     const res = await confApi(body);
     if (!res.ok) throw new Error(res.error || 'not assigned');
     st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id;
-    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.sid = ''; st.reason = ''; st.status = 'E';
+    st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.cnic = ''; st.sid = ''; st.reason = ''; st.status = 'E'; st.read = null;
   } catch (e) {
     if (T.weak && confCopy()) { st.busy = false; return regAssign(); }           // same request id, so a request that did get through is not repeated
     st.err = 'Not assigned. ' + e.message + ' Check the connection and press Assign again.';
@@ -1205,11 +1205,11 @@ async function regAssign() {
 function regList(L) {
   const st = regState(), q = st.q.trim().toUpperCase(), rows = L ? L.rows : [];
   const dig = (v) => s_(v).replace(/\D/g, '').replace(/^(92|0)/, ''), qd = /^[\d\s+\-()]+$/.test(q) ? dig(q) : '';      // only a search made of digits is compared with telephones, so TBDM-001 does not match every number containing 01      // 0300 123, +92 300 123 and 300123 all find the same telephone
-  const shown = q ? rows.filter((r) => [r.study_id, r.name, r.mrn].some((v) => s_(v).toUpperCase().indexOf(q) >= 0) || (qd.length >= 3 && dig(r.phone).indexOf(qd) >= 0) || s_(r.phone).replace(/\s/g, '').indexOf(q.replace(/\s/g, '')) >= 0) : rows;
+  const shown = q ? rows.filter((r) => [r.study_id, r.name, r.mrn, r.cnic].some((v) => s_(v).toUpperCase().indexOf(q) >= 0) || (qd.length >= 3 && dig(r.phone).indexOf(qd) >= 0) || s_(r.phone).replace(/\s/g, '').indexOf(q.replace(/\s/g, '')) >= 0) : rows;
   return el('div', { class: 'list', id: 'reglist' }, shown.length ? shown.map((r) => el('div', { class: 'row' }, el('button', { class: 'main', type: 'button', onclick: () => go('link', { sid: r.study_id }) },
     el('div', null, r.study_id),
     el('div', { class: 'sub' }, [r.status && ({ E: 'enrolled', D: 'declined', S: 'spoiled' })[r.status] || r.status, r.assigned_date].filter(Boolean).join(' · ')),
-    r.name || r.mrn ? el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : ''].filter(Boolean).join(' · ')) : null),
+    r.name || r.mrn ? el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : '', r.cnic ? 'CNIC ' + r.cnic : ''].filter(Boolean).join(' · ')) : null),
     r.phone ? el('a', { class: 'tel', href: 'tel:' + r.phone.replace(/[^\d+]/g, '') }, r.phone) : null, el('span', { class: 'chev' })))
     : el('div', { class: 'empty' }, L ? 'No numbers match.' : (st.loading ? 'Loading…' : '')));
 }
@@ -1244,10 +1244,13 @@ function registerScreen() {
       L && L.link ? el('div', { class: 'hint' }, 'Only for a patient who has agreed and is not enrolled yet.') : null,
       el('div', { class: 'hint' }, 'Leave blank to use the next free number' + (nextTxt ? ': ' + nextTxt : '') + '. If the patient\'s card shows a different number, type that one.'),
       el('input', { id: 'reg-sid', type: 'tel', inputmode: 'numeric', maxlength: '8', autocapitalize: 'characters', placeholder: nextTxt || 'e.g. 7 or ' + idOf_(7), value: st.sid, oninput: (ev) => { st.sid = ev.target.value.toUpperCase(); }, onblur: (ev) => { st.sid = normId(ev.target.value); ev.target.value = st.sid; } })),
+    spoiled || !(L && L.link) ? null : slipReadCard(st, (f) => { ['name', 'mrn', 'cnic'].forEach((k) => { if (f[k]) st[k] = k === 'name' ? titleName(f[k]) : f[k]; }); }),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Participant name, required'),
       el('input', { id: 'reg-name', type: 'text', maxlength: '60', value: st.name, oninput: (ev) => { st.name = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Record number (MRN), required'),
       el('input', { id: 'reg-mrn', type: 'text', maxlength: '30', value: st.mrn, oninput: (ev) => { st.mrn = ev.target.value; } })),
+    spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'CNIC (13 digits)'),
+      el('input', { id: 'reg-cnic', type: 'text', inputmode: 'numeric', maxlength: '15', placeholder: '35202-1234567-8', value: st.cnic, oninput: (ev) => { st.cnic = ev.target.value; }, onblur: (ev) => { st.cnic = cnicTxt(ev.target.value); ev.target.value = st.cnic; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Telephone, required, e.g. 03001234567'),
       el('input', { id: 'reg-phone', type: 'text', inputmode: 'tel', maxlength: '16', value: st.phone, oninput: (ev) => { st.phone = ev.target.value; } })),
     spoiled || !(L && L.link) ? null : el('div', { class: 'field' }, el('label', { class: 'lab' }, 'Father or husband name'),
@@ -1273,7 +1276,7 @@ async function linkLoad(sid) {
   render();
   const fromCopy = () => {
     const L = confAsList(), r = L && L.rows.filter((x) => s_(x.study_id).toUpperCase() === s_(sid).toUpperCase())[0];
-    if (r) { st.data = { name: r.name || '', mrn: r.mrn || '', phone: r.phone || '', guardian: r.guardian || '', address: r.address || '', note: r.note || '', updated: r.updated || '' }; st.form = Object.assign({}, st.data); st.edit = !(r.name || r.mrn || r.phone); st.offline = true; st.err = ''; }
+    if (r) { st.data = { name: r.name || '', mrn: r.mrn || '', phone: r.phone || '', guardian: r.guardian || '', address: r.address || '', note: r.note || '', cnic: r.cnic || '', updated: r.updated || '' }; st.form = Object.assign({}, st.data); st.edit = !(r.name || r.mrn || r.phone); st.offline = true; st.err = ''; }
     else st.err = 'No signal, and no saved copy of this participant on this phone.';
     st.busy = false; render();
   };
@@ -1281,7 +1284,7 @@ async function linkLoad(sid) {
   try {
     const res = await confApi({ op: 'link_get', token: S.cfg.token, study_id: sid });
     if (!res.ok) throw new Error(res.error || 'could not load');
-    st.data = res; st.form = { name: res.name || '', mrn: res.mrn, phone: res.phone, guardian: res.guardian || '', address: res.address, note: res.note };
+    st.data = res; st.form = { name: res.name || '', mrn: res.mrn, phone: res.phone, guardian: res.guardian || '', address: res.address, note: res.note, cnic: res.cnic || '' };
     st.edit = !(res.name || res.mrn || res.phone || res.guardian || res.address || res.note);
   } catch (e) { if (T.weak && confCopy()) { fromCopy(); return; } st.err = e.message; }
   st.busy = false; render();
@@ -1291,6 +1294,8 @@ async function linkSave() {
   const st = T.link;
   if (!linkUp() && !confCopy()) { st.err = 'No internet connection. Nothing was saved.'; render(); return; }
   if (!s_((st.form || {}).mrn).trim() || !s_((st.form || {}).phone).trim()) { st.err = 'Not saved. The record number and the telephone number are both required.'; render(); return; }
+  if (st.form.cnic && !/^\d{5}-\d{7}-\d$/.test(cnicTxt(st.form.cnic))) { st.err = 'Not saved. CNIC: 13 digits, e.g. 35202-1234567-8.'; render(); return; }
+  if (st.form.cnic) st.form.cnic = cnicTxt(st.form.cnic);
   if (!linkUp()) {
     S.confOut = (S.confOut || []).filter((c) => !(c.kind === 'set' && c.body.study_id === st.sid));
     S.confOut.push({ id: rid(), kind: 'set', at: Date.now(), err: '', body: Object.assign({ study_id: st.sid }, st.form) });
@@ -1307,6 +1312,66 @@ async function linkSave() {
     st.err = 'Not saved. ' + e.message;
   }
   st.busy = false; render();
+}
+function cnicTxt(v) { const d = s_(v).replace(/[^\d]/g, ''); return d.length === 13 ? d.slice(0, 5) + '-' + d.slice(5, 12) + '-' + d.slice(12) : s_(v).trim(); }
+function titleName(v) { return s_(v).toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()); }
+// ---- Reading a document (OCR, off with the photo switch). The phone sends one picture (made smaller, never kept on the phone or in Drive);
+// the workbook returns the values it found; they fill the form, marked to check, and nothing is saved until the person presses Save.
+async function readDoc(file, body) {
+  const c = await fileToCanvas(file, false), blob = await canvasJpeg(c, 0.9), data = b64(new Uint8Array(await blob.arrayBuffer()));
+  const r = await api(Object.assign({ token: S.cfg.token, op: 'read_doc', mime: 'image/jpeg', data }, body), 90000);
+  if (!r.ok) throw new Error(r.error || 'not read');
+  return r;
+}
+function pickImage(onFile) {                                   // Take photo (the in-app camera on Android) or Choose file (a screenshot)
+  const inp = el('input', { type: 'file', accept: 'image/*', hidden: true, onchange: () => { const f = inp.files && inp.files[0]; inp.value = ''; if (f) onFile(f); } });
+  const cam = el('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true, onchange: () => { const f = cam.files && cam.files[0]; cam.value = ''; if (f) onFile(f); } });
+  return [inp, cam, el('button', { class: 'btn', type: 'button', onclick: () => (useInAppCamera() ? inAppCamera('READ', cam, null, onFile) : cam.click()) }, icon('camera'), ' Take photo'),
+    el('button', { class: 'btn', type: 'button', onclick: () => inp.click() }, icon('export'), ' Choose file')];
+}
+// Lab report: the picture is kept as this page's document photo AND read; values found fill the blank fields, marked to check.
+function labReadAsk(doc) {
+  const F = T.form; if (!F || F.tab !== 'LABS') return;
+  const go = async (file) => {
+    const m = $('#modal'); m.hidden = true; m.replaceChildren();
+    photoTake(file, F, doc);
+    toast('Reading the report…');
+    try {
+      const r = await readDoc(file, { kind: 'lab', doc, study_id: s_(F.vals.study_id).toUpperCase(), visit: s_(F.vals.visit).toUpperCase() });
+      if (T.form !== F) return;
+      const got = labApply(F, r.fields || {});
+      toast(got.length ? 'Filled ' + got.length + ' value' + (got.length > 1 ? 's' : '') + ' from the report. Check each one before saving.' : (r.note || 'Nothing could be read. Type the values.'));
+    } catch (e) { toast('Not read: ' + e.message); }
+  };
+  modal('Read ' + (PHOTO_DOC_NAMES[doc] || 'the report'), [el('p', { class: 'small' }, 'Photograph the report page, or choose a screenshot. It is kept as this page\'s document, and the values found are filled in for you to check. Nothing is saved until you press Save.'),
+    el('div', { class: 'row2' }, ...pickImage(go))], [['Cancel', null]]);
+}
+function labApply(F, f) {                                         // only blank fields are filled; a unit read from the report sets the unit switch
+  const got = [];
+  Object.keys(f).forEach((k) => {
+    if (!(k in F.vals) || BY_FIELDS.indexOf(k) >= 0) return;
+    if (UNIT_DEF[k]) { if (f[k] === UNIT_DEF[k].usual || f[k] === UNIT_DEF[k].other) F.vals[k] = f[k]; return; }
+    if (s_(F.vals[k]) !== '') return;
+    F.vals[k] = s_(f[k]); got.push(k);
+  });
+  F.readKeys = (F.readKeys || []).concat(got); if (got.length) F.dirty = true;
+  if (T.refill) { const y = window.scrollY; T.refill(); window.scrollTo(0, y); }
+  return got;
+}
+function slipReadCard(st, apply) {
+  if (!photosOn() || T.practice || !navigator.onLine) return null;
+  const R = st.read || (st.read = { busy: false, msg: '', err: '', extra: null });
+  const go = async (file) => {
+    R.busy = true; R.err = ''; R.msg = ''; render();
+    try { const r = await readDoc(file, { kind: 'slip' }); apply(r.fields || {}); const n = ['name', 'mrn', 'cnic'].filter((k) => (r.fields || {})[k]).length;
+      R.msg = n ? 'Filled ' + n + ' value' + (n > 1 ? 's' : '') + ' from the slip. Check each one against the slip before saving.' : 'Nothing could be read from this picture. Type the values.';
+      R.extra = r.fields && (r.fields.age || r.fields.sex) ? 'Slip also shows: ' + [r.fields.age ? 'age ' + r.fields.age : '', r.fields.sex ? (r.fields.sex === 'F' ? 'female' : 'male') : ''].filter(Boolean).join(', ') : null; }
+    catch (e) { R.err = 'Not read: ' + e.message; }
+    R.busy = false; render();
+  };
+  return el('div', { class: 'card readcard', id: 'slipread' }, el('b', null, 'Read from the OPD slip'), el('div', { class: 'small muted' }, 'Photograph the slip, or choose a screenshot. Name, MRN and CNIC are filled in for you to check. The picture is not kept.'),
+    el('div', { class: 'row2' }, ...pickImage(go)), R.busy ? el('div', { class: 'small' }, 'Reading…') : null, R.msg ? el('div', { class: 'small', id: 'slipmsg' }, el('b', null, R.msg)) : null,
+    R.extra ? el('div', { class: 'small muted' }, R.extra) : null, R.err ? el('div', { class: 'small bad', id: 'sliperr' }, R.err) : null);
 }
 function waDigits(ph) {                                   // 0300... becomes 92300..., for WhatsApp
   let d = s_(ph).replace(/\D/g, '');
@@ -1332,11 +1397,11 @@ function linkScreen(p) {
         el('div', { class: 'row2' },
           el('a', { class: 'btn block', href: 'tel:' + ph.replace(/[^\d+]/g, '') }, 'Call'),
           el('a', { class: 'btn block', href: 'https://wa.me/' + waDigits(ph), target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp'))) : show('Telephone', ''),
-      show('Name', d.name), show('Record number (MRN)', d.mrn), show('Father or husband name', d.guardian), show('Address', d.address), show('Note', d.note),
+      show('Name', d.name), show('Record number (MRN)', d.mrn), show('CNIC', d.cnic), show('Father or husband name', d.guardian), show('Address', d.address), show('Note', d.note),
       d.updated ? el('div', { class: 'small muted' }, 'Last changed ' + d.updated) : null,
       el('button', { class: 'btn block', type: 'button', disabled: off && !st.offline, onclick: () => { st.edit = true; st.msg = ''; render(); } }, 'Edit'),
       !can('view') && can('photoView') ? photoViewCard(sid) : null] : null,
-    d && st.edit ? [field('name', 'Participant name', 60), field('mrn', 'Record number (MRN), required', 30), field('phone', 'Telephone, required, e.g. 03001234567', 16), field('guardian', 'Father or husband name', 60), field('address', 'Address', 200), field('note', 'Note', 200),
+    d && st.edit ? [slipReadCard(st, (r) => { ['name', 'mrn', 'cnic'].forEach((k) => { if (r[k]) f[k] = k === 'name' ? titleName(r[k]) : r[k]; }); }), field('name', 'Participant name', 60), field('mrn', 'Record number (MRN), required', 30), field('cnic', 'CNIC (13 digits)', 15), field('phone', 'Telephone, required, e.g. 03001234567', 16), field('guardian', 'Father or husband name', 60), field('address', 'Address', 200), field('note', 'Note', 200),
       el('button', { class: 'btn primary block', type: 'button', disabled: (off && !st.offline) || st.busy, onclick: () => linkSave() }, st.busy ? 'Saving…' : (off ? 'Save on this phone' : 'Save'))] : null
   )]);
 }
@@ -1720,7 +1785,7 @@ function regMatch(rows, qq) {                              // search by study nu
   const q = s_(qq).trim().toUpperCase();
   if (!q) return rows;
   const dig = (v) => s_(v).replace(/\D/g, '').replace(/^(92|0)/, ''), qd = /^[\d\s+\-()]+$/.test(q) ? dig(q) : '';
-  return rows.filter((r) => [r.study_id, r.name, r.mrn].some((v) => s_(v).toUpperCase().indexOf(q) >= 0) || (qd.length >= 3 && dig(r.phone).indexOf(qd) >= 0) || s_(r.phone).replace(/\s/g, '').indexOf(q.replace(/\s/g, '')) >= 0
+  return rows.filter((r) => [r.study_id, r.name, r.mrn, r.cnic].some((v) => s_(v).toUpperCase().indexOf(q) >= 0) || (qd.length >= 3 && dig(r.phone).indexOf(qd) >= 0) || s_(r.phone).replace(/\s/g, '').indexOf(q.replace(/\s/g, '')) >= 0
     || (/^\d{1,3}$/.test(q) && s_(r.study_id).toUpperCase().replace(/\D/g, '').replace(/^0+/, '') === q.replace(/^0+/, '')));
 }
 // Tap a telephone number: choose Call or WhatsApp.
@@ -1778,7 +1843,7 @@ function linkPick() {
     list.hidden = !typed;
     note.hidden = !!L; note.textContent = L ? '' : 'Names and telephones are not on this phone yet. Open this page once with a signal to load them. Only study numbers can be searched until then.';
     list.replaceChildren(...(shown.length ? shown.slice(0, 100).map((r) => el('button', { class: 'row', onclick: () => { cRemember(r.study_id); go('link', { sid: r.study_id }); } },
-      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : '', r.phone].filter(Boolean).join(' · ') || 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : (typed ? [el('div', { class: 'empty' }, 'No contact matches.')] : [])));
+      el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, [r.name, r.mrn ? 'MRN ' + r.mrn : '', r.cnic ? 'CNIC ' + r.cnic : '', r.phone].filter(Boolean).join(' · ') || 'telephone, call, WhatsApp')), el('span', { class: 'chev' }))) : (typed ? [el('div', { class: 'empty' }, 'No contact matches.')] : [])));
   };
   q.addEventListener('input', fill); fill();
   if (!confCopy() && navigator.onLine && !T.cqLoading && !T.cqTried) { T.cqLoading = true; T.cqTried = true; confRefresh(() => {}).catch(() => {}).then(() => { T.cqLoading = false; if (KEY && cur().name === 'linkpick') { const old = $('.search'); T.cq = old ? old.value : T.cq; render(); } }); }
@@ -2143,7 +2208,7 @@ function fieldMsg(c) {
 function fieldEl(c) {
   const F = T.form, fixed = F.fixedKeys.indexOf(c.key) >= 0 || F.ro;
   const na = notApplicable(F.tab, c, F.vals);
-  const box = el('div', { class: 'field' + (na ? ' na' : ''), id: 'f-' + c.key, 'aria-disabled': na ? 'true' : null });
+  const box = el('div', { class: 'field' + (na ? ' na' : '') + ((F.readKeys || []).indexOf(c.key) >= 0 ? ' readfrom' : ''), id: 'f-' + c.key, 'aria-disabled': na ? 'true' : null });
   const msg = el('div', { class: 'msg', role: 'alert' });
   const carryFromScreening = () => { // number settled in the box: age and sex come from the screening line, however the form was opened
     if (F.tab !== 'S1_ENROL' || c.key !== 'study_id' || F.existing) return;
@@ -2252,6 +2317,7 @@ function fieldEl(c) {
       if (!nidBox && !nid && !(S.nums && S.nums.old)) box.append(el('div', { class: 'small muted' }, 'Type the number from the card. To get more spare numbers, connect to the internet and press Sync.' + (S.nums && S.nums.err ? ' (' + S.nums.err + ')' : '')));
     }
   }
+  if ((F.readKeys || []).indexOf(c.key) >= 0) box.append(el('div', { class: 'hint readhint' }, 'Read from the report: check it'));
   box.append(msg);
   if (val) { const m = fieldMsg(c); if (m) { msg.textContent = c.label.split(',')[0] + ' ' + m; box.classList.add('err'); } }
   return box;
@@ -2815,13 +2881,14 @@ function paintPhotoCard(target) {
         cam, file,
         el('div', { class: 'pbtns' },
           el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': st === 'missing' ? 'Take photo' : 'Add page', title: 'Take photo', onclick: () => (useInAppCamera() ? inAppCamera(doc, cam, F) : cam.click()) }, icon('camera')),
-          el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': 'Choose file', title: 'Choose file (screenshot)', onclick: () => file.click() }, icon('export'))));
+          el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': 'Choose file', title: 'Choose file (screenshot)', onclick: () => file.click() }, icon('export')),
+          /^LAB_/.test(doc) && F.tab === 'LABS' ? el('button', { class: 'pbtn readbtn', type: 'button', disabled: !sid || !navigator.onLine, 'data-read': doc, 'aria-label': 'Read values from this report', title: 'Read values', onclick: () => labReadAsk(doc) }, 'Read') : null));
     }))
 }
 // Android: Chrome often hands a file-input camera to the camera app and then loses the page, or does nothing when its camera permission was never
 // asked. There the app opens the camera itself: Chrome asks for permission the first time, and the picture never leaves the app.
 function useInAppCamera() { return ANDROID && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
-async function inAppCamera(doc, cam, F) {
+async function inAppCamera(doc, cam, F, onFile) {
   const cxr = doc === 'CXR';
   let stream;
   try {
@@ -2841,7 +2908,8 @@ async function inAppCamera(doc, cam, F) {
         c.getContext('2d').drawImage(video, 0, 0); blob = await canvasJpeg(c, cxr ? 1 : 0.92);
       }
       stop();
-      photoTake(new File([blob], 'camera.jpg', { type: blob.type || 'image/jpeg' }), F, doc);
+      const file = new File([blob], 'camera.jpg', { type: blob.type || 'image/jpeg' });
+      if (onFile) onFile(file); else photoTake(file, F, doc);
     } catch (e) { stop(); toast('The photo was not taken: ' + (e.message || e)); }
   };
   const snap = el('button', { type: 'button', class: 'camsnap', id: 'cam-snap', 'aria-label': 'Take the photo', onclick: shoot });
