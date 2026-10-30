@@ -3078,9 +3078,18 @@ function upgradePlan_(ss, defs, label) {
   (defs || SCHEMA).forEach(function (t) {
     const sh = ss.getSheetByName(t.tab);
     if (!sh || sh.getLastColumn() === 0) return;
-    const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0].map(function (x) { return String(x).trim(); }).filter(function (x) { return x !== ''; });
+    const raw = sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0].map(function (x) { return String(x).trim(); });
+    const head = raw.filter(function (x) { return x !== ''; });
     const want = t.cols.map(function (c) { return c.key; });
     if (!head.length || head.join('|') === want.join('|')) return;
+    // A damaged header must never be read as a change of layout: a blank or retyped header cell would make the move lose that column's values
+    // (26 to 30 Oct 2026: S1_ENROL A1 blanked by hand, and the upgrade cleared the study numbers). Stop before anything is touched.
+    const lastHead = raw.reduce(function (m, x, i) { return x !== '' ? i : m; }, -1);
+    const gap = raw.slice(0, lastHead + 1).map(function (x, i) { return x === '' ? colLetter_(i + 1) + '1' : ''; }).filter(Boolean);
+    if (gap.length) throw new Error('Tab ' + (label || '') + t.tab + ': header cell ' + gap.join(', ') + ' is blank. Type the header back exactly (cell ' + gap[0] + ' should say ' + (want[raw.indexOf('') ] || 'the column name') + '), then run the upgrade again. Nothing was changed.');
+    const keyCols = (APP_KEYS[t.tab] || [want[0]]).filter(function (k) { return want.indexOf(k) >= 0; });
+    const noKey = keyCols.filter(function (k) { return head.indexOf(k) < 0; });
+    if (noKey.length) throw new Error('Tab ' + (label || '') + t.tab + ': the header ' + noKey.join(', ') + ' is missing, so the rows cannot be matched. Type it back in row 1, then run the upgrade again. Nothing was changed.');
     const shared = want.filter(function (k) { return head.indexOf(k) >= 0; }).length;
     if (shared < Math.ceil(want.length / 2)) throw new Error('Tab ' + t.tab + ' does not look like the study tab (only ' + shared + ' of ' + want.length + ' columns match). Nothing was changed.');
     plan.push({ ss: ss, label: (label || '') + t.tab, t: t, head: head, want: want, added: want.filter(function (k) { return head.indexOf(k) < 0; }), dropped: head.filter(function (k) { return want.indexOf(k) < 0; }) });
@@ -3089,16 +3098,30 @@ function upgradePlan_(ss, defs, label) {
 }
 function migrateTab_(ss, p) {
   const sh = ss.getSheetByName(p.t.tab), n = p.head.length, lastRow = Math.max(sh.getLastRow(), 1);
-  const all = sh.getRange(1, 1, lastRow, n).getValues();
+  const all = sh.getRange(1, 1, lastRow, n).getValues(), fmts = sh.getRange(1, 1, lastRow, n).getNumberFormats();   // kept to put the tab back if the move fails
   const out = all.slice(1).map(function (r) { return p.want.map(function (k) { const i = p.head.indexOf(k); return i < 0 ? '' : r[i]; }); });
   const lost = p.dropped.map(function (k) {
     const i = p.head.indexOf(k);
     return { key: k, filled: all.slice(1).filter(function (r) { return String(r[i] === undefined || r[i] === null ? '' : r[i]).trim() !== ''; }).length };
   });
-  sh.clear();
-  sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).clearDataValidations();
-  buildTab_(ss, p.t);                                           // header, notes, formats, rules: formats first, so text such as 00123 stays text
-  if (out.length) sh.getRange(2, 1, out.length, p.want.length).setValues(out);
+  try {
+    sh.clear();
+    sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).clearDataValidations();
+    buildTab_(ss, p.t);                                         // header, notes, formats, rules: formats first, so text such as 00123 stays text
+    if (out.length) {
+      sh.getRange(2, 1, out.length, p.want.length).clearDataValidations();      // the rows go in first; a stored value the new rules dislike must not stop the move
+      sh.getRange(2, 1, out.length, p.want.length).setValues(out);
+      buildTab_(ss, p.t);                                       // then the rules again, over the rows
+    }
+  } catch (e) {                                                 // anything goes wrong: put the tab back exactly as it was, then stop the upgrade
+    try {
+      sh.clear(); sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).clearDataValidations();
+      if (sh.getMaxColumns() < n) sh.insertColumnsAfter(sh.getMaxColumns(), n - sh.getMaxColumns());
+      sh.getRange(1, 1, all.length, n).setNumberFormats(fmts);    // formats first, so codes stored as text stay text
+      sh.getRange(1, 1, all.length, n).setValues(all);
+    } catch (e2) { throw new Error('Tab ' + p.label + ' could not be moved (' + (e && e.message) + ') and could not be put back (' + (e2 && e2.message) + '). Restore it from the backup CSV in ' + CFG.EXPORTS + '.'); }
+    throw new Error('Tab ' + p.label + ' could not be moved (' + (e && e.message) + '). Its rows were put back as they were; tabs moved before it are kept in the new layout.');
+  }
   return lost;
 }
 function backupBeforeUpgrade_(ss, why, readers) {                // every data tab (and the readers' score tabs) as CSV, at the width it has NOW (not the new width)
@@ -3124,8 +3147,11 @@ function menuUpgrade() {
   requirePI_();
   const ui = SpreadsheetApp.getUi(), P = props_(), ss = dataSS_();
   const readers = [1, 2].map(function (r) { const id = P.getProperty('READER' + r + '_ID'); return id ? { r: r, ss: SpreadsheetApp.openById(id) } : null; }).filter(Boolean);
-  let plan = upgradePlan_(ss);
-  readers.forEach(function (x) { plan = plan.concat(upgradePlan_(x.ss, [READER], 'CXR_Reader' + x.r + '/')); });      // the readers' files move with the workbook
+  let plan;
+  try {
+    plan = upgradePlan_(ss);
+    readers.forEach(function (x) { plan = plan.concat(upgradePlan_(x.ss, [READER], 'CXR_Reader' + x.r + '/')); });      // the readers' files move with the workbook
+  } catch (e) { ui.alert('Upgrade stopped', String(e && e.message || e), ui.ButtonSet.OK); return; }
   if (!plan.length) {
     P.setProperty('SCHEMA_VER', String(CFG.SCHEMA_VER)); P.setProperty('VERSION', CFG.VERSION);
     ui.alert('Already up to date', 'Every tab already has the columns this script expects. Nothing was changed. If a part of the workbook looks wrong, use "PI: set up or repair".', ui.ButtonSet.OK);
@@ -3141,13 +3167,15 @@ function menuUpgrade() {
   const report = [];
   try {
     plan.forEach(function (p) {
-      const lost = migrateTab_(p.ss, p);
+      let lost;
+      try { lost = migrateTab_(p.ss, p); }
+      catch (e) { logAudit_('SCHEMA_UPGRADE', '', '', '', '', 'STOPPED at ' + p.label + ': ' + (e && e.message), me_()); lock.releaseLock(); ui.alert('Upgrade stopped', String(e && e.message || e) + '\n\nBackup: ' + CFG.EXPORTS + '/' + backup.getName(), ui.ButtonSet.OK); throw Object.assign(new Error('stopped'), { shown: true }); }
       SpreadsheetApp.flush();
       logAudit_('SCHEMA_UPGRADE', '', '', 'removed: ' + (p.dropped.join(', ') || 'none'), 'added: ' + (p.added.join(', ') || 'none'), p.label + ' moved to schema ' + CFG.SCHEMA_VER, me_());
       report.push(p.label + ': ' + lost.filter(function (l) { return l.filled > 0; }).map(function (l) { return l.key + ' held ' + l.filled + ' value(s), kept only in the backup'; }).join('; '));
     });
     P.setProperty('SCHEMA_VER', String(CFG.SCHEMA_VER));        // the rows now match this script
-  } finally { lock.releaseLock(); }
+  } catch (e) { if (e && e.shown) return; throw e; } finally { try { lock.releaseLock(); } catch (e) { /* already released */ } }
   buildAll_(ss);
   readers.forEach(function (x) { buildTab_(x.ss, READER); protectReader_(x.ss); });
   applyAccess_(null);
