@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '72962603102b';                 // replaced by build.js with the build's hash
+const BUILD_ID = '71d42102ac78';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -406,6 +406,7 @@ function syncTap() { T.spinUntil = Date.now() + 900; setTimeout(paintSync, 950);
 function paintSync() { const b = $('#syncbar'); if (b && S) b.replaceChildren(syncBar()); }
 function modal(title, body, actions, stop) {
   const m = $('#modal');
+  m.onclick = null;                                         // a tap outside closes only the pop-ups that ask for it (listPick)
   const close = () => { m.hidden = true; m.replaceChildren(); };
   m.replaceChildren(el('div', { class: 'sheet' + (stop ? ' stop' : ''), role: 'alertdialog', 'aria-modal': 'true' }, el('h3', null, title), body,
     el('div', { class: 'acts' }, actions.map((a) => el('button', { class: 'btn ' + (a[2] || ''), onclick: () => {
@@ -1996,10 +1997,12 @@ function fieldEl(c) {
           if (now) { ev.currentTarget.classList.add('on'); ev.currentTarget.setAttribute('aria-checked', 'true'); } set(now, relayout); } },
         o[0], o[1] ? el('small', null, o[1]) : null)));
       box.append(seg);
-    } else {
-      const sel = el('select', { id: 'i-' + c.key, onchange: (ev) => set(ev.target.value, relayout) }, el('option', { value: '' }, 'choose'),
-        opts.map((o) => el('option', { value: o[0], selected: val === o[0] }, o[0] + ' = ' + o[1])));
-      box.append(sel);
+    } else {      // long lists open the app's own pop-up, not the phone's drop-down: some Android phones would not close theirs without a pick
+      const cur = opts.find((o) => o[0] === val);
+      box.append(el('button', { type: 'button', id: 'i-' + c.key, class: 'btn block pickbtn' + (cur ? ' set' : ''), disabled: na ? true : null,
+        onclick: (ev) => { const b = ev.currentTarget; listPick(c.label, opts, s_(F.vals[c.key]), (v) => {
+          const o = opts.find((x) => x[0] === v); b.textContent = o ? o[0] + ' = ' + o[1] : 'Tap to choose'; b.classList.toggle('set', !!o); set(v, relayout); }); } },
+        cur ? cur[0] + ' = ' + cur[1] : val ? val : 'Tap to choose'));
     }
   } else if (c.type === 'regex') {                                  // diabetes drugs: tick boxes composed in M S I O order
     const letters = [['M', 'metformin'], ['S', 'sulfonylurea'], ['I', 'insulin'], ['O', 'other']];
@@ -2651,6 +2654,15 @@ function quadPick(k) {
     el('div', { class: 'qpicks' }, Array.from({ length: 11 }, (_, i) => String(i * 10)).map((v) => el('button', { type: 'button', class: 'btn qpick' + (v === cur ? ' primary' : ''), 'data-v': v, onclick: () => { quadSet(k, v); close(); } }, v + '%'))),
     el('div', { class: 'inline qexact' }, exact, el('button', { type: 'button', class: 'btn', id: 'qp-use', onclick: useExact }, 'Use')), err],
     cur ? [['Clear', () => quadSet(k, '')], ['Cancel', null]] : [['Cancel', null]]);
+}
+// A long code list as a pop-up: tap a line to choose it; None clears a choice; Cancel (or tapping outside) closes without changing anything.
+function listPick(title, opts, cur, pick) {
+  const close = () => { const m = $('#modal'); m.hidden = true; m.replaceChildren(); };
+  modal(title.split(',')[0], [el('div', { class: 'listpicks' }, opts.map((o) => el('button', { type: 'button', class: 'btn block listpick' + (o[0] === cur ? ' primary' : ''), 'data-v': o[0],
+    onclick: () => { close(); pick(o[0]); } }, o[0] + ' = ' + o[1])))],
+    cur ? [['None', () => pick('')], ['Cancel', null]] : [['Cancel', null]]);
+  const m = $('#modal');
+  m.onclick = (ev) => { if (ev.target === m) { m.onclick = null; close(); } };
 }
 // Number of cavities: 1 to 5 as buttons, 6+ opens a box for 6 to 20; with no cavity it is 0 and the buttons are faded.
 function cavityCount(box, set, msg) {

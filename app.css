@@ -410,3 +410,8 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 #inv-email { width: 100%; height: var(--tap); border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; background: var(--card); color: var(--ink); }
 #inv-roles .row.on { background: var(--brand-soft); }
 #inv-link { height: auto; padding: 10px 12px; font-size: 13px; word-break: break-all; resize: none; }
+/* long code lists: the field shows the choice as a button that opens the pop-up list */
+.field .btn.pickbtn { text-align: left; justify-content: flex-start; font-weight: 400; white-space: normal; }
+.field .btn.pickbtn:not(.set) { color: var(--muted, #667); }
+.listpicks { display: flex; flex-direction: column; gap: 8px; }
+.listpicks .btn.listpick { text-align: left; justify-content: flex-start; white-space: normal; }
