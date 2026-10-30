@@ -441,3 +441,14 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .lmark { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); display: inline-grid; place-items: center; flex: none; font-size: 14px; font-weight: 700; margin-right: 10px; }
 .lmark.done { background: var(--brand); border-color: var(--brand); color: #fff; } .lmark.part { border-color: #d39a3a; color: #a3660a; } .lmark.stopped { border-style: dashed; }
 #labopen { margin-top: 14px; }
+/* arranging the bar: minus on each tab that can come off, plus to put one back, Done to save */
+.bnav.editmode { background: #f1f7f6; }
+.bnav.editmode .bn[data-tab] { animation: navwiggle .35s ease-in-out infinite alternate; }
+@keyframes navwiggle { from { transform: rotate(-1.5deg); } to { transform: rotate(1.5deg); } }
+@media (prefers-reduced-motion: reduce) { .bnav.editmode .bn[data-tab] { animation: none; } }
+.navminus { position: absolute; top: 2px; left: calc(50% - 26px); width: 20px; height: 20px; border-radius: 50%; background: #b3261e; color: #fff; font-size: 16px; font-weight: 700; line-height: 19px; text-align: center; z-index: 2; }
+.bn.navplus .plus, .bn.navdone .plus { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 18px; }
+.bn.navplus .plus { border: 2px dashed var(--brand); color: var(--brand-ink); } .bn.navdone .plus { background: var(--brand); color: #fff; font-size: 14px; }
+.bn.navplus, .bn.navdone { color: var(--brand-ink); }
+.navstrip { position: fixed; left: 0; right: 0; bottom: calc(58px + var(--safe-bot)); z-index: 6; display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--card); border-top: 1px solid var(--line); box-shadow: 0 -2px 8px rgba(20,33,31,.08); }
+.navstrip .btn { padding: 8px 14px; }

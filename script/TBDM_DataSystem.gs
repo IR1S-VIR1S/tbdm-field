@@ -2362,12 +2362,14 @@ function navSet_(u, req) {
   if (!(ACCESS_ROLES.indexOf(key) >= 0 || key === 'reader' || (isCustomRole_(key) && (accessStored_().custom || {})[key]))) return { ok: false, error: 'unknown role' };
   const order = (Array.isArray(req.order) ? req.order : []).map(function (x) { return String(x); });
   if (!order.length || order.length > NAV_IDS.length || order.some(function (x, i) { return NAV_IDS.indexOf(x) < 0 || order.indexOf(x) !== i; })) return { ok: false, error: 'not a valid bar order' };
+  const hidden = (Array.isArray(req.hidden) ? req.hidden : []).map(function (x) { return String(x); });      // tabs taken off the bar; Home and Settings always stay
+  if (hidden.some(function (x, i) { return NAV_IDS.indexOf(x) < 0 || x === 'home' || x === 'settings' || order.indexOf(x) >= 0 || hidden.indexOf(x) !== i; })) return { ok: false, error: 'not a valid list of tabs to take off the bar' };
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    const all = navOrders_(); all[key] = { order: order, at: new Date().getTime() };
+    const all = navOrders_(); all[key] = { order: order, hidden: hidden, at: new Date().getTime() };
     props_().setProperty('NAV_ORDER', JSON.stringify(all));
-    logAudit_('ACCESS', '', '', '', '', 'bar order for ' + accessRoleName_(key === 'reader' ? 'reader1' : key, accessStored_()) + ': ' + order.join(', '), u.email);
+    logAudit_('ACCESS', '', '', '', '', 'bar order for ' + accessRoleName_(key === 'reader' ? 'reader1' : key, accessStored_()) + ': ' + order.join(', ') + (hidden.length ? '; taken off: ' + hidden.join(', ') : ''), u.email);
     return { ok: true, navOrders: all };
   } finally { lock.releaseLock(); }
 }

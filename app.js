@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '85c56476cf92';                 // replaced by build.js with the build's hash
+const BUILD_ID = '99a61e48e3e1';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -383,7 +383,7 @@ function render() {
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
   const hasNav = !!(S && S.server) && navIds().concat(c.name === 'tools' ? ['tools'] : []).indexOf(c.name) >= 0;
-  if (hasNav) app.append(bottomNav(c.name === 'tools' ? 'settings' : c.name));
+  if (hasNav) { app.append(bottomNav(c.name === 'tools' ? 'settings' : c.name)); if (T.navEdit) app.append(navEditStrip()); }
   // iOS home-screen apps (WebKit bug 301994): on a page shorter than the screen, a bar pinned to the bottom floats about one
   // status bar above the real bottom. Pages long enough to scroll are fine, so short pages are made just taller than the screen.
   let sa = false; try { sa = !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)); } catch (e) { sa = false; }
@@ -724,21 +724,46 @@ const NAVKEY = 'tbdm-nav';
 // Personal order {order, at} (older phones saved a bare list). The role's default order comes from the PI (pull: navOrder {order, at});
 // the personal order wins only if it was made after the PI last set the default. In Surveillance and Debugging only the role default counts.
 function navPersonal() { try { const v = JSON.parse(localStorage.getItem(NAVKEY) || 'null'); return Array.isArray(v) ? { order: v, at: 0 } : v && Array.isArray(v.order) ? v : null; } catch (e) { return null; } }
-function navSaved() {
+// The saved bar: order, and the tabs taken off it (the role default from the PI, or this phone's own, whichever is newer).
+function navSavedObj() {
   const d = S && S.server && S.server.navOrder, p = T.preview ? null : navPersonal();
-  if (p && (!d || +p.at > +d.at)) return p.order;
-  return d ? d.order : p ? p.order : [];
+  const w = p && (!d || +p.at > +d.at) ? p : d || p;
+  return w ? { order: w.order || [], hidden: Array.isArray(w.hidden) ? w.hidden : [] } : { order: [], hidden: [] };
+}
+function navSaved() { return T.navEdit ? T.navEdit.order : navSavedObj().order; }
+function navHidden() { return T.navEdit ? T.navEdit.hidden : navSavedObj().hidden; }
+const NAV_FIXED = ['home', 'settings'];                    // always on the bar
+// Arranging the bar: hold a tab to enter; drag to move, minus takes a tab off, plus puts one back; Done saves (for the PI in Surveillance or
+// Debugging, as that role's default). Only the tabs of this phone's role can be on the bar.
+function navRemove(id) { const E = T.navEdit; if (!E || NAV_FIXED.indexOf(id) >= 0) return; if (E.hidden.indexOf(id) < 0) E.hidden.push(id); E.order = E.order.filter((x) => x !== id); render(); }
+function navAddPick(all) {
+  const E = T.navEdit, off = all.filter((t) => E.hidden.indexOf(t[0]) >= 0);
+  modal('Add to the bar', [el('div', { class: 'list' }, off.map((t) => el('button', { class: 'row', type: 'button', 'data-tab': t[0], onclick: () => { const m = $('#modal'); m.hidden = true; m.replaceChildren();
+    E.hidden = E.hidden.filter((x) => x !== t[0]); if (E.order.indexOf(t[0]) < 0) E.order.push(t[0]); render(); } }, icon(t[2]), el('div', { class: 'main' }, el('div', null, t[1])), el('span', { class: 'chip ok' }, '+'))))], [['Cancel', null]]);
+}
+// While arranging: a strip above the bar with Add (when a tab is off) and Done, always in view however the bar is scrolled.
+function navEditStrip() {
+  const all = T.navAll || [], off = navHidden(), can = all.some((t) => off.indexOf(t[0]) >= 0 && NAV_FIXED.indexOf(t[0]) < 0);
+  return el('div', { class: 'navstrip', id: 'navstrip' }, el('span', { class: 'grow small' }, 'Drag to move · − takes a tab off'),
+    can ? el('button', { class: 'btn', id: 'navplus', type: 'button', onclick: () => navAddPick(all) }, '+ Add') : null,
+    el('button', { class: 'btn primary', id: 'navdone', type: 'button', onclick: navDone }, 'Done'));
+}
+function navDone() {
+  const E = T.navEdit; T.navEdit = null; if (!E) return;
+  if (T.preview) navSetDefault(E.order, E.hidden);
+  else { try { localStorage.setItem(NAVKEY, JSON.stringify({ order: E.order, hidden: E.hidden, at: Date.now() })); } catch (e) { /* ignore */ } render(); }
 }
 function navOrdered(tabs) { const o = navSaved(), rank = (t) => { const i = o.indexOf(t[0]); return i < 0 ? 999 : i; }; return tabs.map((t, i) => [t, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((x) => x[0]); }
 const navKeyOf = (r) => (/^reader/.test(r) ? 'reader' : r);
 // Sent with the PI's own phone access (the sandbox itself never contacts the study). Phones of that role get it at their next sync.
-async function navSetDefault(order) {
+async function navSetDefault(order, hidden) {
   const real = T.real, r = T.preview; if (!real || !r) return;
-  S.server.navOrder = { order, at: Date.now() }; render();
+  hidden = hidden || [];
+  S.server.navOrder = { order, hidden, at: Date.now() }; render();
   if (!navigator.onLine) { toast('Connect to the internet to save the bar order for ' + previewName(r) + '.'); return; }
   try {
     const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 30000);
-    const res = await fetch(real.cfg.api, { method: 'POST', body: JSON.stringify({ op: 'nav_set', token: real.cfg.token, role: r, order }), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, signal: ctl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store' }).then((x) => x.json()).finally(() => clearTimeout(timer));
+    const res = await fetch(real.cfg.api, { method: 'POST', body: JSON.stringify({ op: 'nav_set', token: real.cfg.token, role: r, order, hidden }), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, signal: ctl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store' }).then((x) => x.json()).finally(() => clearTimeout(timer));
     if (!res.ok) throw new Error(res.error || 'not saved');
     real.server.navOrders = res.navOrders; await saveVault(real);
     toast('Saved as the bar order for ' + previewName(r) + '. Their phones change at the next sync.');
@@ -746,17 +771,17 @@ async function navSetDefault(order) {
 }
 function navDrag(nav) {
   let timer = 0, drag = null, sx = 0, sy = 0, swallow = false, edge = 0;
-  const btns = () => Array.from(nav.querySelectorAll('.bn'));
+  const btns = () => Array.from(nav.querySelectorAll('.bn[data-tab]'));
   const stop = (save) => {
     clearTimeout(timer); clearInterval(edge);
     if (drag) {
       drag.el.classList.remove('dragging'); drag.el.style.transform = ''; nav.classList.remove('dragmode');
-      if (save) {
-        const order = btns().map((b) => b.dataset.tab);
-        if (T.preview) navSetDefault(order);                                     // the PI in Surveillance or Debugging: the role's default order
-        else { try { localStorage.setItem(NAVKEY, JSON.stringify({ order, at: Date.now() })); } catch (e) { /* ignore */ } }
-      }
       drag = null; swallow = true; setTimeout(() => { swallow = false; }, 350);
+      if (save) {                                                        // the bar stays in arranging mode, with minus and plus, until Done
+        const order = btns().map((b) => b.dataset.tab);
+        T.navEdit = { order, hidden: navHidden().slice() };
+        T.navScroll = nav.scrollLeft; render();
+      }
     }
   };
   const follow = (x) => {
@@ -783,7 +808,7 @@ function navDrag(nav) {
         if (navigator.vibrate) navigator.vibrate(15);
         follow(sx);
         edge = setInterval(() => { if (!drag) return; const r = nav.getBoundingClientRect(); if (drag.x < r.left + 36) nav.scrollLeft -= 8; else if (drag.x > r.right - 36) nav.scrollLeft += 8; follow(drag.x); }, 30);
-      }, 450);
+      }, T.navEdit ? 150 : 450);
     });
     b.addEventListener('pointermove', (ev) => {
       if (drag) { follow(ev.clientX); return; }
@@ -798,9 +823,12 @@ function bottomNav(active) {
   let partN = 0; try { partN = can('view') ? Object.keys(enrolledMap()).length : 0; } catch (e) { partN = 0; }
   const pend = (T.practice && !T.preview) || !confCopy() && !(T.reg && T.reg.list) ? 0 : identifiersPending(T.reg && T.reg.list ? T.reg.list : confAsList()).length;
   const ids = navIds();
-  const tabs = navOrdered(NAV_TABS.filter((t) => ids.indexOf(t[0]) >= 0 && ((t[0] !== 'linkpick' && t[0] !== 'register') || !T.practice || T.preview)));
-  const nav = el('nav', { class: 'bnav', 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'data-tab': t[0], 'aria-current': t[0] === active ? 'page' : null, onclick: () => tabTo(t[0]) },
+  const all = navOrdered(NAV_TABS.filter((t) => ids.indexOf(t[0]) >= 0 && ((t[0] !== 'linkpick' && t[0] !== 'register') || !T.practice || T.preview)));
+  const off = navHidden(), tabs = all.filter((t) => NAV_FIXED.indexOf(t[0]) >= 0 || off.indexOf(t[0]) < 0), edit = !!T.navEdit;
+  const minus = (t) => (edit && NAV_FIXED.indexOf(t[0]) < 0 ? el('span', { class: 'navminus', role: 'button', 'aria-label': 'Take ' + t[1] + ' off the bar', onpointerdown: (ev) => ev.stopPropagation(), onclick: (ev) => { ev.stopPropagation(); navRemove(t[0]); } }, '−') : null);
+  const nav = el('nav', { class: 'bnav' + (edit ? ' editmode' : ''), 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'data-tab': t[0], 'aria-current': t[0] === active ? 'page' : null, onclick: () => { if (!T.navEdit) tabTo(t[0]); } }, minus(t),
     icon(t[2]), t[0] === 'participants' && partN ? el('i', { class: 'badge blue', 'aria-label': partN + ' participants' }, String(partN)) : t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'queries' && qN ? el('i', { class: 'badge' }, String(qN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : t[0] === 'films' && newCxr().length ? el('i', { class: 'badge', 'aria-label': newCxr().length + ' new radiographs' }, String(newCxr().length)) : null, el('span', { class: 'lbl' }, t[1]))));
+  T.navAll = all;
   navDrag(nav);
   // The top indicator slides from the tab that was selected to the new one (the bar is rebuilt on every screen, so its last place is remembered).
   const slide = el('i', { class: 'slide', 'aria-hidden': 'true' }); nav.append(slide);
