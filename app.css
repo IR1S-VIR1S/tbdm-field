@@ -436,3 +436,4 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .linkbtn { background: none; border: 0; color: var(--brand-ink); text-decoration: underline; font-size: 15px; padding: 10px; margin-top: 4px; }
 #pinhelp .pinrow { margin-top: 10px; } #pinhelp .em { font-weight: 600; word-break: break-all; } #pinhelp small { color: var(--muted); }
 #pinhelp .pinbtns { display: flex; gap: 8px; margin-top: 8px; } #pinhelp .pinbtns .btn.primary { flex: 1; }
+.card.newcxr { border-color: #9cc3e6; background: #eef5fc; } .card.newcxr > b { display: block; margin-bottom: 6px; color: #1e4f7a; }

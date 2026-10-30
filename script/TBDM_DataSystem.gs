@@ -2283,6 +2283,10 @@ function appPull_(u) {
     let cols = t.cols.map(function (c) { return c.key; });
     out.tabs[t.tab] = { cols: cols, rows: appRows_(ss, t, cols) };
   });
+  if (u.role === 'pi' && photosOn_()) {                     // the PI's "new chest radiograph" badge: one entry per radiograph received (the readers' covered copy)
+    try { out.cxrPhotos = photoRows_(photoSheet_()).filter(function (p) { return code_(p.doc) === 'CXR' && code_(p.covered) === 'Y' && !str_(p.deleted); })
+      .map(function (p) { return { study_id: str_(p.study_id), id: str_(p.photo_id).slice(0, 12) }; }); } catch (e) { out.cxrPhotos = []; }
+  }
   out.regnums = regNums_();
   out.held = heldBlocks_();
   return out;

@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '22e1b293a742';                 // replaced by build.js with the build's hash
+const BUILD_ID = '83b4c05bcd83';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -298,7 +298,7 @@ async function sync() {
     if (S.server && S.server.photos && (S.photoOut || []).length) await pushPhotos(still);
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, navOrder: pull.navOrder || null, navOrders: pull.navOrders || null, roleName: pull.roleName || '', pinHelp: pull.pinHelp || [], at: Date.now() };
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, navOrder: pull.navOrder || null, navOrders: pull.navOrders || null, roleName: pull.roleName || '', pinHelp: pull.pinHelp || [], cxrPhotos: pull.cxrPhotos || [], at: Date.now() };
     if (pull.photos && (S.photoOut || []).length) await pushPhotos(still);          // photos taken before the feature reached this phone
     if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
     T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email; helpSave();
@@ -800,7 +800,7 @@ function bottomNav(active) {
   const ids = navIds();
   const tabs = navOrdered(NAV_TABS.filter((t) => ids.indexOf(t[0]) >= 0 && ((t[0] !== 'linkpick' && t[0] !== 'register') || !T.practice || T.preview)));
   const nav = el('nav', { class: 'bnav', 'aria-label': 'Main' }, tabs.map((t) => el('button', { class: 'bn' + (t[0] === active ? ' on' : ''), 'data-tab': t[0], 'aria-current': t[0] === active ? 'page' : null, onclick: () => tabTo(t[0]) },
-    icon(t[2]), t[0] === 'participants' && partN ? el('i', { class: 'badge blue', 'aria-label': partN + ' participants' }, String(partN)) : t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'queries' && qN ? el('i', { class: 'badge' }, String(qN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : null, el('span', { class: 'lbl' }, t[1]))));
+    icon(t[2]), t[0] === 'participants' && partN ? el('i', { class: 'badge blue', 'aria-label': partN + ' participants' }, String(partN)) : t[0] === 'due' && dueN ? el('i', { class: 'badge' }, String(dueN)) : t[0] === 'queries' && qN ? el('i', { class: 'badge' }, String(qN)) : t[0] === 'register' && pend ? el('i', { class: 'badge' }, String(pend)) : t[0] === 'films' && newCxr().length ? el('i', { class: 'badge', 'aria-label': newCxr().length + ' new radiographs' }, String(newCxr().length)) : null, el('span', { class: 'lbl' }, t[1]))));
   navDrag(nav);
   // The top indicator slides from the tab that was selected to the new one (the bar is rebuilt on every screen, so its last place is remembered).
   const slide = el('i', { class: 'slide', 'aria-hidden': 'true' }); nav.append(slide);
@@ -857,7 +857,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
   const group = {}; out.queries.forEach((q) => { const g = q[0] || 'Screening log'; (group[g] = group[g] || []).push(q); });
   const qkeys = Object.keys(group).sort(), md = nurse ? measuresDue() : [];
   const main = el('main', { class: 'pihome' },
-    homeWarn(bad, waiting, oldest), pinHelpCard(),
+    homeWarn(bad, waiting, oldest), pinHelpCard(), newCxrCard(),
     el('div', { class: 'homerow' + (canData() ? '' : ' solo') },
       findBox(true),
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', { class: 'tt' }, icon('check'), 'Screen a patient'), el('span', null, screenedToday())) : null,
@@ -909,7 +909,7 @@ function readerHome(bad, waiting, oldest) {
   const { has, todo, done } = filmLists();
   const open = (f, n) => go('form', { tab: 'R_SCORES', key: { study_id: f.study_id, read_no: n } });
   const main = el('main', { class: 'pihome' },
-    homeWarn(bad, waiting, oldest),
+    homeWarn(bad, waiting, oldest), newCxrCard(),
     el('div', { class: 'homerow solo' }, el('button', { class: 'tile primary', id: 'score-film', onclick: () => go('form', { tab: 'R_SCORES', key: {}, preset: { read_no: '1' } }) }, el('b', null, 'Score a film'), el('span', null, 'Type the study number the PI gave you'))),
     feedCard('due ' + (todo.length ? 'hot' : 'calm'), 'Films to score', todo.length, todo.map((f) => { const n = !has(f.study_id, '1') ? '1' : '2'; return { main: f.study_id, sub: 'film of ' + (f.cxr_date || '?') + (n === '2' ? ' · repeat read requested' : '') + (filmImg(f) ? ' · ' + filmImg(f) : ''), chip: f.img && photosOn() && !f.poor ? 'image' : n === '2' ? 'repeat' : 'new', chipCls: f.img && photosOn() && !f.poor ? 'ok' : 'warn', go: () => open(f, n) }; }), () => go('films'), 'Nothing to score'),
     feedCard('calm', 'Scored', done.length, done.map((f) => ({ main: f.study_id, sub: 'film of ' + (f.cxr_date || '?') + (filmImg(f) ? ' · ' + filmImg(f) : ''), go: () => open(f, '1') })), () => go('films'), 'None yet'),
@@ -1534,13 +1534,13 @@ function participants() {
     list.replaceChildren(...(rows.length ? rows.map((r) => {
       const n = next[r.study_id], end = ends[r.study_id];
       return el('button', { class: 'row', onclick: () => go('participant', { sid: r.study_id }) },
-        el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, 'ATT from ' + (r.att_start_date || '?') + ' · diabetes ' + ({ K: 'known', N: 'new', 0: 'no' }[r.dm_status] || 'not recorded'))),
+        el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, 'ATT from ' + (r.att_start_date ? dmy(r.att_start_date) : '?') + ' · diabetes ' + ({ K: 'known', N: 'new', 0: 'no' }[r.dm_status] || 'not recorded'))),
         end ? el('span', { class: 'chip' }, { C: 'completed', W: 'withdrawn', L: 'lost', X: 'transferred', D: 'died' }[end]) : n ? el('span', { class: 'chip ' + (n[5] === 'overdue' ? 'bad' : n[5] === 'due now' ? 'warn' : '') }, n[1] + ' ' + n[5]) : null,
         r._pending ? el('span', { class: 'chip ' + (r._pending === 'pending' ? 'pend' : 'bad') }, r._pending === 'pending' ? 'unsent' : 'fix') : null, el('span', { class: 'chev' }));
     }) : [el('div', { class: 'empty' }, 'No participants')]));
   };
   q.addEventListener('input', fill); fill();
-  return topBar('Participants').concat([el('main', null, q, list)]);
+  return topBar('Participants').concat([el('main', null, allVisitsSwitch(), q, list)]);
 }
 function statusChip(row) {
   if (!row) return el('span', { class: 'chip' }, 'not entered');
@@ -1550,7 +1550,15 @@ function statusChip(row) {
 }
 // A visit's forms stay faded and cannot be opened until the visit window starts (counted from the date ATT started).
 // A form that already has a record stays open, and so does everything once the window has begun, including late entry.
+// Debugging only: one switch opens every visit at once, so the PI can try any visit's forms today.
+function allVisitsOpen() { return !!(T.practice && T.preview && T.pmode === 'debug' && T.allVisits); }
+function allVisitsSwitch() {
+  if (!(T.practice && T.preview && T.pmode === 'debug')) return null;
+  return el('div', { class: 'card small debugsw' }, el('label', { class: 'switch' }, el('input', { type: 'checkbox', role: 'switch', id: 'allvisits', checked: T.allVisits ? true : null,
+    onchange: (ev) => { T.allVisits = ev.target.checked; render(); } }), el('span', null, 'All visits open (Debugging only)')));
+}
 function visitOpens(sid, v) {
+  if (allVisitsOpen()) return '';
   const e = find('S1_ENROL', { study_id: sid }), d0 = e ? dayNo_(e.att_start_date) : null, w = CFG.WINDOWS[v], t = dayNo_(todayIso());
   if (d0 === null || !w || t === null || t >= d0 + w[1]) return '';
   return isoOf_(d0 + w[1]);
@@ -1560,7 +1568,7 @@ function spiroOk(sid) { const v5 = find('VISITS', { study_id: sid, visit: 'V5' }
 const SPIRO_WHY = 'opens when the Visit 5 smear is recorded as negative (not done on a smear-positive patient)';
 function lockedRow(name, opens) { return el('div', { class: 'row locked', 'aria-disabled': 'true' }, el('div', { class: 'main' }, el('div', null, name), el('div', { class: 'sub' }, 'opens ' + opens)), el('span', { class: 'chip' }, 'not yet')); }
 function participant(p) {
-  const sid = p.sid, out = derived(), e = find('S1_ENROL', { study_id: sid }); recordRecent(sid);
+  const sid = p.sid, out = derived(), e = find('S1_ENROL', { study_id: sid }); recordRecent(sid); cxrSeen(sid);
   photoFetch(sid, () => { if (cur().name === 'participant' && cur().p.sid === sid) render(); });
   if (!e) return topBar(sid).concat([el('main', null, el('div', { class: 'card' }, 'This study number is not in the workbook (it may have been withdrawn).'))]);
   const dp = out.participant.filter((r) => r[0] === sid)[0] || [];
@@ -1574,7 +1582,7 @@ function participant(p) {
     const key = visit ? { study_id: sid, visit } : { study_id: sid };
     const opens = visitOpens(sid, curV);
     if (opens && tab !== 'END_STUDY' && !find(tab, key)) return lockedRow(NAMES[tab], opens);
-    if (tab === 'SPIRO' && !find(tab, key) && !spiroOk(sid)) return lockedRow(NAMES[tab], SPIRO_WHY.replace(/^opens /, ''));
+    if (tab === 'SPIRO' && !find(tab, key) && !spiroOk(sid) && !allVisitsOpen()) return lockedRow(NAMES[tab], SPIRO_WHY.replace(/^opens /, ''));
     return el('button', { class: 'row', onclick: () => go('form', { tab, key }) }, el('div', { class: 'main' }, el('div', null, NAMES[tab])), docPill(sid, tab, visit, find(tab, key)), statusChip(find(tab, key)), el('span', { class: 'chev' }));
   };
   const visits = ['V1', 'V2', 'V3', 'V4', 'V5'].map((v) => {
@@ -1596,7 +1604,7 @@ function participant(p) {
     ['Timika', D.timika_final], ['Cavity', word(D.cavity_final, { Y: 'yes', N: 'no' })], ['ALT max', altMax.length ? Math.max.apply(null, altMax) + '×' : ''], ['DILI', mine.length ? (dili ? 'met' : 'no') : ''],
     ['PHQ-9', D.phq9_v1], ['GAD-7', D.gad7_v1], ['Item 9', D.item9_positive === 'Y' ? 'yes' : 'no'], ['DM M3', word(D.dm_class_v4, { P: 'persistent', T: 'transient', K: 'known', X: 'new', 0: 'no' })]];
   const hot = (f) => (f[0] === 'Item 9' && f[1] === 'yes') || (f[0] === 'DILI' && f[1] === 'met');
-  const main = el('main', null,
+  const main = el('main', null, allVisitsSwitch(),
     el('div', { class: 'list' }, el('button', { class: 'row', onclick: () => go('form', { tab: 'S1_ENROL', key: { study_id: sid } }) },
       el('div', { class: 'main' }, el('div', null, 'Enrolment details'), el('div', { class: 'sub' }, 'ATT started ' + (e.att_start_date || '?'))), docPill(sid, 'S1_ENROL', '', e), statusChip(e), el('span', { class: 'chev' }))),
     el('div', { class: 'facts4' }, facts.map((f) => el('div', { class: hot(f) ? 'bad' : '' }, el('span', null, f[0]), el('b', null, f[1] === '' || f[1] === undefined ? '–' : f[1])))),
@@ -1807,6 +1815,36 @@ function attention() {
         el('button', { class: 'btn danger', onclick: () => modal('Discard this entry?', [el('p', null, 'It will be removed from this phone and never sent.')], [['Keep', null], ['Discard', async () => { S.outbox.splice(S.outbox.indexOf(c), 1); await saveState(); render(); }, 'danger']]) }, 'Discard')))),
     bad.length ? null : el('div', { class: 'empty' }, 'Nothing needs fixing'))]);
 }
+// New chest radiograph: an in-app badge for the PI and the readers when a radiograph is uploaded. "Seen" is kept per phone; on the first
+// look everything already there counts as seen, so only radiographs that arrive afterwards are new. Opening the participant (PI) or the
+// scoring page (reader) marks that study number seen.
+const CXRSEEN = 'tbdm-cxrseen';
+function cxrKeys() {
+  if (!S || !S.server || !photosOn() || T.practice || T.preview) return [];
+  if (role() === 'pi') return (S.server.cxrPhotos || []).map((x) => [x.study_id, 'p' + x.id]);
+  if (isReader()) return (S.server.films || []).filter((f) => f.img > 0 && !f.poor).map((f) => [f.study_id, 'r' + f.study_id + ':' + f.img]);
+  return [];
+}
+function cxrSeenSet() { try { return JSON.parse(localStorage.getItem(CXRSEEN) || 'null'); } catch (e) { return null; } }
+function cxrSeenSave(o) { try { o.keys = o.keys.slice(-800); localStorage.setItem(CXRSEEN, JSON.stringify(o)); } catch (e) { /* no storage: the badge just stays */ } }
+function newCxr() {
+  const keys = cxrKeys(); if (!keys.length) return [];
+  let seen = cxrSeenSet();
+  if (!seen) { seen = { keys: keys.map((k) => k[1]) }; cxrSeenSave(seen); return []; }
+  const out = []; keys.forEach((k) => { if (seen.keys.indexOf(k[1]) < 0 && out.indexOf(k[0]) < 0) out.push(k[0]); });
+  return out;
+}
+function cxrSeen(sid) {
+  const keys = cxrKeys().filter((k) => k[0] === sid), seen = cxrSeenSet(); if (!keys.length || !seen) return;
+  let ch = false; keys.forEach((k) => { if (seen.keys.indexOf(k[1]) < 0) { seen.keys.push(k[1]); ch = true; } });
+  if (ch) cxrSeenSave(seen);
+}
+function newCxrCard() {
+  const list = newCxr(); if (!list.length) return null;
+  const open = (sid) => (isReader() ? go('form', { tab: 'R_SCORES', key: { study_id: sid, read_no: (S.server.films.filter((f) => f.study_id === sid)[0] || {}).repeat && view('R_SCORES').some((r) => r.study_id === sid && r.read_no === '1') ? '2' : '1' } }) : go('participant', { sid }));
+  return el('div', { class: 'card newcxr', id: 'newcxr' }, el('b', null, 'New chest radiograph' + (list.length > 1 ? 's' : '') + ' (' + list.length + ')'),
+    el('div', { class: 'list' }, list.map((sid) => el('button', { class: 'row', type: 'button', 'data-sid': sid, onclick: () => open(sid) }, el('div', { class: 'main' }, el('div', null, sid), el('div', { class: 'sub' }, 'radiograph uploaded')), el('span', { class: 'chip ok' }, 'new'), el('span', { class: 'chev' })))));
+}
 function films() {
   const { mine, has, todo, done } = filmLists();
   const item = (f) => {
@@ -1959,6 +1997,7 @@ function formScreen(p) {
       carried: existing ? [] : (p.carried || []), numberGiven: !existing && !!(p.preset && s_(p.preset.study_id)), autoExcl: tab === 'S0_SCREEN' && s_(vals.smear_grade) === 'N' && s_(vals.excl_code) === '8', autoNo: tab === 'S0_SCREEN' && s_(vals.excl_code) !== '' };
   }
   const F = T.form, ctxVisit = s_(F.vals.visit);
+  if (tab === 'R_SCORES' && idOk_(s_(F.vals.study_id))) cxrSeen(s_(F.vals.study_id).toUpperCase());      // the reader has the film open: no longer new
   const title = NAMES[tab] + (F.vals.study_id && tab !== 'S0_SCREEN' ? ' · ' + F.vals.study_id : '') + (ctxVisit ? ' ' + ctxVisit : '');
   const main = el('main', { id: 'formmain' });
   const pend = F.existing && F.existing._pending ? S.outbox.filter((c) => c.cid === F.existing._cid)[0] : null;
@@ -2229,7 +2268,7 @@ async function saveForm() {
     const dup = APP_SERIAL[F.tab] ? null : find(F.tab, F.vals);
     if (dup) { toast('This record already exists. Opening it.'); T.form = null; T.nav[T.nav.length - 1].p.key = F.vals; render(); return; }
   }
-  if (F.tab === 'SPIRO' && !F.existing && !spiroOk(s_(F.vals.study_id))) { toast('Spirometry is not done yet: the Visit 5 smear must be recorded as negative first.'); return; }
+  if (F.tab === 'SPIRO' && !F.existing && !spiroOk(s_(F.vals.study_id)) && !allVisitsOpen()) { toast('Spirometry is not done yet: the Visit 5 smear must be recorded as negative first.'); return; }
   if (F.tab === 'EVENTS' && s_(F.vals.event_type) === 'E2') { const rt = rucamTotal_(F.vals); F.vals.e2_rucam_score = rt === '' ? '' : String(rt); }
   if (F.tab === 'R_SCORES' && s_(F.vals.cavity).toUpperCase() === 'N') F.vals.n_cavities = '0';
   Object.keys(UNIT_DEF).forEach((k) => { if (k in F.vals && UNIT_DEF[k].vals.every((x) => s_(F.vals[x]) === '') && !(F.existing && s_(F.existing[k]))) F.vals[k] = ''; });   // a unit only beside a value
@@ -2310,7 +2349,7 @@ function practiceStart() {
   S.server = { access: T.real.server && T.real.server.access, tabs: practiceTabs(), at: Date.now(), films: /^reader/.test(T.real.cfg.role) ? [{ study_id: PRAC_A, cxr_date: isoOf_(dayNo_(todayIso()) - 41), repeat: false }, { study_id: PRAC_B, cxr_date: isoOf_(dayNo_(todayIso()) - 4), repeat: false }] : [] };
   T.practice = true; resetNav(); T.form = null; render();
 }
-function practiceStop() { if (!T.practice) return; S = T.real; T.real = null; T.practice = false; T.preview = null; T.pmode = null; T.reg = null; T.link = null; resetNav(); T.form = null; render(); }
+function practiceStop() { if (!T.practice) return; T.allVisits = false; S = T.real; T.real = null; T.practice = false; T.preview = null; T.pmode = null; T.reg = null; T.link = null; resetNav(); T.form = null; render(); }
 // ---- PI only: two ways to enter another role, both built from the ticks saved in the Role manager, neither ever sends anything.
 // Surveillance ('watch'): the real study data on this phone, cut to exactly what that role's phone would receive; read only.
 // Debugging ('debug'): the practice sandbox (made-up participants and register); entries are allowed and stay in the sandbox.
