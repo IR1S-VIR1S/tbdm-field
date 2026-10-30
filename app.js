@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'c620d10ea339';                 // replaced by build.js with the build's hash
+const BUILD_ID = '4e633da4f568';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1546,13 +1546,17 @@ function participants() {
 // entered (Entered, Partly entered with the missing values named, Not entered), with the report photo where photos are on. Nothing new is
 // stored: it reads the laboratory row, the visit form (sputum smear) and the photo list.
 const GROUP_PAGES = { 'Blood count': ['CBC'], HbA1c: ['HBA1C'], 'Glucose and lipids (fasting)': ['FPG', 'LIPID'], 'Liver tests': ['LFT'], Serology: ['HEP', 'HIV'] };
+// On the order checklist some form groups are ordered as separate tests: [name, values, report pages] (PI, 30 Oct 2026).
+const ORDER_SPLIT = { 'Glucose and lipids (fasting)': [['Fasting glucose', ['glucose_unit', 'fpg'], ['FPG']], ['Fasting lipids', ['lipid_unit', 'tg', 'hdl', 'tc', 'ldl'], ['LIPID']]],
+  Serology: [['HBsAg', ['hbsag'], ['HEP']], ['Anti-HCV', ['anti_hcv'], ['HEP']], ['HIV', ['hiv'], ['HIV']]] };
 function labOrderItems(sid, v) {
   const row = find('LABS', { study_id: sid, visit: v }), def = defOf('LABS'), lab = (k) => (def.cols.filter((c) => c.key === k)[0] || { label: k }).label.split(/,| \(/)[0];
   const st = row ? s_(row.lab_status) : '', stopped = st && st !== '1' ? codeText(def.cols.filter((c) => c.key === 'lab_status')[0], st) : '';
-  const items = LAB_GROUPS.filter((g) => g[2] && g[2].indexOf(v) >= 0).map((g) => {
+  const groups = LAB_GROUPS.filter((g) => g[2] && g[2].indexOf(v) >= 0).reduce((a, g) => a.concat(ORDER_SPLIT[g[0]] ? ORDER_SPLIT[g[0]].map((x) => [x[0], x[1], g[2], x[2]]) : [[g[0], g[1], g[2], GROUP_PAGES[g[0]] || []]]), []);
+  const items = groups.map((g) => {
     const keys = g[1].filter((k) => !UNIT_DEF[k]), have = row ? keys.filter((k) => s_(row[k]) !== '') : [], miss = keys.filter((k) => have.indexOf(k) < 0);
     return { name: g[0], tab: 'LABS', state: stopped ? 'stopped' : !have.length ? 'none' : miss.length ? 'part' : 'done', note: stopped || (have.length && miss.length ? 'missing: ' + miss.map(lab).join(', ') : ''),
-      focus: miss[0] || keys[0], docs: (GROUP_PAGES[g[0]] || []).map((p) => 'LAB_' + p) };
+      focus: miss[0] || keys[0], docs: g[3].map((p) => 'LAB_' + p) };
   });
   if (smearVisit(v, sid)) {                                        // the sputum smear goes on the visit form
     const vr = find('VISITS', { study_id: sid, visit: v }), r = vr ? s_(vr.smear_result) : '';
