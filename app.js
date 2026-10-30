@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '88018bf22ea2';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'e022ee292397';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -776,11 +776,16 @@ function navDrag(nav) {
     clearTimeout(timer); clearInterval(edge);
     if (drag) {
       drag.el.classList.remove('dragging'); drag.el.style.transform = ''; nav.classList.remove('dragmode');
+      const drag0 = { dx: drag.x - drag.x0 };
       drag = null; swallow = true; setTimeout(() => { swallow = false; }, 350);
-      if (save) {                                                        // the bar stays in arranging mode, with minus and plus, until Done
-        const order = btns().map((b) => b.dataset.tab);
-        T.navEdit = { order, hidden: navHidden().slice() };
-        T.navScroll = nav.scrollLeft; render();
+      if (save) {
+        const order = btns().map((b) => b.dataset.tab), moved = drag0 && Math.abs(drag0.dx) > 12;
+        T.navScroll = nav.scrollLeft;
+        if (T.navEdit) { T.navEdit.order = order; render(); }                        // arranging already: the new order waits for Done
+        else if (moved) {                                                            // hold and drag: the tab moves and the order is saved, no arranging mode
+          if (T.preview) navSetDefault(order, navHidden().slice());
+          else { try { localStorage.setItem(NAVKEY, JSON.stringify({ order, hidden: navHidden().slice(), at: Date.now() })); } catch (e) { /* ignore */ } }
+        } else { T.navEdit = { order, hidden: navHidden().slice() }; render(); }      // hold and let go without moving: arranging mode, with minus, plus and Done
       }
     }
   };
@@ -803,7 +808,7 @@ function navDrag(nav) {
     b.addEventListener('pointerdown', (ev) => {
       if (drag) return; sx = ev.clientX; sy = ev.clientY; clearTimeout(timer);
       timer = setTimeout(() => {
-        drag = { el: b, x: sx }; b.classList.add('dragging'); nav.classList.add('dragmode');
+        drag = { el: b, x: sx, x0: sx }; b.classList.add('dragging'); nav.classList.add('dragmode');
         try { b.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
         if (navigator.vibrate) navigator.vibrate(15);
         follow(sx);
