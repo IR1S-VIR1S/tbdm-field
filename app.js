@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'd63806f5814e';                 // replaced by build.js with the build's hash
+const BUILD_ID = '76d293e2baf4';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1443,26 +1443,67 @@ function labApply(F, f) {                                         // only blank 
   if (T.refill) { const y = window.scrollY; T.refill(); window.scrollTo(0, y); }
   return got;
 }
-function slipReadCard(st, apply) {
+// The newest OPD slip kept for a participant, fetched from the workbook at full resolution (online only, nothing is kept on the phone).
+async function savedSlip(sid) {
+  const r = await api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 20000);
+  if (!r.ok) throw new Error(r.error || 'not available');
+  const ph = (r.photos || []).filter((x) => x.doc === 'SLIP').sort((a, b) => s_(b.taken_at).localeCompare(s_(a.taken_at)))[0];
+  if (!ph) return null;
+  const g = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 240000);
+  if (!g.ok) throw new Error(g.error || 'not available');
+  const bin = atob(g.data), u8 = new Uint8Array(bin.length);
+  for (let k = 0; k < bin.length; k++) u8[k] = bin.charCodeAt(k);
+  return { ph, src: 'data:' + g.mime + ';base64,' + g.data, file: new File([u8], 'slip.' + (g.mime === 'image/png' ? 'png' : 'jpg'), { type: g.mime }) };
+}
+// sid given: the participant has a study number, so a slip kept earlier can be read again (PI and DOTS incharge, online).
+function slipReadCard(st, apply, sid) {
   if (!photosOn() || T.practice || !navigator.onLine) return null;
   const R = st.read || (st.read = { busy: false, msg: '', err: '', extra: null });
-  const go = async (file) => {
+  const run = async (file, kept) => {
     R.busy = true; R.err = ''; R.msg = ''; render();
-    try { const bc = await readBarcode(file), datas = await readVersions(file), r = await api({ op: 'read_doc', token: S.cfg.token, kind: 'slip', mime: 'image/jpeg', datas, barcode: bc }, 120000);
+    try { const bc = await readBarcode(file), datas = await readVersions(file), r = await api({ op: 'read_doc', token: S.cfg.token, kind: 'slip', mime: 'image/jpeg', datas, barcode: bc, study_id: sid || '' }, 120000);
       if (!r.ok) throw new Error(r.error || 'not read');
-      apply(r.fields || {}); st.slipFile = file; const n = ['name', 'mrn', 'cnic'].filter((k) => (r.fields || {})[k]).length;
-      R.msg = n ? 'Filled ' + n + ' value' + (n > 1 ? 's' : '') + ' from the slip. Check each one against the slip before saving.' : 'Nothing could be read from this picture. Type the values.';
+      apply(r.fields || {}); if (!kept) st.slipFile = file; const n = ['name', 'mrn', 'cnic'].filter((k) => (r.fields || {})[k]).length;
+      R.msg = n ? 'Filled ' + n + ' value' + (n > 1 ? 's' : '') + ' from the ' + (kept ? 'saved ' : '') + 'slip. Check each one against the slip before saving.' : 'Nothing could be read from this picture. Type the values.';
       R.notes = r.notes || []; R.checks = r.checks || {};
       R.extra = r.fields && (r.fields.age || r.fields.sex) ? 'Slip also shows: ' + [r.fields.age ? 'age ' + r.fields.age : '', r.fields.sex ? (r.fields.sex === 'F' ? 'female' : 'male') : ''].filter(Boolean).join(', ') : null; }
     catch (e) { R.err = 'Not read: ' + e.message; }
     R.busy = false; render();
   };
-  return el('div', { class: 'card readcard', id: 'slipread' }, el('b', null, 'Read from the OPD slip'), el('div', { class: 'small muted' }, 'Photograph the slip, or choose a screenshot. Name, MRN and CNIC are filled in for you to check. The picture is not kept.'),
-    el('div', { class: 'row2' }, ...pickImage(go)), R.busy ? el('div', { class: 'small' }, 'Reading…') : null, R.msg ? el('div', { class: 'small', id: 'slipmsg' }, el('b', null, R.msg)) : null,
+  const again = async () => {
+    R.busy = true; R.err = ''; R.msg = ''; render();
+    let got = null;
+    try { got = await savedSlip(sid); } catch (e) { R.busy = false; R.err = 'The saved slip could not be opened: ' + e.message; render(); return; }
+    if (!got) { R.busy = false; R.err = 'No slip has been saved for ' + sid + ' yet. A slip taken on a phone reaches the workbook at its next sync.'; render(); return; }
+    run(got.file, true);
+  };
+  const canAgain = !!sid && photoViewer();
+  if (canAgain && st.autoRead) { st.autoRead = false; setTimeout(again, 0); }      // "Read again" pressed on the slip itself
+  const keeps = photoTaker();
+  return el('div', { class: 'card readcard', id: 'slipread' }, el('b', null, 'Read from the OPD slip'),
+    el('div', { class: 'small muted' }, 'Photograph the slip, or choose a screenshot. Name, MRN and CNIC are filled in for you to check. ' + (keeps ? 'The picture is kept at full resolution as the participant\'s source document, so it can be opened and read again later.' : 'The picture is not kept.')),
+    el('div', { class: 'row2' }, ...pickImage((f) => run(f, false))),
+    canAgain ? el('button', { class: 'btn block', type: 'button', id: 'slip-again', disabled: R.busy, onclick: again }, icon('records'), ' Read the saved slip again') : null,
+    R.busy ? el('div', { class: 'small' }, 'Reading…') : null, R.msg ? el('div', { class: 'small', id: 'slipmsg' }, el('b', null, R.msg)) : null,
     R.extra ? el('div', { class: 'small muted' }, R.extra) : null,
     (R.notes || []).length ? el('ul', { class: 'small readnotes', id: 'slipnotes' }, R.notes.map((x) => el('li', null, x))) : null,
     R.checks && R.checks.mrn ? el('div', { class: 'small muted', id: 'mrnhow' }, 'MRN: ' + ({ barcode: 'from the barcode (exact)', agree: 'both printed copies agree', single: 'one printed copy only', conflict: 'not filled, the copies disagree' })[R.checks.mrn]) : null,
     R.err ? el('div', { class: 'small bad', id: 'sliperr' }, R.err) : null);
+}
+// The OPD slip on the contact page (PI and DOTS incharge): open it at full resolution, or read it again into the form.
+function slipCard(st, sid) {
+  if (!photosOn() || !photoViewer() || T.practice) return null;
+  const on = navigator.onLine;
+  const view = async () => {
+    toast('Opening the slip…');
+    try { const got = await savedSlip(sid); if (!got) { toast('No slip has been saved for ' + sid + ' yet.'); return; } photoOpen(got.ph, got.src, sid); }
+    catch (e) { toast('The slip could not be opened: ' + e.message); }
+  };
+  return el('div', { class: 'card', id: 'slipcard' }, el('div', { class: 'muted small' }, 'OPD slip'),
+    el('div', { class: 'row2' },
+      el('button', { class: 'btn block', type: 'button', id: 'slip-view', disabled: !on, onclick: view }, 'View the slip'),
+      el('button', { class: 'btn block', type: 'button', id: 'slip-reread', disabled: !on || !linkUp(), onclick: () => { st.edit = true; st.msg = ''; st.autoRead = true; render(); } }, 'Read again')),
+    on ? null : el('div', { class: 'small muted' }, 'The slip opens only with a signal.'));
 }
 function waDigits(ph) {                                   // 0300... becomes 92300..., for WhatsApp
   let d = s_(ph).replace(/\D/g, '');
@@ -1473,6 +1514,7 @@ function linkScreen(p) {
   const sid = p.sid;
   if (!T.link || T.link.sid !== sid) { T.link = { sid: sid, data: null, err: '', msg: '', busy: true, edit: false }; setTimeout(() => linkLoad(sid), 0); }   // never load inside a render: the nested render would draw the page twice
   const st = T.link || { busy: true }, off = !linkUp(), d = st.data, f = st.form || {};
+  if (d && T.slipAgain === sid) { T.slipAgain = ''; st.edit = true; st.autoRead = true; }      // Read again pressed in the slip viewer
   const field = (k, lab, ml) => el('div', { class: 'field' }, el('label', { class: 'lab' }, lab),
     el('input', { type: 'text', maxlength: String(ml), value: f[k] || '', inputmode: k === 'phone' ? 'tel' : 'text', oninput: (ev) => { f[k] = ev.target.value; } }));
   const show = (lab, v) => el('div', { class: 'card' }, el('div', { class: 'muted small' }, lab), el('div', null, v || '–'));
@@ -1491,8 +1533,9 @@ function linkScreen(p) {
       show('Name', d.name), show('Record number (MRN)', d.mrn), show('CNIC', d.cnic), show('Father or husband name', d.guardian), show('Address', d.address), show('Note', d.note),
       d.updated ? el('div', { class: 'small muted' }, 'Last changed ' + d.updated) : null,
       el('button', { class: 'btn block', type: 'button', disabled: off && !st.offline, onclick: () => { st.edit = true; st.msg = ''; render(); } }, 'Edit'),
+      slipCard(st, sid),
       !can('view') && can('photoView') ? photoViewCard(sid) : null] : null,
-    d && st.edit ? [slipReadCard(st, (r) => { ['name', 'mrn', 'cnic'].forEach((k) => { if (r[k]) f[k] = k === 'name' ? titleName(r[k]) : r[k]; }); }), field('name', 'Participant name', 60), field('mrn', 'Record number (MRN), required', 30), field('cnic', 'CNIC (13 digits)', 15), field('phone', 'Telephone, required, e.g. 03001234567', 16), field('guardian', 'Father or husband name', 60), field('address', 'Address', 200), field('note', 'Note', 200),
+    d && st.edit ? [slipReadCard(st, (r) => { ['name', 'mrn', 'cnic'].forEach((k) => { if (r[k]) f[k] = k === 'name' ? titleName(r[k]) : r[k]; }); }, sid), field('name', 'Participant name', 60), field('mrn', 'Record number (MRN), required', 30), field('cnic', 'CNIC (13 digits)', 15), field('phone', 'Telephone, required, e.g. 03001234567', 16), field('guardian', 'Father or husband name', 60), field('address', 'Address', 200), field('note', 'Note', 200),
       el('button', { class: 'btn primary block', type: 'button', disabled: (off && !st.offline) || st.busy, onclick: () => linkSave() }, st.busy ? 'Saving…' : (off ? 'Save on this phone' : 'Save'))] : null
   )]);
 }
@@ -3030,7 +3073,7 @@ function photoViewCard(sid) {
       const r = await api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 20000);
       if (!r.ok) throw new Error(r.error || 'not available');
       box.replaceChildren(el('b', null, /^reader/.test(role()) ? 'Radiograph photo' : 'Source documents'),
-        r.photos.length ? el('div', { class: 'list' }, r.photos.map((ph) => el('button', { class: 'row', type: 'button', onclick: () => photoOpen(ph) },
+        r.photos.length ? el('div', { class: 'list' }, r.photos.map((ph) => el('button', { class: 'row', type: 'button', onclick: () => photoOpen(ph, null, sid) },
           el('div', { class: 'main' }, el('div', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '') + (ph.covered === 'Y' ? ' (label covered)' : '')), el('div', { class: 'sub' }, [s_(ph.taken_at).replace('T', ' '), ph.taken_by].filter(Boolean).join(' · '))),
           ph.flag ? el('span', { class: 'chip bad' }, 'too poor') : null, el('span', { class: 'chev' })))) : el('div', { class: 'small muted' }, 'No photos yet.'));
     } catch (e) { box.replaceChildren(el('b', null, 'Source documents'), el('div', { class: 'small muted' }, navigator.onLine ? 'Could not load: ' + e.message : 'Photos open only with a signal.')); }
@@ -3255,7 +3298,7 @@ function photosScreen(p) {                                  // the participant's
   if (card) setTimeout(() => { const b = $('#photo-show'); if (b) b.click(); }, 0);
   return topBar('Source documents · ' + p.sid).concat([el('main', null, card || el('div', { class: 'card' }, 'Source documents are not available on this phone.'))]);
 }
-async function photoOpen(ph, have) {
+async function photoOpen(ph, have, sid) {
   const ov = el('div', { class: 'photo-full', role: 'dialog', 'aria-label': 'Photo' }, el('div', { class: 'small' }, 'Loading…'));
   const close = () => ov.remove();
   document.body.append(ov);
@@ -3267,7 +3310,8 @@ async function photoOpen(ph, have) {
     const zoom = (n) => { z = n; img.style.width = n === 0 ? img.naturalWidth + 'px' : (100 * z) + '%'; img.style.maxWidth = 'none'; ov.querySelectorAll('.pf-z').forEach((b) => b.classList.toggle('primary', +b.dataset.z === z)); };   // 0 = actual pixels (full resolution)
     ov.replaceChildren(el('div', { class: 'pf-bar' }, el('b', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '')),
       /^reader/.test(role()) ? null : [1, 2, 3, 0].map((n) => el('button', { class: 'btn small pf-z' + (n === 1 ? ' primary' : ''), type: 'button', 'data-z': String(n), title: n === 0 ? 'Actual pixels, full resolution' : '', onclick: () => zoom(n) }, n === 0 ? '1:1' : n + '×')),
-      have ? null : el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked as too poor to read. The PI has been told.' : 'Could not mark it: ' + (f.error || 'no signal')); } }, 'Too poor'),
+      ph.doc === 'SLIP' && sid && confRole() && linkUp() ? el('button', { class: 'btn small', type: 'button', id: 'photo-reread', onclick: () => { close(); T.slipAgain = sid; if (cur().name === 'link' && T.link && T.link.sid === sid) render(); else go('link', { sid }); } }, 'Read again') : null,
+      have && ph.doc !== 'SLIP' ? null : el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked as too poor to read. The PI has been told.' : 'Could not mark it: ' + (f.error || 'no signal')); } }, 'Too poor'),
       el('button', { class: 'btn small', type: 'button', id: 'photo-close', onclick: close }, 'Close')), pane);
   } catch (e) { ov.replaceChildren(el('div', { class: 'small' }, 'Could not open: ' + e.message), el('button', { class: 'btn', onclick: close }, 'Close')); }
 }
