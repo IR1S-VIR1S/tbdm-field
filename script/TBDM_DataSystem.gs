@@ -564,7 +564,7 @@ function validateValue_(c, v, row, ctx) {                   // '' when acceptabl
     case 'date': {
       const d = dayNo_(s);
       if (d === null) return 'is not a date';
-      if (d < dayNo_(CFG.EARLIEST)) return 'is before ' + CFG.EARLIEST;
+      if (d < dayNo_(CFG.EARLIEST)) return 'is before ' + dateTxt_(CFG.EARLIEST);
       return ctx && ctx.today !== null && ctx.today !== undefined && d > ctx.today ? 'is in the future' : '';
     }
     case 'time': return minutes_(s) === null ? 'is not a time (hh:mm)' : '';
@@ -1208,6 +1208,9 @@ function validationFormula_(c, L, def) {
   }
   return null;
 }
+// One date style everywhere people read a date: 29 Oct 2026. Stored dates stay ISO (2026-10-29).
+const MONTHS_ = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function dateTxt_(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso === null || iso === undefined ? '' : iso)); return m ? (+m[3]) + ' ' + MONTHS_[+m[2] - 1] + ' ' + m[1] : String(iso === null || iso === undefined ? '' : iso); }
 function helpText_(c) {
   if (c.hint) return c.hint;
   if (c.codes) return c.codes.map(function (p) { return p[0] + (p[1] ? ' = ' + p[1] : ''); }).join('; ');
@@ -1215,7 +1218,7 @@ function helpText_(c) {
     case 'num': return 'Number from ' + c.min + ' to ' + c.max;
     case 'int': return 'Whole number from ' + c.min + ' to ' + c.max;
     case 'uniqueint': return 'Whole number, not used before in this tab';
-    case 'date': return 'Date: pick it from the calendar or type it as 14/10/2026. Not before ' + CFG.EARLIEST;
+    case 'date': return 'Date: pick it from the calendar or type it as 29 Oct 2026. Not before ' + dateTxt_(CFG.EARLIEST);
     case 'time': return '24-hour time, hh:mm, for example 08:30';
     case 'text': return 'Text, at most ' + c.max + ' characters. Never a name or any other identifier';
     case 'sidnew': return 'Study number ' + idOf_(1) + ' to ' + idOf_(CFG.ID_MAX) + ', exactly as in the paper linking log. Once only in this tab';
@@ -2195,6 +2198,7 @@ function doPost(e) {
   try { req = JSON.parse(e && e.postData ? e.postData.contents : '{}'); } catch (err) { return appJson_({ ok: false, error: 'bad request' }); }
   try {
     if (req.op === 'join') return appJson_(appJoin_(req));
+    if (req.op === 'pin_help') return appJson_(pinHelp_(req));          // a locked phone: no token, so it can only ask, never read
     const u = appUser_(req.token);
     if (!u) return appJson_({ ok: false, error: 'not authorised', code: 401 });
     if (req.op === 'hello') return appJson_({ ok: true, schema: wbSchema_(), version: CFG.VERSION });
@@ -2212,6 +2216,7 @@ function doPost(e) {
     if (req.op === 'access_set') return appJson_(accessSet_(u, req));
     if (req.op === 'nav_set') return appJson_(navSet_(u, req));
     if (req.op === 'invite') return appJson_(appInvite_(u, req));
+    if (req.op === 'pin_help_dismiss') return appJson_(pinHelpDismiss_(u, req));
     if (req.op === 'push') {
       const theirs = req.schema === undefined ? 1 : Number(req.schema);   // apps older than the handshake send none
       if (theirs < CFG.SCHEMA_VER) return appJson_({ ok: false, error: 'This app is out of date. Close it and open it again while online.', code: 409 });
@@ -2251,6 +2256,7 @@ function appPull_(u) {
   if (u.role === 'pi') out.accessStored = accessStored_();           // the Role manager grid on the PI phone
   out.roleName = accessRoleName_(u.role, accessStored_());
   { const no = navOrders_(); out.navOrder = no[navKey_(u.role)] || null; if (u.role === 'pi') out.navOrders = no; }
+  if (u.role === 'pi') out.pinHelp = pinHelpList_();
   if (!/^reader/.test(u.role) && !acc.view) {             // without the full clinical data: only the tabs its ticks need, and only their columns
     const nss = dataSS_(), want = {};
     if (acc.screen) { want.S0_SCREEN = 1; want.S1_ENROL = 1; }
@@ -2999,10 +3005,51 @@ function appInvite_(u, req) {
   } catch (e) { /* the daily check and "manage users" still report extra access */ }
   const code = randomHex_(32), expires = Date.now() + APP_JOIN_DAYS * 864e5;
   P.setProperty('APPJOIN_' + sha256_(code), JSON.stringify({ email: email, expires: expires }));
+  pinHelpClear_(email);                                                  // a forgotten-PIN request is answered by this invitation
   const rname = accessRoleName_(role, accessStored_());
   logAudit_('APP', '', '', before ? accessRoleName_(before, stored) : '', email, 'phone app invitation issued from the PI phone (' + rname + ')', u.email);
   return { ok: true, email: email, role: role, roleName: rname, moved: before && before !== role ? accessRoleName_(before, stored) : '', shared: shared,
     link: appUrl.replace(/#.*$/, '') + '#join=' + encodeURIComponent(api) + '~' + code, days: APP_JOIN_DAYS };
+}
+// Forgotten PIN. The PIN is the only key to the phone's own copy, so it cannot be recovered: the person needs a new invitation.
+// A locked phone sends its e-mail (kept outside the PIN vault for this purpose only). Nothing is revealed: the answer is the same for
+// any e-mail. A study member's request is kept for the PI (PIN_HELP), e-mailed to the PI, and shown on the PI phone with one-tap re-invite.
+const PIN_HELP_GAP_MS = 10 * 60000;
+function pinHelpRaw_() { try { return JSON.parse(props_().getProperty('PIN_HELP') || '{}') || {}; } catch (e) { return {}; } }
+function pinHelpList_() {
+  const raw = pinHelpRaw_(), stored = accessStored_();
+  return Object.keys(raw).map(function (em) { return { email: em, role: raw[em].role, roleName: accessRoleName_(raw[em].role, stored), at: raw[em].at }; })
+    .filter(function (x) { return roleOf_(x.email); }).sort(function (a, b) { return b.at - a.at; });
+}
+function pinHelpClear_(email) {
+  const raw = pinHelpRaw_();
+  if (!raw[email]) return;
+  delete raw[email]; props_().setProperty('PIN_HELP', JSON.stringify(raw));
+}
+function pinHelp_(req) {
+  const email = str_(req.email).trim().toLowerCase();
+  if (!/^[^@\s,]+@[^@\s,]+\.[^@\s,]+$/.test(email)) return { ok: false, error: 'that is not an e-mail address' };
+  const role = roleOf_(email);
+  if (!role || role === 'pi') return { ok: true };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const raw = pinHelpRaw_();
+    if (raw[email] && Date.now() - raw[email].at < PIN_HELP_GAP_MS) return { ok: true };       // asked a moment ago: one request is enough
+    raw[email] = { at: Date.now(), role: role };
+    const keep = Object.keys(raw).sort(function (a, b) { return raw[b].at - raw[a].at; }).slice(0, 50), out = {};
+    keep.forEach(function (k) { out[k] = raw[k]; });
+    props_().setProperty('PIN_HELP', JSON.stringify(out));
+  } finally { lock.releaseLock(); }
+  const rname = accessRoleName_(role, accessStored_());
+  logAudit_('APP', '', '', '', email, 'forgotten PIN: a new invitation was requested from the phone (' + rname + ')', email);
+  notifyPI_('[TBDM] Forgotten PIN: ' + email, email + ' (' + rname + ') has forgotten the phone app PIN and asks for a new invitation.\n\nOn your phone: Home shows the request. Tap Send new invitation and send the link to them.');
+  return { ok: true };
+}
+function pinHelpDismiss_(u, req) {
+  if (!u || u.role !== 'pi') return { ok: false, error: 'only the PI can do this', code: 401 };
+  pinHelpClear_(str_(req.email).trim().toLowerCase());
+  return { ok: true, pinHelp: pinHelpList_() };
 }
 function accessLater_() {
   props_().setProperty('ACCESS_PENDING', 'Y');

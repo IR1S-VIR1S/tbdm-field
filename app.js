@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '9af6670c6a90';                 // replaced by build.js with the build's hash
+const BUILD_ID = '22e1b293a742';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -63,6 +63,7 @@ async function kv(mode, fn) { const db = await idb(); return new Promise((res, r
 const kvGet = (k) => kv('readonly', (s) => s.get(k));
 const kvSet = (k, v) => kv('readwrite', (s) => s.put(v, k));
 const kvDel = (k) => kv('readwrite', (s) => s.delete(k));
+const kvKeys = () => kv('readonly', (s) => s.getAllKeys());
 async function deriveKey(pin, salt) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: PBKDF2_ROUNDS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
@@ -115,11 +116,22 @@ function bioIcon() {                                       // a plain face-scan 
   b.innerHTML = '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 17V12a6 6 0 0 1 6-6h5M31 6h5a6 6 0 0 1 6 6v5M42 31v5a6 6 0 0 1-6 6h-5M17 42h-5a6 6 0 0 1-6-6v-5"/><path d="M17.5 19v3M30.5 19v3M24 19.5v6.5h-2.2M17.5 31.5c3.8 3.6 9.2 3.6 13 0"/></svg>';
   return b;
 }
+const ANDROID = /Android/i.test(navigator.userAgent);
+// Fingerprint unlock needs two things from the browser: a built-in biometric, and the PRF extension that releases a secret after the check.
+// On Android, Chrome gives PRF only for passkeys kept in Google Password Manager, so there the passkey is a stored (discoverable) one.
 async function bioAvailable() {
   T.bioWhy = '';
   if (!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create)) { T.bioWhy = 'WebAuthn: not in this browser'; return false; }
-  try { const v = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); T.bioWhy = 'WebAuthn: yes; built-in biometric reported: ' + (v ? 'yes' : 'no'); return !!v; }
-  catch (e) { T.bioWhy = 'WebAuthn: yes; check failed (' + (e && e.name) + ')'; return false; }
+  try {
+    let caps = null;
+    if (PublicKeyCredential.getClientCapabilities) { try { caps = await PublicKeyCredential.getClientCapabilities(); } catch (e) { caps = null; } }
+    const v = caps && caps.userVerifyingPlatformAuthenticator !== undefined ? !!caps.userVerifyingPlatformAuthenticator : await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+    const prf = caps ? caps['extension:prf'] : undefined;
+    T.bioWhy = 'WebAuthn: yes; built-in biometric reported: ' + (v ? 'yes' : 'no') + '; key release (PRF): ' + (prf === true ? 'yes' : prf === false ? 'no' : 'not reported');
+    if (!v && ANDROID) T.bioWhy += '. Set a screen lock with a fingerprint in the phone settings, and sign in to a Google account on the phone';
+    if (prf === false) { T.bioWhy += '. This browser cannot release the key after a fingerprint check' + (ANDROID ? '; update Chrome and Google Play services' : ''); return false; }
+    return !!v;
+  } catch (e) { T.bioWhy = 'WebAuthn: yes; check failed (' + (e && e.name) + ')'; return false; }
 }
 async function bioWrapKey(prf) {
   const base = await crypto.subtle.importKey('raw', prf, 'HKDF', false, ['deriveKey']);
@@ -128,7 +140,7 @@ async function bioWrapKey(prf) {
 function prfOut(cred) { const x = cred && cred.getClientExtensionResults && cred.getClientExtensionResults(); return x && x.prf && x.prf.results && x.prf.results.first ? new Uint8Array(x.prf.results.first) : null; }
 const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
 async function bioAsk(id, prfSalt) {
-  const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [{ type: 'public-key', id, transports: ['internal'] }], userVerification: 'required', hints: ['client-device'], timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+  const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), allowCredentials: [Object.assign({ type: 'public-key', id }, ANDROID ? {} : { transports: ['internal'] })], userVerification: 'required', hints: ['client-device'], timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
   return prfOut(a);
 }
 async function bioEnrol() {
@@ -139,7 +151,7 @@ async function bioEnrol() {
     const raw = new Uint8Array(await crypto.subtle.exportKey('raw', KEY)), prfSalt = rnd(32);
     step = 'passkey';
     const cred = await navigator.credentials.create({ publicKey: { rp: { name: 'TBDM Field' }, user: { id: rnd(16), name: S.cfg.email || 'user', displayName: S.cfg.initials || 'user' }, challenge: rnd(32),
-      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: ANDROID ? 'required' : 'discouraged', requireResidentKey: ANDROID },      // Android: a stored passkey, the kind Chrome gives PRF for
       hints: ['client-device'], timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
     const id = new Uint8Array(cred.rawId);
     step = 'secret';
@@ -246,7 +258,9 @@ async function api(body, ms) {
   try {
     const r = await fetch(S ? S.cfg.api : T.join.api, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       signal: ctl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store' });
-    return await r.json();
+    const out = await r.json();
+    if (out && out.ok === false && out.error === 'unknown operation') { out.oldScript = true; out.error = 'the workbook script is older than this app and cannot do this yet. The PI updates it on a computer: TB-DM Study menu > PI: update script from GitHub, then tries again'; }
+    return out;
   } finally { clearTimeout(timer); }
 }
 // The workbook takes several seconds per entry, and this phone gives up on a request after 45 seconds, so a long queue goes in small batches.
@@ -284,10 +298,10 @@ async function sync() {
     if (S.server && S.server.photos && (S.photoOut || []).length) await pushPhotos(still);
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, navOrder: pull.navOrder || null, navOrders: pull.navOrders || null, roleName: pull.roleName || '', at: Date.now() };
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, navOrder: pull.navOrder || null, navOrders: pull.navOrders || null, roleName: pull.roleName || '', pinHelp: pull.pinHelp || [], at: Date.now() };
     if (pull.photos && (S.photoOut || []).length) await pushPhotos(still);          // photos taken before the feature reached this phone
     if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
-    T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email;
+    T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email; helpSave();
     S.lastSync = Date.now(); T.syncError = ''; T.revoked = false;
     await saveState();
     try { await confRefresh(still); } catch (e) { if (e.quiet || e.code === 401) throw e; }      // a failure here never fails the sync
@@ -499,9 +513,55 @@ function lockScreen() {
     el('p', null, T.join ? 'An invitation link was opened, but this phone is already set up. Unlock, then reset the phone in Settings to use it.' : 'Enter your PIN'),
     dots, el('div', { class: 'pad' }, keys.map((k) => el('button', { class: k.length > 1 ? 'txt' : '', 'aria-label': k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k, onclick: () => press(k) },
       k === 'del' ? 'Delete' : k === 'ok' ? 'Unlock' : k))), err,
+    el('button', { class: 'linkbtn', id: 'forgot-pin', type: 'button', onclick: forgotPin }, 'Forgot PIN?'),
     (T.hasBio || T.bioOk) && !T.join ? el('button', { class: 'bio', id: 'bio-unlock', type: 'button', 'aria-label': 'Unlock with Face ID or fingerprint', title: 'Face ID or fingerprint', onclick: () => { if (T.hasBio) tryBio(false); else { T.bioWant = true; T.lockMsg = 'Type your PIN once. You will then be asked to set up Face ID or fingerprint.'; render(); } } }, bioIcon()) : null);
 }
 
+// ---- Forgotten PIN. The PIN is the only key to this phone's copy, so it cannot be recovered. With a new invitation link opened, the phone
+// erases its copy and is set up again. Without one, the phone asks the PI for a new invitation (it keeps the study address and the e-mail
+// outside the vault for this alone; neither opens anything).
+const HELPKEY = 'tbdm-help';
+function helpSave() { try { if (S && S.cfg && S.cfg.api && S.cfg.email) localStorage.setItem(HELPKEY, JSON.stringify({ api: S.cfg.api, email: S.cfg.email })); } catch (e) { /* no storage: the PI can still be asked in person */ } }
+function helpGet() { try { return JSON.parse(localStorage.getItem(HELPKEY) || 'null'); } catch (e) { return null; } }
+function helpForget() { try { localStorage.removeItem(HELPKEY); } catch (e) { /* ignore */ } }
+async function eraseForNewLink() {
+  const keys = await kvKeys().catch(() => []);
+  for (const k of keys) if (/^ph_/.test(k)) await kvDel(k);
+  await kvDel('vault'); await kvDel('bio'); helpForget();
+  T.hasBio = false; T.hasVault = false; T.pin = ''; T.lockMsg = '';
+  try { localStorage.removeItem('tbdm-fails'); localStorage.removeItem('tbdm-wait'); } catch (e) { /* ignore */ }
+  render();
+}
+function forgotPin() {
+  const lost = 'Anything on this phone that has not reached the workbook is lost.';
+  if (T.join) return modal('Set this phone up again?', [el('p', null, 'You opened a new invitation link. The phone erases its locked copy and is set up with the new link, with a new PIN.'), el('p', null, lost)],
+    [['Cancel', null], ['Erase and set up', eraseForNewLink, 'danger']]);
+  const h = helpGet();
+  const ask = async () => {
+    if (!h) return;
+    if (!navigator.onLine) { toast('Connect to the internet, then try again.'); return false; }
+    try {
+      const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 30000);
+      const r = await fetch(h.api, { method: 'POST', body: JSON.stringify({ op: 'pin_help', email: h.email }), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, signal: ctl.signal, redirect: 'follow', credentials: 'omit', cache: 'no-store' }).then((x) => x.json());
+      clearTimeout(t);
+      if (r && r.ok) modal('Request sent', [el('p', null, 'The PI has been told. When the new invitation link arrives, open it on this phone, then tap Forgot PIN? again to set the phone up.')], [['OK', null, 'primary']]);
+      else toast('Not sent: ' + ((r && r.error === 'unknown operation') ? 'the workbook script is older than this app; tell the PI' : (r && r.error) || 'no answer'));
+    } catch (e) { toast('Not sent: no answer from the study. Try again, or tell the PI.'); }
+  };
+  modal('Forgot your PIN?', [el('p', null, 'The PIN cannot be recovered: it is the only key to this phone\'s copy of the study data. You need a new invitation link from the PI.'),
+    el('p', null, lost), h ? el('p', { class: 'small muted' }, 'The request goes to the PI for ' + h.email + '.') : el('p', { class: 'small muted' }, 'This phone cannot send the request. Ask the PI for a new invitation.')],
+    h ? [['Cancel', null], ['Ask the PI for a new link', ask, 'primary']] : [['Close', null]]);
+}
+// PI Home: requests from locked phones, each answered with one tap (a new invitation for the same role).
+function pinHelpCard() {
+  const list = role() === 'pi' && !T.preview && !T.practice && S.server ? S.server.pinHelp || [] : [];
+  if (!list.length) return null;
+  return el('div', { class: 'card warn', id: 'pinhelp' }, el('b', null, 'Forgotten PIN' + (list.length > 1 ? 's' : '')),
+    ...list.map((x) => el('div', { class: 'pinrow' }, el('div', null, el('div', { class: 'em' }, x.email), el('small', null, (x.roleName || x.role) + ' · asked ' + dateTxt_(new Date(x.at).toISOString().slice(0, 10)))),
+      el('div', { class: 'pinbtns' }, el('button', { class: 'btn primary', type: 'button', 'data-email': x.email, onclick: () => { T.inv = { email: x.email, role: x.role, busy: false, err: '', res: null }; go('invite'); } }, 'Send new invitation'),
+      el('button', { class: 'btn', type: 'button', 'aria-label': 'Dismiss', onclick: async () => {
+        try { const r = await api({ op: 'pin_help_dismiss', token: S.cfg.token, email: x.email }); if (r.ok) { S.server.pinHelp = r.pinHelp || []; render(); } else toast(r.error || 'not done'); } catch (e) { toast('Not done: ' + (e.message || e)); } } }, 'Dismiss')))));
+}
 // ------------------------------------------------------------------ home and lists
 function role() { return S.cfg.role || 'data'; }
 // What this phone's role may do: the ticks the PI set in the Role manager, sent with every pull (the workbook enforces them).
@@ -551,7 +611,7 @@ async function topUpNumbers(mine, still) {              // called by sync() once
   try {
     const res = await api({ op: 'numbers_block', token: S.cfg.token, rid: N.pend, dev: N.dev }); still();
     if (res.ok) { N.blocks = res.blocks || []; N.got = true; N.old = false; N.pend = ''; N.err = ''; }
-    else if (res.error === 'unknown operation') { N.old = true; N.err = ''; }          // the workbook script has not been upgraded: keep the old behaviour
+    else if (res.oldScript || res.error === 'unknown operation') { N.old = true; N.err = ''; }          // the workbook script has not been upgraded: keep the old behaviour
     else N.err = res.error || 'could not get numbers';
   } catch (e) { if (e.quiet) throw e; }
   if (S === mine) await saveState();
@@ -797,7 +857,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
   const group = {}; out.queries.forEach((q) => { const g = q[0] || 'Screening log'; (group[g] = group[g] || []).push(q); });
   const qkeys = Object.keys(group).sort(), md = nurse ? measuresDue() : [];
   const main = el('main', { class: 'pihome' },
-    homeWarn(bad, waiting, oldest),
+    homeWarn(bad, waiting, oldest), pinHelpCard(),
     el('div', { class: 'homerow' + (canData() ? '' : ' solo') },
       findBox(true),
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', { class: 'tt' }, icon('check'), 'Screen a patient'), el('span', null, screenedToday())) : null,
@@ -1821,7 +1881,7 @@ function bioTile() {
 }
 function resetPhone() {
   const n = S.outbox.length;
-  const doIt = async () => { await kvDel('vault'); await kvDel('bio'); T.hasBio = false; localStorage.removeItem('tbdm-fails'); localStorage.removeItem('tbdm-wait'); T.hasVault = false; lock(); };
+  const doIt = async () => { await kvDel('vault'); await kvDel('bio'); helpForget(); T.hasBio = false; localStorage.removeItem('tbdm-fails'); localStorage.removeItem('tbdm-wait'); T.hasVault = false; lock(); };
   modal('Reset this phone?', [el('p', null, n ? n + ' entries on this phone have NOT reached the workbook and will be lost. Sync first if you can.' : 'All entries have reached the workbook. The phone will forget the study and your access.')],
     [['Cancel', null], [n ? 'Reset and lose ' + n : 'Reset', doIt, 'danger']]);
 }
@@ -1893,7 +1953,8 @@ function formScreen(p) {
       Object.keys(p.key).forEach((k) => { if (k[0] !== '_') vals[k] = s_(p.key[k]); });
       Object.keys(p.preset || {}).forEach((k) => { vals[k] = p.preset[k]; });
     }
-    def.cols.forEach((c) => { if (BY_FIELDS.indexOf(c.key) >= 0 && !vals[c.key]) vals[c.key] = s_(S.cfg.initials); });      // initials come from the log-in; an older entry keeps the initials of whoever made it
+    def.cols.forEach((c) => { if (BY_FIELDS.indexOf(c.key) >= 0 && !vals[c.key]) vals[c.key] = s_(S.cfg.initials); });
+    Object.keys(UNIT_DEF).forEach((k) => { if (k in vals && !vals[k]) vals[k] = UNIT_DEF[k].usual; });      // the usual unit unless the switch says the report uses the other      // initials come from the log-in; an older entry keeps the initials of whoever made it
     T.form = { tab, def, existing, vals, dirty: false, errs: {}, ro: readOnly(tab), measureOnly: !!p.measure && (tab === 'S2_BASELINE' || tab === 'VISITS'), fixedKeys: existing ? keys : keys.filter((k) => s_(p.key[k])),
       carried: existing ? [] : (p.carried || []), numberGiven: !existing && !!(p.preset && s_(p.preset.study_id)), autoExcl: tab === 'S0_SCREEN' && s_(vals.smear_grade) === 'N' && s_(vals.excl_code) === '8', autoNo: tab === 'S0_SCREEN' && s_(vals.excl_code) !== '' };
   }
@@ -1994,8 +2055,8 @@ function fieldEl(c) {
   };
   // Enrolment and screening: the study number box reads the same as in the Link register ("Assign a study number", blank = the next free number).
   const nidBox = c.type === 'sidnew' && (F.tab === 'S1_ENROL' || F.tab === 'S0_SCREEN') && !F.ro && !fixed && !F.numberGiven, nid0 = nidBox ? nextId(F.tab) : '';
-  box.append(el('label', { class: 'lab', for: 'i-' + c.key }, nidBox ? 'Assign a study number' : c.label), ...[itemWording(c.key)].filter(Boolean),
-    el('div', { class: 'hint' }, c.codes || c.key === 'dm_drugs' || BY_FIELDS.indexOf(c.key) >= 0 ? '' : c.key === 'time_analysed' ? 'Filled in from the report photo once report reading is built' : nidBox ? (nid0 ? 'Leave blank to use the next free number: ' + nid0 + (F.tab === 'S0_SCREEN' ? ' (only if the patient is enrolled)' : '') + '. If the patient\'s card shows a different number, type that one.' : 'Type the number from the patient\'s card. There are no spare numbers on this phone: to get more, connect to the internet and press Sync.') : c.type === 'date' ? 'Pick it from the calendar. Not before ' + dateTxt_(CFG.EARLIEST) : helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
+  box.append(el('label', { class: 'lab', for: 'i-' + c.key }, nidBox ? 'Assign a study number' : c.label.replace(/ \(choose the (lipid )?unit first\)/, '')), ...[itemWording(c.key)].filter(Boolean),
+    el('div', { class: 'hint' }, c.codes || c.key === 'dm_drugs' || BY_FIELDS.indexOf(c.key) >= 0 ? '' : c.key === 'time_analysed' ? 'Filled in from the report photo once report reading is built' : nidBox ? (nid0 ? 'Leave blank to use the next free number: ' + nid0 + (F.tab === 'S0_SCREEN' ? ' (only if the patient is enrolled)' : '') + '. If the patient\'s card shows a different number, type that one.' : 'Type the number from the patient\'s card. There are no spare numbers on this phone: to get more, connect to the internet and press Sync.') : c.type === 'date' ? 'Pick it from the calendar. Not before ' + dateTxt_(CFG.EARLIEST) : c.type === 'unitnum' ? unitRange(c) : helpText_(c)), ...[infoBtn(c.key)].filter(Boolean));
   const val = s_(F.vals[c.key]);
   const carried = (F.carried || []).indexOf(c.key) >= 0, byLogin = BY_FIELDS.indexOf(c.key) >= 0 && !F.ro, locked = carried || screenLocked(F, c) || byLogin;
   if (locked || (fixed && (APP_KEYS[F.tab].indexOf(c.key) >= 0 || F.ro))) {
@@ -2005,6 +2066,7 @@ function fieldEl(c) {
   }
   const relayout = ['visit', 'declined', 'event_type', 'phq9', 'hba1c_unit', 'glucose_unit', 'lipid_unit', 'smear_result', 'eligible', 'enrolled', 'e2_rucam_type', 'dm_status', 'smoking', 'smear_grade', 'excl_code'].indexOf(c.key) >= 0 || (F.tab === 'R_SCORES' && c.key === 'cavity');
   if (F.tab === 'R_SCORES' && c.key === 'n_cavities' && !F.ro && !fixed) return cavityCount(box, set, msg);
+  if (UNIT_DEF[c.key]) return unitSwitch(box, c, set, msg, fixed);
   if (c.codes || c.type === 'pairlist') {
     const rn = F.tab === 'R_SCORES' && c.key === 'read_no', film = rn ? filmOf(F.vals.study_id) : null;
     const opts = rn ? [['1', 'First read'], ['2', 'Repeat read']] : c.codes || c.values.map((x) => [x, '']);
@@ -2170,6 +2232,7 @@ async function saveForm() {
   if (F.tab === 'SPIRO' && !F.existing && !spiroOk(s_(F.vals.study_id))) { toast('Spirometry is not done yet: the Visit 5 smear must be recorded as negative first.'); return; }
   if (F.tab === 'EVENTS' && s_(F.vals.event_type) === 'E2') { const rt = rucamTotal_(F.vals); F.vals.e2_rucam_score = rt === '' ? '' : String(rt); }
   if (F.tab === 'R_SCORES' && s_(F.vals.cavity).toUpperCase() === 'N') F.vals.n_cavities = '0';
+  Object.keys(UNIT_DEF).forEach((k) => { if (k in F.vals && UNIT_DEF[k].vals.every((x) => s_(F.vals[x]) === '') && !(F.existing && s_(F.existing[k]))) F.vals[k] = ''; });   // a unit only beside a value
   const vals = {}; def.cols.forEach((c) => { if (APP_SERIAL[F.tab] !== c.key || s_(F.vals[c.key])) vals[c.key] = F.vals[c.key]; });
   const entry = queueSave(F.tab, F.existing, vals);
   await saveState();
@@ -2628,9 +2691,52 @@ function paintPhotoCard(target) {
       return el('div', { class: 'photorow' }, mark(st), el('div', { class: 'grow' }, PHOTO_DOC_NAMES[doc], el('small', null, err ? 'not accepted: ' + err.err : st === 'sent' ? 'sent' : st === 'waiting' ? 'waiting to send' : 'not attached yet')),
         cam, file,
         el('div', { class: 'pbtns' },
-          el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': st === 'missing' ? 'Take photo' : 'Add page', title: 'Take photo', onclick: () => cam.click() }, icon('camera')),
+          el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': st === 'missing' ? 'Take photo' : 'Add page', title: 'Take photo', onclick: () => (useInAppCamera() ? inAppCamera(doc, cam, F) : cam.click()) }, icon('camera')),
           el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': 'Choose file', title: 'Choose file (screenshot)', onclick: () => file.click() }, icon('export'))));
     }))
+}
+// Android: Chrome often hands a file-input camera to the camera app and then loses the page, or does nothing when its camera permission was never
+// asked. There the app opens the camera itself: Chrome asks for permission the first time, and the picture never leaves the app.
+function useInAppCamera() { return ANDROID && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
+async function inAppCamera(doc, cam, F) {
+  const cxr = doc === 'CXR';
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 4096 }, height: { ideal: 3072 } } });
+  } catch (e) { return cameraProblem(e, cam); }
+  const track = stream.getVideoTracks()[0];
+  const stop = () => { stream.getTracks().forEach((t) => t.stop()); view.remove(); };
+  const video = el('video', { class: 'camvideo', autoplay: true, muted: true, playsinline: true });
+  video.muted = true; video.setAttribute('playsinline', ''); video.srcObject = stream;
+  const shoot = async () => {
+    snap.disabled = true;
+    try {
+      let blob = null;
+      if (window.ImageCapture) { try { blob = await new ImageCapture(track).takePhoto(); } catch (e) { blob = null; } }     // the camera's full-resolution still where Chrome offers it
+      if (!blob) {
+        const c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
+        c.getContext('2d').drawImage(video, 0, 0); blob = await canvasJpeg(c, cxr ? 1 : 0.92);
+      }
+      stop();
+      photoTake(new File([blob], 'camera.jpg', { type: blob.type || 'image/jpeg' }), F, doc);
+    } catch (e) { stop(); toast('The photo was not taken: ' + (e.message || e)); }
+  };
+  const snap = el('button', { type: 'button', class: 'camsnap', id: 'cam-snap', 'aria-label': 'Take the photo', onclick: shoot });
+  const view = el('div', { class: 'camview', id: 'camview' }, video,
+    el('div', { class: 'cambar' }, el('button', { type: 'button', class: 'btn', id: 'cam-cancel', onclick: stop }, 'Cancel'), snap,
+      el('button', { type: 'button', class: 'btn', id: 'cam-app', onclick: () => { stop(); cam.click(); } }, 'Camera app')));
+  document.body.append(view);
+}
+function cameraProblem(e, cam) {
+  const n = e && e.name;
+  const why = n === 'NotAllowedError' ? [el('p', null, 'Chrome is not allowed to use the camera for this app.'), el('ol', null,
+      el('li', null, 'In Chrome: tap the icon left of the address, then Permissions, Camera, Allow.'),
+      el('li', null, 'From the home-screen app: hold the TBDM icon, App info, Permissions, Camera, Allow.'),
+      el('li', null, 'Phone settings > Apps > Chrome > Permissions > Camera must also be allowed.'))]
+    : n === 'NotFoundError' || n === 'OverconstrainedError' ? [el('p', null, 'No camera was found on this phone.')]
+    : [el('p', null, 'The camera could not start (' + (n || e) + ').')];
+  modal('Camera', why.concat([el('p', { class: 'small muted' }, 'You can also use the phone\'s camera app, or Choose file for a photo already taken.')]),
+    [['Close', null], ['Use the camera app', () => cam.click(), 'primary']]);
 }
 // Viewing: online only, nothing is kept on the phone.
 function photoViewCard(sid) {
@@ -2696,6 +2802,21 @@ function listPick(title, opts, cur, pick) {
   const m = $('#modal');
   m.onclick = (ev) => { if (ev.target === m) { m.onclick = null; close(); } };
 }
+// Units: HbA1c is reported in %, glucose and lipids in mg/dL. One switch per group for a report printed in the other unit.
+const UNIT_DEF = {
+  hba1c_unit: { usual: '%', other: 'M', name: 'HbA1c', usualTxt: '%', otherTxt: 'mmol/mol', vals: ['hba1c'] },
+  glucose_unit: { usual: 'M', other: 'L', name: 'Glucose', usualTxt: 'mg/dL', otherTxt: 'mmol/L', vals: ['fpg'] },
+  lipid_unit: { usual: 'M', other: 'L', name: 'Lipids', usualTxt: 'mg/dL', otherTxt: 'mmol/L', vals: ['tg', 'hdl', 'tc', 'ldl'] } };
+function unitSwitch(box, c, set, msg, fixed) {
+  const F = T.form, u = UNIT_DEF[c.key], other = s_(F.vals[c.key]) === u.other;
+  box.classList.add('unitsw');
+  box.replaceChildren(el('div', { class: 'lab' }, u.name + ' unit: ', el('b', null, other ? u.otherTxt : u.usualTxt)));
+  if (!fixed) box.append(el('label', { class: 'switch' }, el('input', { type: 'checkbox', role: 'switch', id: 'i-' + c.key, checked: other ? true : null,
+    onchange: (ev) => set(ev.target.checked ? u.other : u.usual, true) }), el('span', null, 'Report uses ' + u.otherTxt)));
+  box.append(msg);
+  return box;
+}
+function unitRange(c) { const u = s_(T.form.vals[c.unit]), r = c.ranges[u], d = UNIT_DEF[c.unit]; return r ? 'From ' + r[0] + ' to ' + r[1] + ' ' + (d && u === d.other ? d.otherTxt : d ? d.usualTxt : u) : ''; }
 // Number of cavities: 1 to 5 as buttons, 6+ opens a box for 6 to 20; with no cavity it is 0 and the buttons are faded.
 function cavityCount(box, set, msg) {
   const F = T.form, none = s_(F.vals.cavity) === 'N', v = s_(F.vals.n_cavities), big = !none && (F.cav6 || num_(v) >= 6);
