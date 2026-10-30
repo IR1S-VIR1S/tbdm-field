@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '83b4c05bcd83';                 // replaced by build.js with the build's hash
+const BUILD_ID = '03e37f6d0012';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -379,7 +379,7 @@ function render() {
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
   const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
-    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen, photos: photosScreen, roles: rolesScreen, invite: inviteScreen };
+    queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen, laborder: labOrderScreen, photos: photosScreen, roles: rolesScreen, invite: inviteScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
   const hasNav = !!(S && S.server) && navIds().concat(c.name === 'tools' ? ['tools'] : []).indexOf(c.name) >= 0;
@@ -1542,6 +1542,46 @@ function participants() {
   q.addEventListener('input', fill); fill();
   return topBar('Participants').concat([el('main', null, allVisitsSwitch(), q, list)]);
 }
+// ---- Laboratory order: per participant and visit, the tests the lab form expects at that visit (LAB_GROUPS), each checked against what is
+// entered (Entered, Partly entered with the missing values named, Not entered), with the report photo where photos are on. Nothing new is
+// stored: it reads the laboratory row, the visit form (sputum smear) and the photo list.
+const GROUP_PAGES = { 'Blood count': ['CBC'], HbA1c: ['HBA1C'], 'Glucose and lipids (fasting)': ['FPG', 'LIPID'], 'Liver tests': ['LFT'], Serology: ['HEP', 'HIV'] };
+function labOrderItems(sid, v) {
+  const row = find('LABS', { study_id: sid, visit: v }), def = defOf('LABS'), lab = (k) => (def.cols.filter((c) => c.key === k)[0] || { label: k }).label.split(/,| \(/)[0];
+  const st = row ? s_(row.lab_status) : '', stopped = st && st !== '1' ? codeText(def.cols.filter((c) => c.key === 'lab_status')[0], st) : '';
+  const items = LAB_GROUPS.filter((g) => g[2] && g[2].indexOf(v) >= 0).map((g) => {
+    const keys = g[1].filter((k) => !UNIT_DEF[k]), have = row ? keys.filter((k) => s_(row[k]) !== '') : [], miss = keys.filter((k) => have.indexOf(k) < 0);
+    return { name: g[0], tab: 'LABS', state: stopped ? 'stopped' : !have.length ? 'none' : miss.length ? 'part' : 'done', note: stopped || (have.length && miss.length ? 'missing: ' + miss.map(lab).join(', ') : ''),
+      focus: miss[0] || keys[0], docs: (GROUP_PAGES[g[0]] || []).map((p) => 'LAB_' + p) };
+  });
+  if (smearVisit(v, sid)) {                                        // the sputum smear goes on the visit form
+    const vr = find('VISITS', { study_id: sid, visit: v }), r = vr ? s_(vr.smear_result) : '';
+    items.push({ name: 'Sputum smear', tab: 'VISITS', state: r ? 'done' : 'none', note: r ? codeText(defOf('VISITS').cols.filter((c) => c.key === 'smear_result')[0], r) : '', focus: 'smear_result', docs: ['SMEAR'] });
+  }
+  return items;
+}
+function labOrderRow(sid, v, opens) {
+  if (opens) return lockedRow('Laboratory order', opens);
+  const it = labOrderItems(sid, v), done = it.filter((x) => x.state === 'done' || x.state === 'stopped').length;
+  return el('button', { class: 'row', id: 'laborder-' + v, onclick: () => go('laborder', { sid, v }) }, el('div', { class: 'main' }, el('div', null, 'Laboratory order'), el('div', { class: 'sub' }, it.map((x) => x.name).join(', '))),
+    el('span', { class: 'chip ' + (done === it.length ? 'ok' : done ? 'warn' : '') }, done + ' of ' + it.length + ' entered'), el('span', { class: 'chev' }));
+}
+function labOrderScreen(p) {
+  const sid = p.sid, v = p.v, it = labOrderItems(sid, v), words = { done: 'Entered', part: 'Partly entered', none: 'Not entered', stopped: 'Not done' };
+  const cls = { done: 'ok', part: 'warn', none: '', stopped: '' };
+  return topBar('Laboratory order · ' + sid + ' ' + v).concat([el('main', null,
+    el('div', { class: 'card small muted' }, 'The tests for ' + v + ', checked against what is entered. Tap a test to open its form.'),
+    el('div', { class: 'list', id: 'labitems' }, it.map((x) => {
+      const key = { study_id: sid, visit: v };
+      const docs = photosOn() && (photoTaker() || photoViewer()) ? x.docs.map((d) => docState(sid, d, v)) : [];
+      const docTxt = docs.length ? 'report photo ' + (docs.every((d) => d === 'sent') ? 'sent' : docs.some((d) => d !== 'missing') ? 'partly attached' : 'not attached') : '';
+      return el('button', { class: 'row', type: 'button', 'data-item': x.name, 'data-state': x.state, onclick: () => go('form', { tab: x.tab, key, focus: x.state === 'part' || x.state === 'none' ? x.focus : undefined }) },
+        el('span', { class: 'lmark ' + x.state, 'aria-hidden': 'true' }, x.state === 'done' ? '✓' : x.state === 'part' ? '◐' : ''),
+        el('div', { class: 'main' }, el('div', null, x.name), el('div', { class: 'sub' }, [x.note, docTxt].filter(Boolean).join(' · '))),
+        el('span', { class: 'chip ' + cls[x.state] }, words[x.state]), el('span', { class: 'chev' }));
+    })),
+    el('button', { class: 'btn primary block', type: 'button', id: 'labopen', onclick: () => go('form', { tab: 'LABS', key: { study_id: sid, visit: v } }) }, 'Open laboratory results'))]);
+}
 function statusChip(row) {
   if (!row) return el('span', { class: 'chip' }, 'not entered');
   if (row._pending === 'pending') return el('span', { class: 'chip pend' }, 'waiting to send');
@@ -1590,7 +1630,7 @@ function participant(p) {
     const st = sched[v];
     return [el('h2', { class: 'vhead' }, v + ' · ' + (v === 'V1' ? 'baseline' : 'month ' + ({ V2: 1, V3: 2, V4: 3, V5: 6 })[v]) + ' ', st ? el('span', { class: 'chip ' + (st === 'overdue' ? 'bad' : st === 'due now' ? 'warn' : '') }, st) : null,
         hasGuide() && VISIT_GUIDE[v] ? el('button', { class: 'vguide', type: 'button', 'aria-label': 'Checklist for ' + v, title: 'What to order and do at ' + v, onclick: () => go('visitguide', { v: v }) }, icon('list')) : null),
-      el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)), (curV = v, VISIT_FORMS[v].map((f) => formRow(f[0], f[1]))))];
+      el('div', { class: 'list' }, el('div', { class: 'row' }, el('div', { class: 'main sub' }, 'Window ' + range)), (curV = v, VISIT_FORMS[v].reduce((a, f) => a.concat(f[0] === 'LABS' ? [labOrderRow(sid, f[1], visitOpens(sid, v)), formRow(f[0], f[1])] : [formRow(f[0], f[1])]), [])))];
   });
   const usedU = view('LABS').filter((r) => r.study_id === sid && /^U/.test(r.visit)).map((r) => r.visit);
   const nextU = ['U1', 'U2', 'U3', 'U4', 'U5'].filter((u) => usedU.indexOf(u) < 0)[0];

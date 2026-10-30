@@ -437,3 +437,7 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 #pinhelp .pinrow { margin-top: 10px; } #pinhelp .em { font-weight: 600; word-break: break-all; } #pinhelp small { color: var(--muted); }
 #pinhelp .pinbtns { display: flex; gap: 8px; margin-top: 8px; } #pinhelp .pinbtns .btn.primary { flex: 1; }
 .card.newcxr { border-color: #9cc3e6; background: #eef5fc; } .card.newcxr > b { display: block; margin-bottom: 6px; color: #1e4f7a; }
+/* Laboratory order checklist */
+.lmark { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); display: inline-grid; place-items: center; flex: none; font-size: 14px; font-weight: 700; margin-right: 10px; }
+.lmark.done { background: var(--brand); border-color: var(--brand); color: #fff; } .lmark.part { border-color: #d39a3a; color: #a3660a; } .lmark.stopped { border-style: dashed; }
+#labopen { margin-top: 14px; }
