@@ -2644,7 +2644,7 @@ function menuLinkSwitch() {
 // Switched on with "PI: photos of documents on or off".
 const PHOTO_TAB = 'PHOTOS';
 const PHOTO_COLS = ['photo_id', 'study_id', 'doc', 'visit', 'covered', 'file_id', 'sha256', 'taken_at', 'taken_by', 'uploaded_at', 'flag', 'note', 'deleted'];
-const PHOTO_DOCS = { CONSENT: 'consent form', CORE: 'Core Per-Patient File', EXAM: 'examination sheet', SMEAR: 'sputum smear report', LAB_CBC: 'lab report: blood count', LAB_LFT: 'lab report: liver tests', LAB_HBA1C: 'lab report: HbA1c', LAB_LIPID: 'lab report: lipid profile', LAB_FPG: 'lab report: fasting glucose', LAB_HEP: 'lab report: viral serology (HBsAg, anti-HCV)', LAB_HIV: 'lab report: HIV', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
+const PHOTO_DOCS = { SLIP: 'OPD registration slip', CONSENT: 'consent form', CORE: 'Core Per-Patient File', EXAM: 'examination sheet', SMEAR: 'sputum smear report', LAB_CBC: 'lab report: blood count', LAB_LFT: 'lab report: liver tests', LAB_HBA1C: 'lab report: HbA1c', LAB_LIPID: 'lab report: lipid profile', LAB_FPG: 'lab report: fasting glucose', LAB_HEP: 'lab report: viral serology (HBsAg, anti-HCV)', LAB_HIV: 'lab report: HIV', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'lab report', SPIRO: 'spirometry printout', CXR: 'chest radiograph' };
 const PHOTO_MAX = 4000000;                                // base64 characters, about 3 MB of image
 const PHOTO_MAX_CXR = 40000000;                           // radiographs are exempt from compression and keep full resolution: up to about 30 MB of image
 function photosOn_() { return props_().getProperty('PHOTOS_ENABLED') === 'Y'; }
@@ -2688,7 +2688,7 @@ function photoPut_(u, req) {
   const mime = str_(req.mime);
   if (['image/jpeg', 'image/png'].indexOf(mime) < 0) return { ok: false, error: 'only JPEG or PNG images' };
   const data = String(req.data || '');
-  if (!data || data.length > (doc === 'CXR' ? PHOTO_MAX_CXR : PHOTO_MAX)) return { ok: false, error: 'the image is empty or too large' };
+  if (!data || data.length > (doc === 'CXR' || doc === 'SLIP' ? PHOTO_MAX_CXR : PHOTO_MAX)) return { ok: false, error: 'the image is empty or too large' };      // radiographs and OPD slips keep full resolution
   const bytes = Utilities.base64Decode(data), sha = bytesHex_(bytes);
   if (str_(req.sha256).toLowerCase() !== sha) return { ok: false, error: 'the image was damaged on the way; it will be sent again' };
   const lock = LockService.getScriptLock();
@@ -2725,40 +2725,60 @@ function ocrText_(bytes, mime) {
 // LGH OPD registration slip (layout from the PI's sample receipt, 30 Oct 2026): MRN, name, CNIC, age, gender, date. Text recognition reads
 // the two columns in either order, so each value is found by its own shape, not by its position.
 const SLIP_STOP = /LAHORE|HOSPITAL|GENERAL|OPD|CLINIC|CONSULTANT|ROOM|VISIT|MRN|CNIC|AGE|GENDER|DISTRIC|FATHER|GUARDIAN|N\/A|WEDNESDAY|MONDAY|TUESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY|UROLOGY|MEDICINE|SENIOR|REGISTRAR|DR\b|FEMALE|MALE/;
-function parseSlip_(text, barcode) {
-  const t = String(text || '').replace(/\r/g, ''), lines = t.split('\n').map(function (x) { return x.trim(); }).filter(Boolean), f = {}, checks = {}, notes = [];
-  const age = /\b(\d{1,3})\s*y\b/i.exec(t); if (age && +age[1] <= 120) f.age = age[1];
-  const sex = /\b(female|male)\b/i.exec(t); if (sex) f.sex = /^f/i.test(sex[1]) ? 'F' : 'M';
-  // CNIC: the last digit is odd for a man and even for a woman [VERIFY: NADRA convention]; a clash with the slip's sex means a misread, so it is left blank
-  const cn = /\b(\d{5})\s*[-\u2013]\s*(\d{7})\s*[-\u2013]\s*(\d)\b/.exec(t);
-  if (cn) {
-    const v = cn[1] + '-' + cn[2] + '-' + cn[3], odd = +cn[3] % 2 === 1;
-    if (f.sex && (f.sex === 'M') !== odd) { checks.cnic = 'conflict'; notes.push('CNIC not filled: it was read as ' + v + ', but its last digit does not fit the sex on the slip, so a digit was probably misread. Type it from the slip.'); }
-    else { f.cnic = v; checks.cnic = f.sex ? 'sex fits' : 'single'; }
-  }
-  const cnDigits = cn ? cn[1] + cn[2] + cn[3] : '';
-  // MRN: printed twice (after "MRN" and under the barcode), and the barcode itself. A decoded barcode is exact; otherwise two printed copies
-  // must agree digit for digit. A disagreement is never resolved by guessing: the MRN is left blank and both readings are shown.
-  const copies = [], lab = /MR[NM]\s*[:;.,]?\s*([\d ]{10,24})/i.exec(t);
-  if (lab) copies.push(lab[1].replace(/\s/g, ''));
-  lines.forEach(function (x) { if (/^\d{12,20}$/.test(x) && x !== cnDigits) copies.push(x); });
-  const bc = /^\d{10,20}$/.test(str_(barcode)) ? str_(barcode) : '';
-  const differ = function (a, b) { if (a.length !== b.length) return 'a different number of digits'; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return 'digit ' + (i + 1); return ''; };
-  if (bc) {
-    f.mrn = bc; checks.mrn = 'barcode';
-    const off = copies.filter(function (c) { return c !== bc; });
-    if (off.length) notes.push('MRN taken from the barcode, which is exact. The printed copy was read as ' + off[0] + ' (' + differ(off[0], bc) + ' differs).');
-  } else if (copies.length >= 2) {
-    const d = copies.map(function (c) { return differ(copies[0], c); }).filter(Boolean);
-    if (!d.length) { f.mrn = copies[0]; checks.mrn = 'agree'; }
-    else { checks.mrn = 'conflict'; notes.push('MRN not filled: the two printed copies were read as ' + copies[0] + ' and ' + copies.filter(function (c) { return c !== copies[0]; })[0] + ' (' + d[0] + ' differs). Type it from the slip.'); }
-  } else if (copies.length === 1) { f.mrn = copies[0]; checks.mrn = 'single'; notes.push('Only one printed copy of the MRN could be read: check every digit.'); }
-  const dt = /\b(\d{2})\/(\d{2})\/(\d{4})\b/.exec(t); if (dt) f.date = dt[3] + '-' + dt[2] + '-' + dt[1];
+// One reading of the slip: every value as found, plus every printed copy of the MRN. Several readings are then put to a vote.
+function slipRead_(text) {
+  const t = String(text || '').replace(/\r/g, ''), lines = t.split('\n').map(function (x) { return x.trim(); }).filter(Boolean), o = { mrn: [] };
+  const age = /\b(\d{1,3})\s*y\b/i.exec(t); if (age && +age[1] <= 120) o.age = age[1];
+  const sex = /\b(female|male)\b/i.exec(t); if (sex) o.sex = /^f/i.test(sex[1]) ? 'F' : 'M';
+  const cn = /\b(\d{5})\s*[-–]\s*(\d{7})\s*[-–]\s*(\d)\b/.exec(t); if (cn) o.cnic = cn[1] + '-' + cn[2] + '-' + cn[3];
+  const cnDigits = o.cnic ? o.cnic.replace(/-/g, '') : '';
+  const lab = /MR[NM]\s*[:;.,]?\s*([\d ]{10,24})/i.exec(t);
+  if (lab) o.mrn.push(lab[1].replace(/\s/g, ''));
+  lines.forEach(function (x) { const d = x.replace(/\s/g, ''); if (/^\d{12,20}$/.test(d) && d !== cnDigits) o.mrn.push(d); });
+  const dt = /\b(\d{2})\/(\d{2})\/(\d{4})\b/.exec(t); if (dt) o.date = dt[3] + '-' + dt[2] + '-' + dt[1];
   const fi = lines.findIndex(function (x) { return /father|guardian/i.test(x); });
   const isName = function (x) { return /^[A-Z][A-Z .'-]{1,58}[A-Z.]$/.test(x) && !SLIP_STOP.test(x); };
   const before = fi > 0 ? lines.slice(0, fi).filter(isName) : [], any = lines.filter(isName);
   const nm = before.length ? before[before.length - 1] : any[0];
-  if (nm) f.name = nm.replace(/\s+/g, ' ');
+  if (nm) o.name = nm.replace(/\s+/g, ' ');
+  return o;
+}
+// The vote. A value is filled when the readings agree: all of them, or a clear majority (more than any other reading, at least two). A lone
+// reading of a number is filled only with a warning; readings that disagree with no majority leave the field blank and show what was read.
+function vote_(vals) {
+  const c = {}; vals.forEach(function (v) { if (v) c[v] = (c[v] || 0) + 1; });
+  const k = Object.keys(c).sort(function (a, b) { return c[b] - c[a]; });
+  if (!k.length) return { v: '', how: 'none' };
+  if (k.length === 1) return { v: k[0], how: c[k[0]] >= 2 ? 'agree' : 'single', n: c[k[0]], of: c[k[0]] };
+  const all = vals.filter(Boolean).length;
+  if (c[k[0]] >= 2 && c[k[0]] > c[k[1]]) return { v: k[0], how: 'majority', n: c[k[0]], of: all, other: k.slice(1) };
+  return { v: '', how: 'conflict', seen: k };
+}
+function differ_(a, b) { if (a.length !== b.length) return 'a different number of digits'; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return 'digit ' + (i + 1); return ''; }
+function parseSlip_(text, barcode) { return voteSlip_([slipRead_(text)], barcode); }
+function voteSlip_(reads, barcode) {
+  const f = {}, checks = {}, notes = [], pick = function (k) { return vote_(reads.map(function (r) { return r[k]; })); };
+  ['age', 'sex', 'date', 'name'].forEach(function (k) { const v = pick(k); if (v.v) f[k] = v.v; });
+  // MRN: a decoded barcode is exact (Code 128 carries a check character); otherwise every printed copy in every reading is a vote
+  const bc = /^\d{10,20}$/.test(str_(barcode)) ? str_(barcode) : '', copies = [].concat.apply([], reads.map(function (r) { return r.mrn; }));
+  if (bc) {
+    f.mrn = bc; checks.mrn = 'barcode';
+    const off = copies.filter(function (c) { return c !== bc; });
+    if (off.length) notes.push('MRN taken from the barcode, which is exact. A printed copy was read as ' + off[0] + ' (' + differ_(off[0], bc) + ' differs); the barcode was used.');
+  } else {
+    const m = vote_(copies);
+    if (m.how === 'agree' || m.how === 'majority') { f.mrn = m.v; checks.mrn = m.how; if (m.how === 'majority') notes.push('MRN: ' + m.n + ' of ' + m.of + ' readings agree on ' + m.v + '; another read ' + m.other[0] + ' (' + differ_(m.other[0], m.v) + ').'); }
+    else if (m.how === 'single') { f.mrn = m.v; checks.mrn = 'single'; notes.push('MRN was read only once: check every digit.'); }
+    else if (m.how === 'conflict') { checks.mrn = 'conflict'; notes.push('MRN not filled: the readings disagree (' + m.seen.slice(0, 2).join(' and ') + ', ' + differ_(m.seen[0], m.seen[1]) + ' differs). Scan the barcode, or type it from the slip.'); }
+  }
+  // CNIC: voted the same way; then its last digit must fit the sex on the slip (odd for a man, even for a woman) [VERIFY: NADRA convention]
+  const c = pick('cnic');
+  if (c.how === 'conflict') { checks.cnic = 'conflict'; notes.push('CNIC not filled: the readings disagree (' + c.seen.slice(0, 2).join(' and ') + '). Type it from the slip.'); }
+  else if (c.v) {
+    const odd = +c.v.slice(-1) % 2 === 1;
+    if (f.sex && (f.sex === 'M') !== odd) { checks.cnic = 'conflict'; notes.push('CNIC not filled: it was read as ' + c.v + ', but its last digit does not fit the sex on the slip, so a digit was probably misread. Type it from the slip.'); }
+    else { f.cnic = c.v; checks.cnic = c.how; if (c.how === 'single' && reads.length > 1) notes.push('CNIC was read only once: check every digit.'); if (c.how === 'majority') notes.push('CNIC: ' + c.n + ' of ' + c.of + ' readings agree.'); }
+  }
   return { fields: f, checks: checks, notes: notes, note: 'Read from the OPD slip. Check every value against the slip before saving.' };
 }
 // Lab reports: one layout per report type, written from the PI's sample reports. None yet: until then nothing is read (never a guessed layout).
@@ -2776,11 +2796,11 @@ function readDoc_(u, req) {
   else return { ok: false, error: 'unknown kind of document' };
   const mime = str_(req.mime);
   if (['image/jpeg', 'image/png'].indexOf(mime) < 0) return { ok: false, error: 'only JPEG or PNG images' };
-  const data = String(req.data || '');
-  if (!data || data.length > PHOTO_MAX) return { ok: false, error: 'the image is empty or too large' };
-  let text;
-  try { text = ocrText_(Utilities.base64Decode(data), mime); } catch (e) { return { ok: false, error: 'the document could not be read: ' + (e && e.message ? e.message : e) }; }
-  const out = kind === 'slip' ? parseSlip_(text, req.barcode) : parseLab_(text, doc);
+  const datas = (Array.isArray(req.datas) ? req.datas : [req.data]).map(function (d) { return String(d || ''); }).slice(0, 3);      // up to three versions of one picture, each read separately
+  if (!datas.length || datas.some(function (d) { return !d || d.length > PHOTO_MAX; })) return { ok: false, error: 'the image is empty or too large' };
+  const texts = [];
+  try { datas.forEach(function (d) { texts.push(ocrText_(Utilities.base64Decode(d), mime)); }); } catch (e) { return { ok: false, error: 'the document could not be read: ' + (e && e.message ? e.message : e) }; }
+  const out = kind === 'slip' ? voteSlip_(texts.map(slipRead_), req.barcode) : parseLab_(texts[0], doc);
   const sid = idOk_(code_(req.study_id)) ? code_(req.study_id) : '';
   logAudit_('DOC_READ', '', sid, '', '', (kind === 'slip' ? 'OPD slip' : PHOTO_DOCS[doc]) + ' read by text recognition; fields found: ' + (Object.keys(out.fields).join(', ') || 'none'), u.email);
   return { ok: true, fields: out.fields, checks: out.checks || {}, notes: out.notes || [], note: out.note };

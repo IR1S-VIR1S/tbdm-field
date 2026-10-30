@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '6dcb334d5dca';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'd63806f5814e';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1191,7 +1191,7 @@ async function regAssign() {
     const first = ownFree()[0], sid = normId(st.sid) || (first ? idOf_(first) : '');
     if (!sid || !idOk_(sid)) { st.err = 'No spare number on this phone. Type the number from the patient card.'; render(); return; }
     if ((S.confOut || []).some((c) => c.kind === 'add' && s_(c.body.study_id).toUpperCase() === sid) || ((S.conf && S.conf.rows) || []).some((r) => s_(r.study_id).toUpperCase() === sid)) { st.err = sid + ' is already in the register.'; render(); return; }
-    (S.confOut = S.confOut || []).push({ id: st.pendingRid, kind: 'add', at: Date.now(), err: '', body: { status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, cnic: st.cnic, study_id: sid } });
+    (S.confOut = S.confOut || []).push({ id: st.pendingRid, kind: 'add', at: Date.now(), err: '', body: { status: st.status, reason: st.reason, name: st.name, mrn: st.mrn, phone: st.phone, guardian: st.guardian, address: st.address, cnic: st.cnic, study_id: sid } }); slipKeep(st, sid);
     await saveState();
     st.done = 'Saved on this phone: ' + sid + '. It is sent when you are back online.';
     st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.cnic = ''; st.sid = ''; st.reason = ''; st.status = 'E'; st.read = null;
@@ -1202,7 +1202,7 @@ async function regAssign() {
   try {
     const res = await confApi(body);
     if (!res.ok) throw new Error(res.error || 'not assigned');
-    st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id;
+    st.done = (res.again ? 'Already assigned: ' : 'Assigned: ') + res.study_id; slipKeep(st, res.study_id);
     st.pendingRid = null; st.name = ''; st.mrn = ''; st.phone = ''; st.guardian = ''; st.address = ''; st.cnic = ''; st.sid = ''; st.reason = ''; st.status = 'E'; st.read = null;
   } catch (e) {
     if (T.weak && confCopy()) { st.busy = false; return regAssign(); }           // same request id, so a request that did get through is not repeated
@@ -1308,13 +1308,13 @@ async function linkSave() {
   if (!linkUp()) {
     S.confOut = (S.confOut || []).filter((c) => !(c.kind === 'set' && c.body.study_id === st.sid));
     S.confOut.push({ id: rid(), kind: 'set', at: Date.now(), err: '', body: Object.assign({ study_id: st.sid }, st.form) });
-    await saveState(); st.msg = 'Saved on this phone. It is sent when you are back online.'; st.edit = false; st.data = Object.assign({}, st.data, st.form); render(); return;
+    await saveState(); slipKeep(st, st.sid); st.msg = 'Saved on this phone. It is sent when you are back online.'; st.edit = false; st.data = Object.assign({}, st.data, st.form); render(); return;
   }
   st.busy = true; st.err = ''; st.msg = ''; render();
   try {
     const res = await confApi(Object.assign({ op: 'link_set', token: S.cfg.token, study_id: st.sid }, st.form));
     if (!res.ok) throw new Error(res.error || 'not saved');
-    st.msg = 'Saved.'; st.busy = false; st.edit = false;
+    st.msg = 'Saved.'; st.busy = false; st.edit = false; slipKeep(st, st.sid);
     st.data = Object.assign({}, st.data, st.form); render(); return;
   } catch (e) {
     if (T.weak && confCopy()) { st.busy = false; return linkSave(); }           // the signal failed: keep it on the phone instead, to be sent later
@@ -1332,16 +1332,81 @@ async function readDoc(file, body) {
   if (!r.ok) throw new Error(r.error || 'not read');
   return r;
 }
-// The slip's barcode holds the MRN exactly. Phones whose browser can read barcodes (Chrome on Android) send the decoded number; others rely on
-// the two printed copies agreeing. Returns '' when there is no readable barcode or the browser cannot read one.
-async function readBarcode(file) {
+// The slip that was read is kept as the participant's source document (photos on, roles that take photos), so any number can be checked
+// against the original at any time. Queued like every document photo: encrypted on the phone and sent at the next sync.
+async function slipKeep(st, sid) {
+  const file = st.slipFile; st.slipFile = null;
+  if (!file || !sid || !photosOn() || !photoTaker() || T.practice) return;
   try {
-    if (!('BarcodeDetector' in window)) return '';
-    const have = await BarcodeDetector.getSupportedFormats(), want = ['code_128', 'code_39', 'codabar', 'itf', 'ean_13'].filter((x) => have.indexOf(x) >= 0);
-    if (!want.length) return '';
-    const found = await new BarcodeDetector({ formats: want }).detect(await createImageBitmap(file));
-    return (found.map((x) => s_(x.rawValue).trim()).filter((x) => /^\d{10,20}$/.test(x))[0]) || '';
-  } catch (e) { return ''; }
+    const raw = /^image\/(jpeg|png)$/.test(file.type) ? file : null;          // the slip exactly as the camera made it: full resolution, not re-compressed
+    const c = raw ? null : await fileToCanvas(file, true);                     // another format becomes a maximum-quality JPEG at full size
+    await photoQueue(c, { sid: s_(sid).toUpperCase(), doc: 'SLIP', visit: '', by: S.cfg.initials }, raw, 1); if (navigator.onLine) sync();
+  }
+  catch (e) { toast('The slip photo was not kept: ' + (e.message || e)); }
+}
+// Two readers: the browser's own (Chrome on Android) and ZXing, built into the app (zxing.min.js, Apache 2.0) for every other phone,
+// iPhones included. Code 128 carries a check character, so a decoded number is exact or nothing. Returns '' when no barcode is read.
+async function readBarcode(file) {
+  const ok = (v) => /^\d{10,20}$/.test(s_(v).trim()) ? s_(v).trim() : '';
+  try {
+    if ('BarcodeDetector' in window) {
+      const have = await BarcodeDetector.getSupportedFormats(), want = ['code_128', 'code_39', 'codabar', 'itf', 'ean_13'].filter((x) => have.indexOf(x) >= 0);
+      if (want.length) { const found = await new BarcodeDetector({ formats: want }).detect(await createImageBitmap(file)); const v = found.map((x) => ok(x.rawValue)).filter(Boolean)[0]; if (v) return v; }
+    }
+  } catch (e) { /* fall through to ZXing */ }
+  try {
+    const Z = await loadZXing(), readers = [new Z.Code128Reader(), new Z.Code39Reader(), new Z.ITFReader()];
+    // Row by row across the picture (and turned a quarter, for a slip photographed sideways), each row both ways round, through several
+    // windows: the dark table around a slip upsets a threshold taken over the whole width. One clean row through the bars is enough, and
+    // Code 128 is checked against its check character, so only an exact number is returned.
+    const WINS = [[0, 1], [0.2, 1], [0, 0.8], [0.1, 0.9], [0.25, 0.75], [0.15, 0.85]];
+    for (const max of [3000, 1600]) {
+      const c0 = await fileToCanvas(file, false, max);
+      for (const turn of [0, 1]) {
+        let c = c0;
+        if (turn) { c = document.createElement('canvas'); c.width = c0.height; c.height = c0.width; const x = c.getContext('2d'); x.translate(c.width, 0); x.rotate(Math.PI / 2); x.drawImage(c0, 0, 0); }
+        const W = c.width, H = c.height, px = c.getContext('2d').getImageData(0, 0, W, H).data, lum = new Uint8ClampedArray(W * H);
+        for (let k = 0, q = 0; k < lum.length; k++, q += 4) lum[k] = (px[q] * 299 + px[q + 1] * 587 + px[q + 2] * 114) / 1000;
+        const step = Math.max(1, Math.floor(H / 110));
+        for (const wn of WINS) {
+          const left = Math.floor(W * wn[0]), w = Math.floor(W * (wn[1] - wn[0])), bin = new Z.GlobalHistogramBinarizer(new Z.RGBLuminanceSource(lum, w, H, W, H, left, 0));
+          for (let y = Math.floor(step / 2); y < H; y += step) {
+            let row; try { row = bin.getBlackRow(y, new Z.BitArray(w)); } catch (e) { continue; }
+            for (let flip = 0; flip < 2; flip++) {
+              if (flip) row.reverse();
+              for (const rd of readers) { try { const v = ok(rd.decodeRow(y, row, new Map()).getText()); if (v) return v; } catch (e) { /* not on this row */ } }
+            }
+          }
+        }
+      }
+    }
+  } catch (e) { /* no barcode reader on this phone */ }
+  return '';
+}
+function loadZXing() {
+  if (window.ZXing) return Promise.resolve(window.ZXing);
+  return T.zxLoad || (T.zxLoad = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'zxing.min.js'; sc.onload = () => res(window.ZXing); sc.onerror = () => { T.zxLoad = null; rej(new Error('barcode reader not loaded')); }; document.head.append(sc); }));
+}
+// Three versions of one picture for three separate readings: as taken, a sharpened high-contrast grey version, and an enlarged one.
+// Values are filled only where the readings agree (the workbook votes).
+async function readVersions(file) {
+  const out = [], base = await fileToCanvas(file, false, 3000), w = base.width, h = base.height;
+  const small = async (c) => { for (const q of [0.95, 0.9, 0.82, 0.72]) { const b = await canvasJpeg(c, q); if (b.size <= 1900000) return b; } return canvasJpeg(c, 0.6); };   // Google's text reader takes images up to about 2 MB [VERIFY]
+  out.push(await small(base));
+  const g = document.createElement('canvas'); g.width = w; g.height = h; const gx = g.getContext('2d'); gx.drawImage(base, 0, 0);
+  const im = gx.getImageData(0, 0, w, h), d = im.data, hist = new Uint32Array(256);
+  for (let i = 0; i < d.length; i += 4) { const y = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0; d[i] = d[i + 1] = d[i + 2] = y; hist[y]++; }
+  let lo = 0, hi = 255, acc = 0; const n = w * h;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > n * 0.02) { lo = v; break; } }
+  acc = 0; for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > n * 0.02) { hi = v; break; } }
+  const span = Math.max(1, hi - lo);
+  for (let i = 0; i < d.length; i += 4) { const y = Math.max(0, Math.min(255, (d[i] - lo) * 255 / span)); d[i] = d[i + 1] = d[i + 2] = y; }      // stretch the contrast: faint thermal print becomes black
+  gx.putImageData(im, 0, 0);
+  out.push(await small(g));
+  const k = Math.max(w, h) > 2000 ? 2000 / Math.max(w, h) : Math.min(1.6, 3000 / Math.max(w, h)), e = document.createElement('canvas'); e.width = Math.round(w * k); e.height = Math.round(h * k);   // a third size: the reader splits characters differently at each
+  const ex = e.getContext('2d'); ex.imageSmoothingQuality = 'high'; ex.drawImage(g, 0, 0, e.width, e.height);
+  out.push(await small(e));
+  return Promise.all(out.map(async (b) => b64(new Uint8Array(await b.arrayBuffer()))));
 }
 function pickImage(onFile) {                                   // Take photo (the in-app camera on Android) or Choose file (a screenshot)
   const inp = el('input', { type: 'file', accept: 'image/*', hidden: true, onchange: () => { const f = inp.files && inp.files[0]; inp.value = ''; if (f) onFile(f); } });
@@ -1383,7 +1448,9 @@ function slipReadCard(st, apply) {
   const R = st.read || (st.read = { busy: false, msg: '', err: '', extra: null });
   const go = async (file) => {
     R.busy = true; R.err = ''; R.msg = ''; render();
-    try { const bc = await readBarcode(file), r = await readDoc(file, { kind: 'slip', barcode: bc }); apply(r.fields || {}); const n = ['name', 'mrn', 'cnic'].filter((k) => (r.fields || {})[k]).length;
+    try { const bc = await readBarcode(file), datas = await readVersions(file), r = await api({ op: 'read_doc', token: S.cfg.token, kind: 'slip', mime: 'image/jpeg', datas, barcode: bc }, 120000);
+      if (!r.ok) throw new Error(r.error || 'not read');
+      apply(r.fields || {}); st.slipFile = file; const n = ['name', 'mrn', 'cnic'].filter((k) => (r.fields || {})[k]).length;
       R.msg = n ? 'Filled ' + n + ' value' + (n > 1 ? 's' : '') + ' from the slip. Check each one against the slip before saving.' : 'Nothing could be read from this picture. Type the values.';
       R.notes = r.notes || []; R.checks = r.checks || {};
       R.extra = r.fields && (r.fields.age || r.fields.sex) ? 'Slip also shows: ' + [r.fields.age ? 'age ' + r.fields.age : '', r.fields.sex ? (r.fields.sex === 'F' ? 'female' : 'male') : ''].filter(Boolean).join(', ') : null; }
@@ -2754,7 +2821,7 @@ function exportAsk() {
 // A photo is shrunk, encrypted with the PIN key and kept on this phone until the next sync, then sent and deleted here.
 // Phones that take photos cannot view them; the PI, the verifier and the DOTS incharge can; radiograph readers see only
 // radiographs whose name label was covered on the phone. Nothing is written to the phone's gallery.
-const PHOTO_DOC_NAMES = { CONSENT: 'Consent form', CORE: 'Core Per-Patient File', EXAM: 'Examination sheet', SMEAR: 'Sputum smear report', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
+const PHOTO_DOC_NAMES = { SLIP: 'OPD registration slip', CONSENT: 'Consent form', CORE: 'Core Per-Patient File', EXAM: 'Examination sheet', SMEAR: 'Sputum smear report', WITHDRAW: 'Withdrawal Deletion Record', ALERT: 'PHQ-9 item 9 alert slip', LAB: 'Lab report', SPIRO: 'Spirometry printout', CXR: 'Chest radiograph' };
 const PHOTO_DOCS_FOR = { S1_ENROL: ['CONSENT', 'SMEAR', 'CORE'], S2_BASELINE: ['EXAM'], END_STUDY: ['WITHDRAW'], EVENTS: ['ALERT'], LABS: ['LAB'], SPIRO: ['SPIRO'], S3_CXR: ['CXR'] };
 const PHOTO_MAX_PX = 2000;
 // A lab report comes as separate pages; each visit needs the pages of the tests ordered at it (visit checklist).
@@ -2791,11 +2858,11 @@ function rndHex(n) { return hex(crypto.getRandomValues(new Uint8Array(n))); }
 // limited only by the largest picture the phone's browser can draw (16.7 megapixels on iPhone and iPad, far more on Android).
 const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const CXR_MAX_AREA = IOS ? 16777216 : 60000000;
-async function fileToCanvas(file, full) {
+async function fileToCanvas(file, full, maxPx) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('This file is not a picture the phone can read.')); i.src = url; });
-    const k = full ? Math.min(1, Math.sqrt(CXR_MAX_AREA / (img.naturalWidth * img.naturalHeight))) : Math.min(1, PHOTO_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight));
+    const k = full ? Math.min(1, Math.sqrt(CXR_MAX_AREA / (img.naturalWidth * img.naturalHeight))) : Math.min(1, (maxPx || PHOTO_MAX_PX) / Math.max(img.naturalWidth, img.naturalHeight));
     const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
     return c;
@@ -2818,7 +2885,7 @@ async function pushPhotos(still) {
     const box = await kvGet('ph_' + ph.id);
     if (!box) { S.photoOut = S.photoOut.filter((x) => x.id !== ph.id); continue; }
     const bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: box.iv }, KEY, box.ct));
-    const res = await api({ op: 'photo_put', token: S.cfg.token, photo_id: ph.id, study_id: ph.sid, doc: ph.doc, visit: ph.visit || '', covered: ph.covered || 'N', mime: ph.mime, data: b64(bytes), sha256: ph.sha, taken_at: ph.at, note: ph.note || '' }, ph.doc === 'CXR' ? 360000 : 90000); still();
+    const res = await api({ op: 'photo_put', token: S.cfg.token, photo_id: ph.id, study_id: ph.sid, doc: ph.doc, visit: ph.visit || '', covered: ph.covered || 'N', mime: ph.mime, data: b64(bytes), sha256: ph.sha, taken_at: ph.at, note: ph.note || '' }, ph.doc === 'CXR' || ph.doc === 'SLIP' ? 360000 : 90000); still();
     if (res.code === 401) throw Object.assign(new Error(res.error || 'not authorised'), { code: 401 });
     const cur = (S.photoOut || []).filter((x) => x.id === ph.id)[0];
     if (res.ok) {
@@ -3194,7 +3261,7 @@ async function photoOpen(ph, have) {
   document.body.append(ov);
   try {
     let src = have;
-    if (!src) { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, ph.doc === 'CXR' ? 240000 : 45000); if (!r.ok) throw new Error(r.error || 'not available'); src = 'data:' + r.mime + ';base64,' + r.data; }
+    if (!src) { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, ph.doc === 'CXR' || ph.doc === 'SLIP' ? 240000 : 45000); if (!r.ok) throw new Error(r.error || 'not available'); src = 'data:' + r.mime + ';base64,' + r.data; }
     const img = el('img', { src, alt: PHOTO_DOC_NAMES[ph.doc] }), pane = el('div', { class: 'pf-img' }, img);
     let z = 1;
     const zoom = (n) => { z = n; img.style.width = n === 0 ? img.naturalWidth + 'px' : (100 * z) + '%'; img.style.maxWidth = 'none'; ov.querySelectorAll('.pf-z').forEach((b) => b.classList.toggle('primary', +b.dataset.z === z)); };   // 0 = actual pixels (full resolution)
