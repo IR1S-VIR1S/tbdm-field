@@ -456,3 +456,5 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .field.readfrom { border-color: #d39a3a; background: #fff8ec; } .readhint { color: #8a5a10; font-weight: 600; }
 .card.readcard .row2 { margin-top: 8px; } .pbtn.readbtn { font-size: 12px; font-weight: 700; padding: 0 8px; width: auto; }
 .readnotes { margin: 8px 0 0; padding-left: 18px; color: #8a5a10; font-weight: 600; } .readnotes li { margin: 4px 0; }
+
+.photo-full .pf-img { cursor: grab; } .photo-full .pf-img.grabbing { cursor: grabbing; } .photo-full .pf-img img { user-select: none; -webkit-user-drag: none; }

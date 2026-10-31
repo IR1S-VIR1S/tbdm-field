@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '2caf3d77be95';                 // replaced by build.js with the build's hash
+const BUILD_ID = '49b40593e353';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -3359,10 +3359,29 @@ async function photoOpen(ph, have, sid) {
     let src = have;
     if (!src) { const r = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, ph.doc === 'CXR' || ph.doc === 'SLIP' ? 240000 : 45000); if (!r.ok) throw new Error(r.error || 'not available'); src = 'data:' + r.mime + ';base64,' + r.data; }
     const img = el('img', { src, alt: PHOTO_DOC_NAMES[ph.doc] }), pane = el('div', { class: 'pf-img' }, img);
-    let z = 1;
-    const zoom = (n) => { z = n; img.style.width = n === 0 ? img.naturalWidth + 'px' : (100 * z) + '%'; img.style.maxWidth = 'none'; ov.querySelectorAll('.pf-z').forEach((b) => b.classList.toggle('primary', +b.dataset.z === z)); };   // 0 = actual pixels (full resolution)
+    // Phones: pinch to zoom (the browser's own). Computers: the mouse wheel (or a trackpad pinch) zooms around the pointer, and dragging moves the
+    // picture. 1:1 shows actual pixels (full resolution); pressed again, it fits the picture to the screen.
+    const fitW = () => Math.min(img.naturalWidth || pane.clientWidth, pane.clientWidth);
+    const setW = (w, cx, cy) => {
+      const r0 = img.getBoundingClientRect(), fx = r0.width ? (cx - r0.left) / r0.width : 0.5, fy = r0.height ? (cy - r0.top) / r0.height : 0.5;
+      w = Math.max(fitW(), Math.min(w, Math.max(fitW(), (img.naturalWidth || 1000) * 4)));
+      img.style.maxWidth = 'none'; img.style.width = Math.round(w) + 'px';
+      const r1 = img.getBoundingClientRect();
+      pane.scrollLeft += r1.left + fx * r1.width - cx; pane.scrollTop += r1.top + fy * r1.height - cy;
+      const one = ov.querySelector('#photo-11'); if (one) one.textContent = Math.round(w) > fitW() + 1 ? 'Fit' : '1:1';
+    };
+    pane.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const k = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015) * (e.deltaMode === 1 ? 16 : 1));
+      setW(img.getBoundingClientRect().width * k, e.clientX, e.clientY);
+    }, { passive: false });
+    let drag = null;
+    pane.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse' || e.button !== 0) return; drag = { x: e.clientX, y: e.clientY, l: pane.scrollLeft, t: pane.scrollTop }; pane.classList.add('grabbing'); e.preventDefault(); });
+    window.addEventListener('pointermove', (e) => { if (!drag) return; pane.scrollLeft = drag.l - (e.clientX - drag.x); pane.scrollTop = drag.t - (e.clientY - drag.y); });
+    window.addEventListener('pointerup', () => { drag = null; pane.classList.remove('grabbing'); });
+    const oneToOne = () => { const b = pane.getBoundingClientRect(), big = img.getBoundingClientRect().width > fitW() + 1; setW(big ? fitW() : img.naturalWidth, b.left + b.width / 2, b.top + b.height / 2); };
     ov.replaceChildren(el('div', { class: 'pf-bar' }, el('b', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '')),
-      /^reader/.test(role()) ? null : [1, 2, 3, 0].map((n) => el('button', { class: 'btn small pf-z' + (n === 1 ? ' primary' : ''), type: 'button', 'data-z': String(n), title: n === 0 ? 'Actual pixels, full resolution' : '', onclick: () => zoom(n) }, n === 0 ? '1:1' : n + '×')),
+      /^reader/.test(role()) ? null : el('button', { class: 'btn small', type: 'button', id: 'photo-11', title: 'Actual pixels (full resolution), or fit to the screen', onclick: oneToOne }, '1:1'),
       ph.doc === 'SLIP' && !ph.local && sid && confRole() && linkUp() ? el('button', { class: 'btn small', type: 'button', id: 'photo-reread', onclick: () => { close(); T.slipAgain = sid; if (cur().name === 'link' && T.link && T.link.sid === sid) render(); else go('link', { sid }); } }, 'Read again') : null,
       (have && ph.doc !== 'SLIP') || ph.local ? null : el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked as too poor to read. The PI has been told.' : 'Could not mark it: ' + (f.error || 'no signal')); } }, 'Too poor'),
       el('button', { class: 'btn small', type: 'button', id: 'photo-close', onclick: close }, 'Close')), pane);
