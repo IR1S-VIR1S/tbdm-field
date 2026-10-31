@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '76d293e2baf4';                 // replaced by build.js with the build's hash
+const BUILD_ID = '2caf3d77be95';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1882,7 +1882,7 @@ function participant(p) {
     (() => {                                                   // confidential blocks side by side: Contact (PI) and Photos (PI, verifier)
       const t = [
         can('contacts') && (!T.practice || T.preview) ? contactTile(sid) : null,
-        can('photoView') && photosOn() ? photosTile(sid) : null].filter(Boolean);
+        (can('photoView') || can('photoTake')) && photosOn() ? photosTile(sid) : null].filter(Boolean);
       return t.length ? el('div', { class: 'ctiles' + (t.length === 1 ? ' solo' : '') }, t) : null;
     })(),
     visits,
@@ -2972,7 +2972,7 @@ async function photoTake(file, F, doc) {
   let canvas;
   try { canvas = await fileToCanvas(file, doc === 'CXR'); } catch (e) { toast(e.message); return; }
   const base = { sid, doc, visit: /^(V[1-5]|U[1-5])$/.test(visit) ? visit : '', by: S.cfg.initials };
-  const finish = async () => { toast('Photo kept on this phone, locked with your PIN. It is sent at the next sync.'); paintPhotoCard(); if (navigator.onLine) sync(); };
+  const finish = async () => { toast('Photo kept on this phone, locked with your PIN. It is sent at the next sync.'); paintPhotoCard(); if (F.after) F.after(); if (navigator.onLine) sync(); };
   if (doc === 'CXR') {
     coverTool(canvas, async (covered) => {
       await photoQueue(covered, Object.assign({}, base, { covered: 'Y' }), null, 1);      // the readers' copy: full resolution, maximum JPEG quality
@@ -3008,7 +3008,7 @@ function paintPhotoCard(target) {
   const done = states.filter((x) => x !== 'missing').length;
   const mark = (st) => el('span', { class: 'dmark ' + st, 'aria-label': st === 'sent' ? 'sent' : st === 'waiting' ? 'waiting to send' : 'not attached yet' }, st === 'missing' ? '' : '✓');
   box.replaceChildren(el('b', null, 'Source documents'),
-    el('div', { class: 'small muted' }, sid ? (docs.length > 1 ? done + ' of ' + docs.length + ' attached for ' + sid + (visit ? ' ' + visit : '') + '. ' : 'Attached to ' + sid + (visit ? ' ' + visit : '') + '. ') + 'Once sent, this phone cannot show them again.' : 'Enter the study number first.'),
+    el('div', { class: 'small muted' }, sid ? (docs.length > 1 ? done + ' of ' + docs.length + ' attached for ' + sid + (visit ? ' ' + visit : '') + '. ' : 'Attached to ' + sid + (visit ? ' ' + visit : '') + '. ') + (photoViewer() ? 'Tap the eye to open one.' : 'Tap the eye to open a photo still waiting on this phone; once sent, only roles allowed to open document photos can see it.') : 'Enter the study number first.'),
     ...docs.map((doc, i) => {
       const cam = pick(doc, true), file = pick(doc, false), st = states[i], err = queued.filter((x) => x.doc === doc && x.status === 'error' && x.err)[0];
       return el('div', { class: 'photorow' }, mark(st), el('div', { class: 'grow' }, PHOTO_DOC_NAMES[doc], el('small', null, err ? 'not accepted: ' + err.err : st === 'sent' ? 'sent' : st === 'waiting' ? 'waiting to send' : 'not attached yet')),
@@ -3016,6 +3016,7 @@ function paintPhotoCard(target) {
         el('div', { class: 'pbtns' },
           el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': st === 'missing' ? 'Take photo' : 'Add page', title: 'Take photo', onclick: () => (useInAppCamera() ? inAppCamera(doc, cam, F) : cam.click()) }, icon('camera')),
           el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': 'Choose file', title: 'Choose file (screenshot)', onclick: () => file.click() }, icon('export')),
+          docViewable(st) ? el('button', { class: 'pbtn viewbtn', type: 'button', 'data-view': doc, 'aria-label': 'View ' + PHOTO_DOC_NAMES[doc], title: 'View', onclick: () => docView(sid, doc, v) }, icon('eye')) : null,
           /^LAB_/.test(doc) && F.tab === 'LABS' ? el('button', { class: 'pbtn readbtn', type: 'button', disabled: !sid || !navigator.onLine, 'data-read': doc, 'aria-label': 'Read values from this report', title: 'Read values', onclick: () => labReadAsk(doc) }, 'Read') : null));
     }))
 }
@@ -3250,13 +3251,16 @@ function photoNeeds(sid) {                                 // every required doc
   if (view('END_STUDY').some((r) => r.study_id === sid && r.status === 'W')) need.push(['WITHDRAW', '', 'withdrawal record']);
   return need;
 }
+function missingDocs(sid, list) {                         // required documents, up to today, that are neither on the workbook nor waiting on this phone
+  return photoNeeds(sid).filter((n) => docState(sid, n[0], n[1]) === 'missing' && !(list || []).some((ph) => ph.doc === n[0] && (!n[1] || ph.visit === n[1])));
+}
 function photoSummary(sid, list) {
-  const miss = photoNeeds(sid).filter((n) => docState(sid, n[0], n[1]) === 'missing' && !list.some((ph) => ph.doc === n[0] && (!n[1] || ph.visit === n[1])));
+  const miss = missingDocs(sid, list);
   const labs = {}, missing = [];
   miss.forEach((n) => { if (/^LAB_/.test(n[0])) { if (!labs[n[1]]) { labs[n[1]] = 0; missing.push('lab ' + n[1]); } labs[n[1]]++; } else missing.push(n[2]); });
   missing.forEach((m, i) => { const v = /^lab (V\d|U\d)$/.exec(m); if (v && labs[v[1]] > 1) missing[i] = m + ' (' + labs[v[1]] + ' pages)'; });
   const poor = list.filter((ph) => ph.flag).length;
-  const head = (list.length ? list.length + ' attached' : 'None attached') + (poor ? ' · ' + poor + ' too poor' : '');
+  const head = (miss.length ? miss.length + ' missing · ' : '') + (list.length ? list.length + ' attached' : 'None attached') + (poor ? ' · ' + poor + ' too poor' : '');
   const tail = missing.length ? 'Missing: ' + missing.slice(0, 2).join(', ') + (missing.length > 2 ? ' and ' + (missing.length - 2) + ' more' : '') : (list.length ? 'All documents attached' : '');
   return [head, tail];
 }
@@ -3293,14 +3297,63 @@ function photosTile(sid) {
   photoFetch(sid, () => { if (cur().name === 'participant' && !(T.form && T.form.dirty)) render(); });
   return b;
 }
-function photosScreen(p) {                                  // the participant's photos, loaded straight away (online only)
-  const card = photoViewCard(p.sid);
-  if (card) setTimeout(() => { const b = $('#photo-show'); if (b) b.click(); }, 0);
-  return topBar('Source documents · ' + p.sid).concat([el('main', null, card || el('div', { class: 'card' }, 'Source documents are not available on this phone.'))]);
+// Source documents of one participant: what is missing up to today, each with Take photo and Choose file right there; then what is attached.
+function photosScreen(p) {
+  const sid = p.sid, taker = photoTaker() && photosOn(), refresh = () => { if (cur().name === 'photos' && cur().p.sid === sid) render(); };
+  photoFetch(sid, refresh);
+  const c = T.phc && T.phc[sid], list = c ? c.list : [], miss = c || !navigator.onLine ? missingDocs(sid, list) : null;
+  const pick = (doc, visit, capture) => {
+    const inp = el('input', { type: 'file', accept: 'image/*', capture: capture ? 'environment' : null, hidden: true, 'data-doc': doc, class: 'photoinput' + (capture ? ' cam' : ' file') });
+    inp.addEventListener('change', () => { const f = inp.files && inp.files[0]; inp.value = ''; if (f) photoTake(f, { tab: 'DOCS', vals: { study_id: sid, visit }, after: refresh }, doc); });
+    return inp;
+  };
+  const row = (doc, visit, st, sub) => {
+    const cam = pick(doc, visit, true), file = pick(doc, visit, false), F = { tab: 'DOCS', vals: { study_id: sid, visit }, after: refresh };
+    return el('div', { class: 'photorow', 'data-doc': doc, 'data-visit': visit },
+      el('span', { class: 'dmark ' + st }, st === 'missing' ? '' : '✓'), el('div', { class: 'grow' }, PHOTO_DOC_NAMES[doc] + (visit ? ' · ' + visit : ''), el('small', null, sub)),
+      taker && st === 'missing' ? [cam, file] : null,
+      el('div', { class: 'pbtns' },
+        taker && st === 'missing' ? [el('button', { class: 'pbtn', type: 'button', 'aria-label': 'Take photo', title: 'Take photo', onclick: () => (useInAppCamera() ? inAppCamera(doc, cam, F) : cam.click()) }, icon('camera')),
+          el('button', { class: 'pbtn', type: 'button', 'aria-label': 'Choose file', title: 'Choose file (screenshot)', onclick: () => file.click() }, icon('export'))] : null,
+        docViewable(st) ? el('button', { class: 'pbtn viewbtn', type: 'button', 'aria-label': 'View', title: 'View', onclick: () => docView(sid, doc, visit) }, icon('eye')) : null));
+  };
+  const missCard = el('div', { class: 'card photocard', id: 'docmissing' },
+    el('b', null, miss === null ? 'Missing documents' : miss.length ? 'Missing up to today (' + miss.length + ')' : 'Nothing missing up to today'),
+    el('div', { class: 'small muted' }, miss === null ? 'Checking…' : !c ? 'No signal: this counts only photos taken or sent from this phone.' : 'Documents due for enrolment and every visit whose window has opened.' + (taker && miss.length ? ' Photograph each one, or choose a file.' : '')),
+    (miss || []).map((n) => row(n[0], n[1], 'missing', 'not attached yet')));
+  const waiting = (S.photoOut || []).filter((x) => x.sid === sid);
+  const waitCard = waiting.length ? el('div', { class: 'card photocard', id: 'docwaiting' }, el('b', null, 'Waiting on this phone (' + waiting.length + ')'), el('div', { class: 'small muted' }, 'Sent at the next sync.'),
+    waiting.filter((x) => x.covered !== 'Y').map((x) => row(x.doc, x.visit || '', 'waiting', x.status === 'error' ? 'not accepted: ' + (x.err || '') : 'waiting to send'))) : null;
+  let sentCard = null;
+  if (photoViewer()) { sentCard = photoViewCard(sid); if (sentCard) setTimeout(() => { const b = $('#photo-show'); if (b) b.click(); }, 0); }
+  else if (c && list.length) sentCard = el('div', { class: 'card photocard', id: 'docsent' }, el('b', null, 'Attached (' + list.length + ')'), el('div', { class: 'small muted' }, 'On the workbook. Only roles allowed to open document photos can view them.'),
+    list.map((x) => row(x.doc, x.visit || '', 'sent', 'sent')));
+  return topBar('Source documents · ' + sid).concat([el('main', null, photosOn() ? [missCard, waitCard, sentCard] : el('div', { class: 'card' }, 'Source documents are not available on this phone.'))]);
+}
+// View: a photo still waiting on this phone opens from its encrypted copy (any role that took it); a sent one from the workbook (roles allowed to open document photos, online).
+function docViewable(st) { return st === 'waiting' || (st === 'sent' && photoViewer()); }
+async function docView(sid, doc, visit) {
+  const v = visit || '', same = (x) => x.doc === doc && (x.visit || '') === v;
+  const q = (S.photoOut || []).filter((x) => x.sid === sid && same(x) && x.covered !== 'Y').pop();
+  if (q) {
+    try { const box = await kvGet('ph_' + q.id), bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: box.iv }, KEY, box.ct));
+      photoOpen({ doc, visit: v, local: true }, URL.createObjectURL(new Blob([bytes], { type: q.mime || 'image/jpeg' })), sid); }
+    catch (e) { toast('Could not open it: ' + (e.message || e)); }
+    return;
+  }
+  if (!photoViewer()) { toast('Sent. Only roles allowed to open document photos can view it.'); return; }
+  if (!navigator.onLine) { toast('Sent photos open only with a signal.'); return; }
+  try {
+    const r = await api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 20000);
+    if (!r.ok) throw new Error(r.error || 'not available');
+    const ph = (r.photos || []).filter((x) => same(x)).sort((a, b) => (a.covered === 'Y') - (b.covered === 'Y') || s_(b.taken_at).localeCompare(s_(a.taken_at)))[0];
+    if (!ph) { toast('Not found on the workbook yet.'); return; }
+    photoOpen(ph, null, sid);
+  } catch (e) { toast('Could not open it: ' + e.message); }
 }
 async function photoOpen(ph, have, sid) {
   const ov = el('div', { class: 'photo-full', role: 'dialog', 'aria-label': 'Photo' }, el('div', { class: 'small' }, 'Loading…'));
-  const close = () => ov.remove();
+  const close = () => { ov.remove(); if (/^blob:/.test(have || '')) URL.revokeObjectURL(have); };
   document.body.append(ov);
   try {
     let src = have;
@@ -3310,8 +3363,8 @@ async function photoOpen(ph, have, sid) {
     const zoom = (n) => { z = n; img.style.width = n === 0 ? img.naturalWidth + 'px' : (100 * z) + '%'; img.style.maxWidth = 'none'; ov.querySelectorAll('.pf-z').forEach((b) => b.classList.toggle('primary', +b.dataset.z === z)); };   // 0 = actual pixels (full resolution)
     ov.replaceChildren(el('div', { class: 'pf-bar' }, el('b', null, PHOTO_DOC_NAMES[ph.doc] + (ph.visit ? ' ' + ph.visit : '')),
       /^reader/.test(role()) ? null : [1, 2, 3, 0].map((n) => el('button', { class: 'btn small pf-z' + (n === 1 ? ' primary' : ''), type: 'button', 'data-z': String(n), title: n === 0 ? 'Actual pixels, full resolution' : '', onclick: () => zoom(n) }, n === 0 ? '1:1' : n + '×')),
-      ph.doc === 'SLIP' && sid && confRole() && linkUp() ? el('button', { class: 'btn small', type: 'button', id: 'photo-reread', onclick: () => { close(); T.slipAgain = sid; if (cur().name === 'link' && T.link && T.link.sid === sid) render(); else go('link', { sid }); } }, 'Read again') : null,
-      have && ph.doc !== 'SLIP' ? null : el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked as too poor to read. The PI has been told.' : 'Could not mark it: ' + (f.error || 'no signal')); } }, 'Too poor'),
+      ph.doc === 'SLIP' && !ph.local && sid && confRole() && linkUp() ? el('button', { class: 'btn small', type: 'button', id: 'photo-reread', onclick: () => { close(); T.slipAgain = sid; if (cur().name === 'link' && T.link && T.link.sid === sid) render(); else go('link', { sid }); } }, 'Read again') : null,
+      (have && ph.doc !== 'SLIP') || ph.local ? null : el('button', { class: 'btn small', type: 'button', id: 'photo-poor', onclick: async () => { const f = await api({ op: 'photo_flag', token: S.cfg.token, photo_id: ph.photo_id }, 20000).catch(() => ({})); toast(f.ok ? 'Marked as too poor to read. The PI has been told.' : 'Could not mark it: ' + (f.error || 'no signal')); } }, 'Too poor'),
       el('button', { class: 'btn small', type: 'button', id: 'photo-close', onclick: close }, 'Close')), pane);
   } catch (e) { ov.replaceChildren(el('div', { class: 'small' }, 'Could not open: ' + e.message), el('button', { class: 'btn', onclick: close }, 'Close')); }
 }
