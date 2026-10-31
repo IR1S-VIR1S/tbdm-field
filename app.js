@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '49b40593e353';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'e4007975e4ba';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1324,14 +1324,6 @@ async function linkSave() {
 }
 function cnicTxt(v) { const d = s_(v).replace(/[^\d]/g, ''); return d.length === 13 ? d.slice(0, 5) + '-' + d.slice(5, 12) + '-' + d.slice(12) : s_(v).trim(); }
 function titleName(v) { return s_(v).toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()); }
-// ---- Reading a document (OCR, off with the photo switch). The phone sends one picture (made smaller, never kept on the phone or in Drive);
-// the workbook returns the values it found; they fill the form, marked to check, and nothing is saved until the person presses Save.
-async function readDoc(file, body) {
-  const c = await fileToCanvas(file, false), blob = await canvasJpeg(c, 0.9), data = b64(new Uint8Array(await blob.arrayBuffer()));
-  const r = await api(Object.assign({ token: S.cfg.token, op: 'read_doc', mime: 'image/jpeg', data }, body), 90000);
-  if (!r.ok) throw new Error(r.error || 'not read');
-  return r;
-}
 // The slip that was read is kept as the participant's source document (photos on, roles that take photos), so any number can be checked
 // against the original at any time. Queued like every document photo: encrypted on the phone and sent at the next sync.
 async function slipKeep(st, sid) {
@@ -1414,22 +1406,67 @@ function pickImage(onFile) {                                   // Take photo (th
   return [inp, cam, el('button', { class: 'btn', type: 'button', onclick: () => (useInAppCamera() ? inAppCamera('READ', cam, null, onFile) : cam.click()) }, icon('camera'), ' Take photo'),
     el('button', { class: 'btn', type: 'button', onclick: () => inp.click() }, icon('export'), ' Choose file')];
 }
-// Lab report: the picture is kept as this page's document photo AND read; values found fill the blank fields, marked to check.
+// Lab report: Read on a page not yet attached asks for the picture, keeps it as that page's document AND reads it (three versions, voted on the
+// workbook). Read on a page already attached reads the saved photo: the copy waiting on this phone, or the one on the workbook. Values found
+// fill the blank fields, marked to check. A sheet that carries other tests of this visit (LGH prints HBsAg, anti-HCV and HIV on one sheet) is
+// kept for those pages too.
+const LAB_FIELD_PAGE = { hbsag: 'LAB_HEP', anti_hcv: 'LAB_HEP', hiv: 'LAB_HIV', tlc: 'LAB_CBC', hb: 'LAB_CBC', plt: 'LAB_CBC', alt: 'LAB_LFT', ast: 'LAB_LFT', alp: 'LAB_LFT', tbili: 'LAB_LFT', hba1c: 'LAB_HBA1C', fpg: 'LAB_FPG', tg: 'LAB_LIPID' };
 function labReadAsk(doc) {
   const F = T.form; if (!F || F.tab !== 'LABS') return;
+  const sid = s_(F.vals.study_id).toUpperCase(), visit = s_(F.vals.visit).toUpperCase(), st = docState(sid, doc, visit);
+  const read = async (body, file) => {
+    toast('Reading the report…');
+    try {
+      const r = await api(Object.assign({ op: 'read_doc', token: S.cfg.token, kind: 'lab', doc, study_id: sid, visit }, body), 150000);
+      if (!r.ok) throw new Error(r.error || 'not read');
+      if (T.form !== F) return;
+      const got = labApply(F, r.fields || {});
+      F.readNotes = r.notes || [];
+      if (file) labOtherPages(F, doc, r.fields || {}, file);
+      labNotesShow(F);
+      toast(got.length ? 'Filled ' + got.length + ' value' + (got.length > 1 ? 's' : '') + ' from the ' + (file ? '' : 'saved ') + 'report. Check each one before saving.' : (r.note || 'Nothing could be read. Type the values.'));
+    } catch (e) { toast('Not read: ' + e.message); }
+  };
+  const versions = async (file) => ({ mime: 'image/jpeg', datas: await readVersions(file) });
+  const fromB64 = (b, mime) => { const bin = atob(b), u8 = new Uint8Array(bin.length); for (let k = 0; k < bin.length; k++) u8[k] = bin.charCodeAt(k); return new File([u8], 'page.jpg', { type: mime || 'image/jpeg' }); };
+  if (st === 'waiting') {                                        // the photo waiting on this phone (encrypted): read it as it is
+    const q = (S.photoOut || []).filter((x) => x.sid === sid && x.doc === doc && (x.visit || '') === visit).pop();
+    if (q) {
+      (async () => { try { const box = await kvGet('ph_' + q.id), bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: box.iv }, KEY, box.ct)); read(await versions(new File([bytes], 'page.jpg', { type: q.mime || 'image/jpeg' }))); } catch (e) { toast('Not read: ' + (e.message || e)); } })();
+      return;
+    }
+  }
+  if (st === 'sent') {                                           // on the workbook: a phone that may open photos reads it three ways; any other has the workbook read it
+    (async () => {
+      try {
+        if (photoViewer()) {
+          const l = await api({ op: 'photo_list', token: S.cfg.token, study_id: sid }, 20000);
+          const ph = ((l && l.photos) || []).filter((x) => x.doc === doc && (x.visit || '') === visit).sort((a, b) => s_(b.taken_at).localeCompare(s_(a.taken_at)))[0];
+          if (ph) { const g = await api({ op: 'photo_get', token: S.cfg.token, photo_id: ph.photo_id }, 120000); if (g.ok) { read(await versions(fromB64(g.data, g.mime))); return; } }
+        }
+        read({ saved: 'Y' });
+      } catch (e) { toast('Not read: ' + (e.message || e)); }
+    })();
+    return;
+  }
   const go = async (file) => {
     const m = $('#modal'); m.hidden = true; m.replaceChildren();
     photoTake(file, F, doc);
-    toast('Reading the report…');
-    try {
-      const r = await readDoc(file, { kind: 'lab', doc, study_id: s_(F.vals.study_id).toUpperCase(), visit: s_(F.vals.visit).toUpperCase() });
-      if (T.form !== F) return;
-      const got = labApply(F, r.fields || {});
-      toast(got.length ? 'Filled ' + got.length + ' value' + (got.length > 1 ? 's' : '') + ' from the report. Check each one before saving.' : (r.note || 'Nothing could be read. Type the values.'));
-    } catch (e) { toast('Not read: ' + e.message); }
+    try { read(await versions(file), file); } catch (e) { toast('Not read: ' + (e.message || e)); }
   };
   modal('Read ' + (PHOTO_DOC_NAMES[doc] || 'the report'), [el('p', { class: 'small' }, 'Photograph the report page, or choose a screenshot. It is kept as this page\'s document, and the values found are filled in for you to check. Nothing is saved until you press Save.'),
     el('div', { class: 'row2' }, ...pickImage(go))], [['Cancel', null]]);
+}
+function labOtherPages(F, doc, fields, file) {                // the same sheet also shows other tests of this visit: keep it for their pages too
+  const sid = s_(F.vals.study_id).toUpperCase(), visit = s_(F.vals.visit).toUpperCase(), want = labDocs(visit);
+  const pages = Array.from(new Set(Object.keys(fields).map((k) => LAB_FIELD_PAGE[k]).filter((d) => d && d !== doc && want.indexOf(d) >= 0 && docState(sid, d, visit) === 'missing')));
+  pages.forEach((d) => photoTake(file, F, d));
+}
+function labNotesShow(F) {                                     // what the reader could not settle, just above the document card, until the form is left
+  const old = $('#labnotes'); if (old) old.remove();
+  if (!(F.readNotes || []).length) return;
+  const card = el('div', { class: 'card warn small', id: 'labnotes' }, el('b', null, 'From the report reader'), el('ul', { class: 'readnotes' }, F.readNotes.map((x) => el('li', null, x))));
+  const pc = $('#photocard'); if (pc) pc.before(card);
 }
 function labApply(F, f) {                                         // only blank fields are filled; a unit read from the report sets the unit switch
   const got = [];
@@ -3017,7 +3054,7 @@ function paintPhotoCard(target) {
           el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': st === 'missing' ? 'Take photo' : 'Add page', title: 'Take photo', onclick: () => (useInAppCamera() ? inAppCamera(doc, cam, F) : cam.click()) }, icon('camera')),
           el('button', { class: 'pbtn', type: 'button', disabled: !sid, 'aria-label': 'Choose file', title: 'Choose file (screenshot)', onclick: () => file.click() }, icon('export')),
           docViewable(st) ? el('button', { class: 'pbtn viewbtn', type: 'button', 'data-view': doc, 'aria-label': 'View ' + PHOTO_DOC_NAMES[doc], title: 'View', onclick: () => docView(sid, doc, v) }, icon('eye')) : null,
-          /^LAB_/.test(doc) && F.tab === 'LABS' ? el('button', { class: 'pbtn readbtn', type: 'button', disabled: !sid || !navigator.onLine, 'data-read': doc, 'aria-label': 'Read values from this report', title: 'Read values', onclick: () => labReadAsk(doc) }, 'Read') : null));
+          /^LAB_/.test(doc) && F.tab === 'LABS' ? el('button', { class: 'pbtn readbtn', type: 'button', disabled: !sid || !navigator.onLine, 'data-read': doc, 'aria-label': st === 'missing' ? 'Photograph this report and read its values' : 'Read values from the saved photo', title: st === 'missing' ? 'Read values' : 'Read the saved photo', onclick: () => labReadAsk(doc) }, 'Read') : null));
     }))
 }
 // Android: Chrome often hands a file-input camera to the camera app and then loses the page, or does nothing when its camera permission was never

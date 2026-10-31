@@ -2781,12 +2781,117 @@ function voteSlip_(reads, barcode) {
   }
   return { fields: f, checks: checks, notes: notes, note: 'Read from the OPD slip. Check every value against the slip before saving.' };
 }
-// Lab reports: one layout per report type, written from the PI's sample reports. None yet: until then nothing is read (never a guessed layout).
-const LAB_LAYOUTS = {};
-function parseLab_(text, doc) {
-  const L = LAB_LAYOUTS[doc];
-  if (!L) return { fields: {}, note: 'This report layout is not set up yet, so nothing was read. Type the values.' };
-  return L(String(text || ''));
+// Lab reports: one layout per report type, written only from the PI's sample reports (never a guessed layout). Pages with no layout read nothing.
+// LGH Department of Pathology (samples of 31 Oct 2026: CBC, LFTs, serology). Each test is one row: name, printed reference range, unit, result.
+// The result column carries an arrow only when the value is outside the printed range; text recognition may read that arrow as a digit
+// ('1491.6' for an arrow and 491.6), so the arrow is worked out from the range, and a reading that could be either is left for the person.
+const LGH_ROWS = {                                          // field (or a check-only value): names as printed, letters only; a plausible range
+  tlc: [['WBC', 'TLC'], 0.5, 100], rbc: [['RBC'], 0.5, 9], hb: [['HGB', 'HB', 'HAEMOGLOBIN', 'HEMOGLOBIN'], 3, 25], hct: [['HCT'], 8, 75],
+  mcv: [['MCV'], 40, 140], mchc: [['MCHC'], 20, 45], plt: [['PLT', 'PLATELETS'], 5, 2000], mpv: [['MPV'], 4, 20],
+  neut_pct: [['NEUT', 'NEUTROPHILS'], 0, 100], lymph_pct: [['LYMP', 'LYMPH', 'LYMPHOCYTES'], 0, 100], mono_pct: [['MONO', 'MONOCYTES'], 0, 100],
+  eos_pct: [['EOS', 'EOSINOPHILS'], 0, 60], baso_pct: [['BASO', 'BASOPHILS'], 0, 20], mch: [['MCH'], 10, 50], rdw: [['RDWCV', 'RDW'], 8, 35],
+  ast: [['AST', 'SGOT'], 1, 5000], alt: [['ALT', 'SGPT'], 1, 5000], alp: [['ALKALINEPHOSPHATASE', 'ALP'], 10, 3000], tbili: [['TOTALBILIRUBIN', 'BILIRUBINTOTAL'], 0.05, 40]
+};
+const LGH_SERO = { hbsag: ['HBSAG'], anti_hcv: ['ANTIHCV', 'HCV'], hiv: ['ANTIHIV', 'HIV'] };
+const LGH_ULN = { ast: 'ast_uln', alt: 'alt_uln', alp: 'alp_uln', tbili: 'bili_uln' };
+const LGH_NAMES = { tlc: 'WBC', hb: 'Haemoglobin', plt: 'Platelets', mpv: 'MPV', rdw: 'RDW', neut_pct: 'Neutrophils %', lymph_pct: 'Lymphocytes %', eos_pct: 'Eosinophils %',
+  ast: 'AST', alt: 'ALT', alp: 'ALP', tbili: 'Total bilirubin', hbsag: 'HBsAg', anti_hcv: 'Anti-HCV', hiv: 'HIV' };
+function edit1_(a, b) {                                     // true when a and b differ by at most one letter (changed, added or left out)
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, d = 0;
+  while (i < a.length && j < b.length) { if (a[i] === b[j]) { i++; j++; continue; } if (++d > 1) return false; if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; } }
+  return d + (a.length - i) + (b.length - j) <= 1;
+}
+function lghLabel_(words, table) {                          // exact name first; otherwise the one name a single letter away (two candidates: nothing)
+  const keys = Object.keys(table), names = function (k) { return Array.isArray(table[k][0]) ? table[k][0] : table[k]; };
+  for (let w = 0; w < words.length; w++) { const x = words[w]; if (x.length < 2) continue; const hit = keys.filter(function (k) { return names(k).indexOf(x) >= 0; }); if (hit.length === 1) return hit[0]; }
+  for (let w = 0; w < words.length; w++) {
+    const x = words[w]; if (x.length < 3) continue;
+    const near = keys.filter(function (k) { return names(k).some(function (n) { return n.length >= 3 && edit1_(x, n); }); });
+    if (near.length === 1) return near[0];
+  }
+  return '';
+}
+function lghRead_(text) {                                   // one reading: { field: { v } or { amb: [a, b] } }, serology, printed upper limits, MRN copies
+  const raw = String(text || '').replace(/\r/g, '').replace(/[\u2191]/g, ' \u2191').replace(/[\u2193]/g, ' \u2193');
+  let lines = raw.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+  const o = { vals: {}, uln: {}, units: {}, mrn: [] };
+  const m = /MR[NM]\s*[:;.,]?\s*(\d[\d ]{9,22}\d)/i.exec(raw); if (m) o.mrn.push(m[1].replace(/\s/g, ''));
+  lines.forEach(function (x) { const d = x.replace(/\s/g, ''); if (/^\d{12,20}$/.test(d)) o.mrn.push(d); });
+  const merged = [];                                        // a name alone on its line, with its row on the next line, becomes one line
+  for (let i = 0; i < lines.length; i++) { const x = lines[i], nx = lines[i + 1]; if (nx && !/\d/.test(x) && /^[A-Za-z%][A-Za-z% .-]{1,30}$/.test(x) && /^[^A-Za-z]{0,3}\d/.test(nx)) { merged.push(x + ' ' + nx); i++; } else merged.push(x); }
+  merged.forEach(function (x) {
+    const sero = /\b(non[\s-]*reactive|negative|positive|reactive)\b/i.exec(x);
+    const lead = x.split(/\d/)[0], words = lead.toUpperCase().split(/[^A-Z%]+/).map(function (w) { return w.replace(/%/g, ''); }).filter(Boolean);
+    const joined = [words.join('')].concat(words);
+    if (sero && !/performed|published/i.test(x)) {
+      const k = lghLabel_(joined, LGH_SERO);
+      if (k) { const pos = !/^non/i.test(sero[1]) && /positive|reactive/i.test(sero[1]); o.vals[k] = { v: pos ? (k === 'hiv' ? 'R' : 'P') : 'N' }; }
+      return;
+    }
+    const k = lghLabel_(joined, LGH_ROWS); if (!k) return;
+    const after = x.slice(lead.length), rg = /(\d+(?:\.\d+)?)\s*[-\u2013]\s*(\d+(?:\.\d+)?)/.exec(after);
+    if (!rg) return;
+    const lo = +rg[1], hi = +rg[2], rest = after.slice(rg.index + rg[0].length).trim(), toks = rest.split(/\s+/), tok = toks[toks.length - 1] || '';
+    const tm = /^([^\d.]{0,2})(\d+(?:\.\d+)?)$/.exec(tok); if (!tm || toks.length < 2) return;
+    o.units[k] = toks.slice(0, -1).join(' ');
+    if (LGH_ULN[k]) o.uln[k] = hi;
+    const A = tm[2], fit = function (s) { const n = +s; return isFinite(n) && n >= LGH_ROWS[k][1] && n <= LGH_ROWS[k][2]; }, out = function (s) { return +s < lo || +s > hi; };
+    if (tm[1] || !out(A)) { if (fit(A)) o.vals[k] = { v: A, arrow: !!tm[1] }; return; }       // an arrow read as a sign, or a value inside the printed range
+    const B = A.slice(1), up = A[0] === '1' && +B > hi, down = A[0] === '4' && +B < lo;          // an up arrow is often read as 1, a down arrow as 4
+    if (!/^\d/.test(B) || !(up || down)) { if (fit(A)) o.vals[k] = { v: A }; return; }       // no arrow could hide in the first digit
+    if (fit(A) && fit(B)) o.vals[k] = { amb: [A, B] };                                           // either could be right: the person decides
+    else if (fit(B)) o.vals[k] = { v: B, arrowDigit: true };
+    else if (fit(A)) o.vals[k] = { v: A };
+  });
+  return o;
+}
+function lghVote_(reads, regMrn) {
+  const f = {}, checks = {}, notes = [], vals = {};
+  const keys = {}; reads.forEach(function (r) { Object.keys(r.vals).forEach(function (k) { keys[k] = 1; }); });
+  Object.keys(keys).forEach(function (k) {
+    if (LGH_SERO[k]) return;
+    const sure = reads.map(function (r) { return r.vals[k] && r.vals[k].v; }), amb = reads.map(function (r) { return r.vals[k] && r.vals[k].amb; }).filter(Boolean);
+    const v = vote_(sure);
+    if (v.how === 'agree' || v.how === 'majority' || (v.how === 'single' && !amb.length)) { vals[k] = +v.v; checks[k] = v.how; if (v.how === 'majority') notes.push((LGH_NAMES[k] || k) + ': ' + v.n + ' of ' + v.of + ' readings agree on ' + v.v + '; another read ' + v.other[0] + '.'); }
+    else if (v.how === 'single' && amb.every(function (a) { return a.indexOf(v.v) >= 0; })) { vals[k] = +v.v; checks[k] = 'single'; }
+    else if (v.how === 'conflict') { checks[k] = 'conflict'; if (LGH_NAMES[k]) notes.push((LGH_NAMES[k]) + ' not filled: the readings disagree (' + v.seen.slice(0, 3).join(', ') + '). Type it from the report.'); }
+    else if (amb.length) { checks[k] = 'conflict'; if (LGH_NAMES[k]) notes.push(LGH_NAMES[k] + ' not filled: read as ' + amb[0][0] + ', but the first ' + amb[0][0][0] + ' may be the arrow, making it ' + amb[0][1] + '. Type it from the report.'); }
+  });
+  Object.keys(LGH_SERO).forEach(function (k) { const v = vote_(reads.map(function (r) { return r.vals[k] && r.vals[k].v; })); if (v.how === 'agree' || v.how === 'majority' || v.how === 'single') { f[k] = v.v; checks[k] = v.how; } else if (v.how === 'conflict') notes.push(LGH_NAMES[k] + ' not filled: the readings disagree. Choose it from the report.'); });
+  const unitOf = function (k) { const u = reads.map(function (r) { return r.units[k]; }).filter(Boolean)[0]; return u || ''; };
+  if ('hb' in vals && /g\s*\/\s*l\b/i.test(unitOf('hb')) && !/dl/i.test(unitOf('hb'))) { delete vals.hb; notes.push('Haemoglobin is printed in g/L, not g/dL: type it in g/dL.'); }
+  if ('tbili' in vals && /mol/i.test(unitOf('tbili'))) { delete vals.tbili; notes.push('Bilirubin is printed in micromol/L, not mg/dL: type it in mg/dL.'); }
+  // Haemoglobin is checked against the rest of the count: HGB / HCT x 100 = MCHC, and HGB / RBC x 10 = MCH (the analyser's own arithmetic)
+  if ('hb' in vals) {
+    const t = []; if (vals.hct && vals.mchc) t.push(Math.abs(vals.hb / vals.hct * 100 - vals.mchc) <= 0.6); if (vals.rbc && vals.mch) t.push(Math.abs(vals.hb / vals.rbc * 10 - vals.mch) <= 0.6);
+    if (t.length && t.indexOf(true) < 0) { notes.push('Haemoglobin not filled: ' + vals.hb + ' does not fit the HCT, MCHC, RBC and MCH on the report, so a digit was probably misread. Type it from the report.'); checks.hb = 'conflict'; delete vals.hb; }
+    else if (t.length) checks.hb = 'cross';
+  }
+  // The five differential percentages must add up to 100; only then are absolute counts worked out (WBC x % / 100)
+  const P = ['neut_pct', 'lymph_pct', 'mono_pct', 'eos_pct', 'baso_pct'];
+  if (P.some(function (k) { return k in vals; })) {
+    const all = P.every(function (k) { return k in vals; }), sum = P.reduce(function (a, k) { return a + (vals[k] || 0); }, 0);
+    if (all && Math.abs(sum - 100) <= 0.5) {
+      P.forEach(function (k) { checks[k] = 'sum'; });
+      if ('tlc' in vals) { f.neut_abs = round_(vals.tlc * vals.neut_pct / 100, 2); f.lymph_abs = round_(vals.tlc * vals.lymph_pct / 100, 2); f.mono_abs = round_(vals.tlc * vals.mono_pct / 100, 2); notes.push('Absolute neutrophils, lymphocytes and monocytes were calculated from WBC and the percentages.'); }
+    } else { ['neut_pct', 'lymph_pct', 'eos_pct'].forEach(function (k) { delete vals[k]; }); notes.push('Differential not filled: ' + (all ? 'the five percentages add up to ' + round_(sum, 2) + ', not 100' : 'not all five percentages were read') + '. Type them from the report.'); }
+  }
+  ['tlc', 'hb', 'plt', 'mpv', 'rdw', 'neut_pct', 'lymph_pct', 'eos_pct', 'ast', 'alt', 'alp', 'tbili'].forEach(function (k) { if (k in vals) f[k] = vals[k]; });
+  Object.keys(LGH_ULN).forEach(function (k) { if (!(k in f)) return; const u = vote_(reads.map(function (r) { return r.uln[k] === undefined ? '' : String(r.uln[k]); })); if (u.v) f[LGH_ULN[k]] = +u.v; });
+  const single = Object.keys(f).filter(function (k) { return checks[k] === 'single' && LGH_NAMES[k]; });
+  if (single.length && reads.length > 1) notes.push('Read only once, check every digit: ' + single.map(function (k) { return LGH_NAMES[k]; }).join(', ') + '.');
+  // the report must belong to this participant: the record number on it is compared, on the workbook only, with the register (never sent to the phone)
+  const copies = [].concat.apply([], reads.map(function (r) { return r.mrn; }));
+  if (regMrn && copies.length && copies.indexOf(regMrn) < 0) return { fields: {}, checks: { mrn: 'mismatch' }, notes: ['Nothing was filled: the record number (MRN) on this report does not match this participant. Check that the report belongs to this participant; if it does, type the values.'], note: 'MRN does not match.' };
+  if (regMrn && copies.indexOf(regMrn) >= 0) checks.mrn = 'match';
+  return { fields: f, checks: checks, notes: notes, note: Object.keys(f).length ? 'Read from the report. Check every value against the report before saving.' : 'Nothing could be read from this picture. Type the values.' };
+}
+const LAB_LAYOUTS = { LAB_CBC: 'LGH', LAB_LFT: 'LGH', LAB_HEP: 'LGH', LAB_HIV: 'LGH' };      // HbA1c, lipid and glucose pages: no sample yet
+function parseLab_(texts, doc, regMrn) {
+  if (!LAB_LAYOUTS[doc]) return { fields: {}, note: 'This report layout is not set up yet, so nothing was read. Type the values.' };
+  return lghVote_([].concat(texts).map(lghRead_), regMrn || '');
 }
 function readDoc_(u, req) {
   if (!photosOn_()) return { ok: false, error: 'Reading documents is switched off, together with document photos.' };
@@ -2794,14 +2899,22 @@ function readDoc_(u, req) {
   if (kind === 'slip') { if (!identAllowed_(u) || !linkOn_()) return { ok: false, error: 'not authorised', code: 401 }; }
   else if (kind === 'lab') { if (!photoTakeRole_(u)) return { ok: false, error: 'not authorised', code: 401 }; if (!/^LAB_/.test(doc) || !PHOTO_DOCS[doc]) return { ok: false, error: 'unknown report type' }; }
   else return { ok: false, error: 'unknown kind of document' };
-  const mime = str_(req.mime);
+  let mime = str_(req.mime), datas;
+  if (kind === 'lab' && str_(req.saved) === 'Y') {          // Read on a page already attached: the newest saved photo of that page is read on the workbook; only the values go back
+    const sv = code_(req.study_id), vv = code_(req.visit), r = photoRows_(photoSheet_()).filter(function (x) { return str_(x.study_id) === sv && str_(x.doc) === doc && str_(x.visit) === vv && !str_(x.deleted); })
+      .sort(function (p, q) { return str_(q.uploaded_at).localeCompare(str_(p.uploaded_at)); })[0];
+    if (!r) return { ok: false, error: 'no saved photo of this page has reached the workbook yet' };
+    const blob = DriveApp.getFileById(str_(r.file_id)).getBlob(); mime = blob.getContentType();
+    datas = [Utilities.base64Encode(blob.getBytes())];
+  } else datas = (Array.isArray(req.datas) ? req.datas : [req.data]).map(function (d) { return String(d || ''); }).slice(0, 3);      // up to three versions of one picture, each read separately
   if (['image/jpeg', 'image/png'].indexOf(mime) < 0) return { ok: false, error: 'only JPEG or PNG images' };
-  const datas = (Array.isArray(req.datas) ? req.datas : [req.data]).map(function (d) { return String(d || ''); }).slice(0, 3);      // up to three versions of one picture, each read separately
   if (!datas.length || datas.some(function (d) { return !d || d.length > PHOTO_MAX; })) return { ok: false, error: 'the image is empty or too large' };
   const texts = [];
   try { datas.forEach(function (d) { texts.push(ocrText_(Utilities.base64Decode(d), mime)); }); } catch (e) { return { ok: false, error: 'the document could not be read: ' + (e && e.message ? e.message : e) }; }
-  const out = kind === 'slip' ? voteSlip_(texts.map(slipRead_), req.barcode) : parseLab_(texts[0], doc);
   const sid = idOk_(code_(req.study_id)) ? code_(req.study_id) : '';
+  let regMrn = '';
+  if (kind === 'lab' && sid && linkOn_()) { try { const r = regFind_(regSheet_(), sid); regMrn = r ? str_(r.o.mrn).replace(/\s/g, '') : ''; } catch (e) { regMrn = ''; } }      // compared on the workbook only
+  const out = kind === 'slip' ? voteSlip_(texts.map(slipRead_), req.barcode) : parseLab_(texts, doc, regMrn);
   logAudit_('DOC_READ', '', sid, '', '', (kind === 'slip' ? 'OPD slip' : PHOTO_DOCS[doc]) + ' read by text recognition; fields found: ' + (Object.keys(out.fields).join(', ') || 'none'), u.email);
   return { ok: true, fields: out.fields, checks: out.checks || {}, notes: out.notes || [], note: out.note };
 }
