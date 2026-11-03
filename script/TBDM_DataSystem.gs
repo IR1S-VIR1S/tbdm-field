@@ -1311,7 +1311,7 @@ function onOpen() {
     .addItem('PI: erase ALL test data and start clean', 'menuEraseAll')
     .addSeparator()
     .addItem('PI: upgrade the workbook in place', 'menuUpgrade')
-    .addItem('PI: update the script from GitHub', 'menuUpdateScript')
+    .addItem('PI: update the script (one click)', 'menuUpdateScript')
     .addItem('PI: how to update without re-inviting', 'menuUpdateHelp')
     .addItem('PI: set up or repair', 'setup')
     .addToUi();
@@ -3424,7 +3424,7 @@ function menuUpdateHelp() {
     '2. Deploy > Manage deployments > the pencil (Edit) > Version: "New version" > Deploy. Do NOT choose "New deployment": that makes a new web app address and every phone would need an invitation.\n\n' +
     '3. Reload this workbook. If the update says tabs changed, run "PI: upgrade the workbook in place".\n\n' +
     '4. The phone app updates itself the next time a phone is online. Entries made before the update wait on the phone and are sent afterwards.\n\n' +
-    'Or, once the one-time setup is done: use "PI: update the script from GitHub", which does steps 1 and 2 for you after you type the update code given in the chat.\n\n'+
+    'Or, once the one-time setup is done: use "PI: update the script (one click)", which does steps 1 and 2 for you.\n\n'+
     'Phones stay signed in because their access is stored inside this project, not in the code.', SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
@@ -3436,6 +3436,26 @@ function menuUpdateHelp() {
 const UPDATE_SRC = 'https://raw.githubusercontent.com/IR1S-VIR1S/tbdm-field/main/script/TBDM_DataSystem.gs';
 function hex_(bytes) { return bytes.map(function (b) { return ('0' + (b < 0 ? b + 256 : b).toString(16)).slice(-2); }).join(''); }
 function sha256hex_(text) { return hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)); }      // UTF-8, as GitHub stores the file (sha256sum)
+// Signed updates. Every published script ends with a line "// SIGNATURE: ..." made with the study's private key, which is kept in the private
+// workbook repository and never published. This public key checks it here, so a script changed on GitHub by anyone else is refused, and
+// the PI needs no code: one click installs it. (RSA 3072, PKCS#1 v1.5 with SHA-256, checked with plain arithmetic below.)
+const UPDATE_KEY_N = 'a4c4805fd3c2d88ef4499bd6829a0fffdcdfd6be9b10b2880ef4d570b8fc3e79670cff966cb08ed0af74beb687a9693d9f543314a1a1302dd4ba4da594cf363c7f864f90f053cc00b757e9cc8de67d8a27224d095574091a329490755918c062ca9a9a9277355af2d17bdec35c2958a87b4082770f7785af11e3450a2909d460801923e31049e0f17e45ae4d50074e54489d9ea5c7827873ba626b42f0e62a232f316df846d7ef55e9ac1da62ba823f07652b18b12d3d8b173c700ca47146aff1c4526724c489fde58b96ff9023719dc887f5d3f81f9634bd05ba763cdace6cd40a7498e65f3a15ff0a3f3e96fd756a25b2fb43adbb790d93b68c78cf4d9a0c78ef1ee3d21be348c0fc1cff27bb6e45e6bc57bc4775311540d76b0bad966acc40b7769fa6c387cf8b82ab37c0c625659e3aca78b2f1af14578a18e35f9101bf4e1d06778ca2cc0b2eadbf3010cd8e3c11219ebb641384296489ab98097fac38ab2b7c6d50dc7db81da1fb5653fad0ec14b0fe5402c20f2e824295db4a092ed23';
+const SIG_MARK = '\n// SIGNATURE: ';
+function sigSplit_(code) { const i = code.lastIndexOf(SIG_MARK); return i < 0 ? { body: code, sig: '' } : { body: code.slice(0, i), sig: code.slice(i + SIG_MARK.length).trim() }; }
+function rsaVerify_(text, sigB64) {                     // true or false; null where this Google runtime cannot do the arithmetic
+  if (typeof BigInt !== 'function') return null;
+  let sigHex;
+  try { sigHex = hex_(Utilities.base64Decode(sigB64)); } catch (e) { return false; }
+  if (!sigHex || sigHex.length > UPDATE_KEY_N.length) return false;
+  const n = BigInt('0x' + UPDATE_KEY_N), s = BigInt('0x' + sigHex), zero = BigInt(0), one = BigInt(1), two = BigInt(2);
+  if (s >= n) return false;
+  let r = one, b = s, e = BigInt(65537);
+  while (e > zero) { if (e % two === one) r = (r * b) % n; b = (b * b) % n; e = e / two; }
+  let em = r.toString(16); while (em.length < UPDATE_KEY_N.length) em = '0' + em;
+  const info = '3031300d060960864801650304020105000420', h = sha256hex_(text);
+  let pad = ''; while (pad.length < UPDATE_KEY_N.length - 6 - info.length - h.length) pad += 'f';
+  return em === '0001' + pad + '00' + info + h;
+}
 function scriptApi_(method, path, body) {
   const r = UrlFetchApp.fetch('https://script.googleapis.com/v1/' + path, { method: method, contentType: 'application/json', muteHttpExceptions: true,
     headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, payload: body ? JSON.stringify(body) : undefined });
@@ -3461,7 +3481,9 @@ function menuUpdateScript() {
   let res;
   try { res = UrlFetchApp.fetch(UPDATE_SRC + '?t=' + new Date().getTime(), { muteHttpExceptions: true }); } catch (e) { stop('Could not reach GitHub', String(e.message || e)); return; }
   if (res.getResponseCode() !== 200) { stop('Could not read the new script', 'GitHub answered ' + res.getResponseCode() + '.'); return; }
-  const code = res.getContentText(), hash = sha256hex_(code);
+  const code = res.getContentText(), hash = sha256hex_(code), parts = sigSplit_(code);
+  const signed = parts.sig ? rsaVerify_(parts.body, parts.sig) : null;
+  if (signed === false) { stop('The new script is not signed by the study', 'The script on GitHub does not carry the study\'s signature, so it may have been changed by someone else. Tell Claude.'); return; }
   const must = ['onOpen', 'doPost', 'requirePI_', 'menuUpdateScript', 'setup'];          // the pieces any working version has, including this updater itself
   const missing = must.filter(function (m) { return code.indexOf('function ' + m) < 0; });
   if (missing.length) { stop('The new script looks incomplete', 'It lacks: ' + missing.join(', ') + '.'); return; }
@@ -3472,12 +3494,14 @@ function menuUpdateScript() {
     mine = (cur.files || []).filter(function (f) { return f.type === 'SERVER_JS' && /function onOpen\b/.test(f.source || ''); });
     if (mine.length !== 1) { stop('Cannot tell which file is the study script', 'Found ' + mine.length + ' candidates. Update by pasting instead.'); return; }
     const curHash = sha256hex_(mine[0].source), ver = function (t) { const m = /VERSION: '([^']*)'/.exec(t); return m ? m[1] : '?'; };
-    if (curHash === hash) { ui.alert('Already up to date', 'This script is already identical to the one on GitHub (code ' + hash.slice(0, 8) + ').', ui.ButtonSet.OK); return; }
-    const ask = ui.prompt('Update the study script',
-      'Installed now: version ' + ver(mine[0].source) + ', code ' + curHash.slice(0, 8) + '.\nOn GitHub: version ' + ver(code) + '.\n\n' +
-      'Type the 8-character update code that Claude gave you in the chat for this update. If you were not given one, press Cancel.', ui.ButtonSet.OK_CANCEL);
-    if (ask.getSelectedButton() !== ui.Button.OK) return;
-    if (ask.getResponseText().trim().toLowerCase() !== hash.slice(0, 8)) { stop('The code does not match', 'The file on GitHub is not the one you were given the code for, or the code was mistyped.'); return; }
+    if (curHash === hash || sigSplit_(mine[0].source).body === parts.body) { ui.alert('Already up to date', 'This script is already identical to the one on GitHub (code ' + hash.slice(0, 8) + ').', ui.ButtonSet.OK); return; }
+    if (signed !== true) {                                // an unsigned script (or a runtime that cannot check the signature): the typed code, as before
+      const ask = ui.prompt('Update the study script',
+        'Installed now: version ' + ver(mine[0].source) + ', code ' + curHash.slice(0, 8) + '.\nOn GitHub: version ' + ver(code) + '.\n\n' +
+        'Type the 8-character update code that Claude gave you in the chat for this update. If you were not given one, press Cancel.', ui.ButtonSet.OK_CANCEL);
+      if (ask.getSelectedButton() !== ui.Button.OK) return;
+      if (ask.getResponseText().trim().toLowerCase() !== hash.slice(0, 8)) { stop('The code does not match', 'The file on GitHub is not the one you were given the code for, or the code was mistyped.'); return; }
+    }
     const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'UTC', 'yyyy-MM-dd HH:mm');
     const before = scriptApi_('POST', 'projects/' + id + '/versions', { description: 'before update ' + stamp + ' (' + curHash.slice(0, 8) + ')' });
     mine[0].source = code;
@@ -3492,8 +3516,8 @@ function menuUpdateScript() {
       scriptApi_('PUT', 'projects/' + id + '/deployments/' + deps[0].deploymentId, { deploymentConfig: { scriptId: id, versionNumber: after.versionNumber, manifestFileName: 'appsscript', description: 'update ' + stamp + ' (' + hash.slice(0, 8) + ')' } });
       where = 'The web app was moved to version ' + after.versionNumber + ' at the same address, so every phone keeps working.';
     } else where = 'The web app was NOT moved (found ' + deps.length + ' web app deployments). Do it by hand: Deploy > Manage deployments > pencil > Version: New version > Deploy.';
-    logAudit_('SCRIPT_UPDATE', '', '', curHash.slice(0, 8), hash.slice(0, 8), 'versions ' + before.versionNumber + ' to ' + after.versionNumber);
-    ui.alert('Script updated', 'Installed version ' + ver(code) + ' (code ' + hash.slice(0, 8) + ').\n\n' + where + '\n\nReload this workbook so the menu refreshes. If anything looks wrong, go back with Deploy > Manage deployments > pencil > choose version ' + before.versionNumber + ' ("before update").', ui.ButtonSet.OK);
+    logAudit_('SCRIPT_UPDATE', '', '', curHash.slice(0, 8), hash.slice(0, 8), 'versions ' + before.versionNumber + ' to ' + after.versionNumber + (signed === true ? ', signature checked' : ', update code typed'));
+    ui.alert('Script updated', 'Installed version ' + ver(code) + ' (code ' + hash.slice(0, 8) + (signed === true ? ', signed by the study' : '') + ').\n\n' + where + '\n\nReload this workbook so the menu refreshes. If anything looks wrong, go back with Deploy > Manage deployments > pencil > choose version ' + before.versionNumber + ' ("before update").', ui.ButtonSet.OK);
   } catch (e) {
     if (changed) ui.alert('The update stopped part way', 'The new code is installed but the web app was not moved to it. ' + String(e.message || e) + '\n\nFinish by hand: Deploy > Manage deployments > pencil > Version: New version > Deploy. To undo, choose the version called "before update".', ui.ButtonSet.OK);
     else stop('The update did not finish', String(e.message || e));
@@ -3514,3 +3538,5 @@ function menuAppRevoke() {
   logAudit_('APP', '', '', '', email, 'phone app access revoked (' + n + ')', '');
   ui.alert('Revoked', n + ' phone(s) or unused invitation(s) of ' + email + ' can no longer reach the study data. Data still waiting on those phones will not be accepted.', ui.ButtonSet.OK);
 }
+
+// SIGNATURE: oq1SL6pQHqVAMYiAzCpoeX4DVRlYGW/2u2kU0RVxF3YzHy8TLfYj9ddmnIAdESpFBP8pAx+vAsefvr8s64Vxuj7fduuIL37b5ILSWZEe7Xz6YfFD+MqBK8EFJWWJnGK5QgvDzvsJDg/pSQklYB5YiZJnwqtfKGaBd/EY7oI7ZC1ax97RuhNOyhh/hNmyPiqv0eaImPWbT6g3jl4JX/BTKEzmSThus4gABOKVl17AqLY6YLgBY4+jU/FQ86CM3tnY4rBRdIbWQVgStW6nn4/6Es/rtXaDH4uBfqn6WB3DdS7qJRq2WbVLDxKbAVFprB/dXVN67CmC6Tv4yxH9Q+v7bHdPZA4nOUqgoYQ5K7eWeO3lFAz/HtLvR3uTP73/hT97tQ0aIng1mxEgviheapexNudoahrNueQjj9bWh/Wj7Ar/mxufCzP7z//sKkex1NYoelSm73q472Us7sx/aIm4cPk00dG+iGoNHuKrZqiA8OIbcY9Wl8x4dV+iGa1Qs39L
