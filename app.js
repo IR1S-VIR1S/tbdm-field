@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'e4007975e4ba';                 // replaced by build.js with the build's hash
+const BUILD_ID = '1b81e4278487';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1828,26 +1828,39 @@ function labOrderItems(sid, v) {
   }
   return items;
 }
+// Ticks for ordering only: each test is ticked as it is ordered. The ticks stay on this phone (inside its locked copy) and are never sent
+// to the workbook (PI, 9 Nov 2026). Whether results are entered is still shown under each test.
+function orderedSet(sid, v) { const o = S.ordered || {}; return new Set(o[sid + '|' + v] || []); }
+function orderedToggle(sid, v, name) {
+  const o = S.ordered || (S.ordered = {}), k = sid + '|' + v, cur = new Set(o[k] || []);
+  if (cur.has(name)) cur.delete(name); else cur.add(name);
+  if (cur.size) o[k] = Array.from(cur); else delete o[k];
+  saveState();
+}
 function labOrderRow(sid, v, opens) {
   if (opens) return lockedRow('Laboratory order', opens);
-  const it = labOrderItems(sid, v), done = it.filter((x) => x.state === 'done' || x.state === 'stopped').length;
+  const it = labOrderItems(sid, v), got = orderedSet(sid, v), n = it.filter((x) => got.has(x.name)).length;
   return el('button', { class: 'row', id: 'laborder-' + v, onclick: () => go('laborder', { sid, v }) }, el('div', { class: 'main' }, el('div', null, 'Laboratory order'), el('div', { class: 'sub' }, it.map((x) => x.name).join(', '))),
-    el('span', { class: 'chip ' + (done === it.length ? 'ok' : done ? 'warn' : '') }, done + ' of ' + it.length + ' entered'), el('span', { class: 'chev' }));
+    el('span', { class: 'chip ' + (n === it.length ? 'ok' : n ? 'warn' : '') }, n + ' of ' + it.length + ' ordered'), el('span', { class: 'chev' }));
 }
 function labOrderScreen(p) {
-  const sid = p.sid, v = p.v, it = labOrderItems(sid, v), words = { done: 'Entered', part: 'Partly entered', none: 'Not entered', stopped: 'Not done' };
-  const cls = { done: 'ok', part: 'warn', none: '', stopped: '' };
-  return topBar('Laboratory order · ' + sid + ' ' + v).concat([el('main', null,
-    el('div', { class: 'card small muted' }, 'The tests for ' + v + ', checked against what is entered. Tap a test to open its form.'),
-    el('div', { class: 'list', id: 'labitems' }, it.map((x) => {
-      const key = { study_id: sid, visit: v };
+  const sid = p.sid, v = p.v, words = { done: 'results entered', part: 'results partly entered', none: 'results not entered', stopped: 'not done' };
+  const list = () => {
+    const it = labOrderItems(sid, v), got = orderedSet(sid, v);
+    return el('div', { class: 'list', id: 'labitems' }, it.map((x) => {
+      const on = got.has(x.name);
       const docs = photosOn() && (photoTaker() || photoViewer()) ? x.docs.map((d) => docState(sid, d, v)) : [];
       const docTxt = docs.length ? 'report photo ' + (docs.every((d) => d === 'sent') ? 'sent' : docs.some((d) => d !== 'missing') ? 'partly attached' : 'not attached') : '';
-      return el('button', { class: 'row', type: 'button', 'data-item': x.name, 'data-state': x.state, onclick: () => go('form', { tab: x.tab, key, focus: x.state === 'part' || x.state === 'none' ? x.focus : undefined }) },
-        el('span', { class: 'lmark ' + x.state, 'aria-hidden': 'true' }, x.state === 'done' ? '✓' : x.state === 'part' ? '◐' : ''),
-        el('div', { class: 'main' }, el('div', null, x.name), el('div', { class: 'sub' }, [x.note, docTxt].filter(Boolean).join(' · '))),
-        el('span', { class: 'chip ' + cls[x.state] }, words[x.state]), el('span', { class: 'chev' }));
-    })),
+      return el('button', { class: 'row' + (on ? ' ticked' : ''), type: 'button', role: 'checkbox', 'aria-checked': on ? 'true' : 'false', 'data-item': x.name, 'data-state': x.state, 'data-ordered': on ? 'Y' : 'N',
+        onclick: () => { orderedToggle(sid, v, x.name); const y = window.scrollY; $('#labitems').replaceWith(list()); window.scrollTo(0, y); } },
+        el('span', { class: 'lmark' + (on ? ' done' : ''), 'aria-hidden': 'true' }, on ? '✓' : ''),
+        el('div', { class: 'main' }, el('div', null, x.name), el('div', { class: 'sub' }, [words[x.state] + (x.note ? ' (' + x.note + ')' : ''), docTxt].filter(Boolean).join(' · '))),
+        el('span', { class: 'chip ' + (on ? 'ok' : '') }, on ? 'Ordered' : 'Not ordered'));
+    }));
+  };
+  return topBar('Laboratory order · ' + sid + ' ' + v).concat([el('main', null,
+    el('div', { class: 'card small muted' }, 'The tests for ' + v + '. Tick each one as you order it. The ticks stay on this phone only and are not sent to the workbook.'),
+    list(),
     el('button', { class: 'btn primary block', type: 'button', id: 'labopen', onclick: () => go('form', { tab: 'LABS', key: { study_id: sid, visit: v } }) }, 'Open laboratory results'))]);
 }
 function statusChip(row) {
