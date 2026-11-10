@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '1b81e4278487';                 // replaced by build.js with the build's hash
+const BUILD_ID = '92b220fcc46d';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -225,6 +225,20 @@ function enrolledMap() { const m = {}; view('S1_ENROL').forEach((r) => { if (r.s
 function find(tab, key) { return view(tab).filter((r) => sameRec(tab, r, key))[0] || null; }
 function serverValue(tab, key, k) { const r = serverRows(tab).filter((x) => sameRec(tab, x, key))[0]; return r ? s_(r[k]) : null; }
 
+// Drafts: an enrolment whose screening line on this phone does not yet say eligible and enrolled is kept as a draft on this phone (not sent,
+// since the workbook would refuse it) and listed under Drafts to complete. It is sent by itself once the screening line is complete.
+const isBad = (c) => c.status !== 'pending' && c.status !== 'draft';
+function enrolBlock(sid) {                                   // why an enrolment for this number cannot be sent yet ('' when it can)
+  const sc = view('S0_SCREEN').filter((r) => code_(r.study_id) === code_(sid))[0];
+  if (!sc) return 'No screening line on this phone has ' + sid + '. Screen the patient first, or sync if another phone screened them.';
+  if (sc.eligible !== 'Y' || sc.enrolled !== 'Y') return 'The screening line for ' + sid + ' does not yet say eligible and enrolled. Complete the screening line.';
+  return '';
+}
+function releaseDrafts() {                                   // drafts whose screening line is now complete go out with the next sync
+  let n = 0;
+  S.outbox.filter((c) => c.status === 'draft' && c.tab === 'S1_ENROL').forEach((c) => { if (!enrolBlock(s_(c.values.study_id))) { c.status = 'pending'; delete c.errors; n++; } });
+  return n;
+}
 function queueSave(tab, existing, values) {
   const serial = APP_SERIAL[tab], keys = APP_KEYS[tab];
   const changed = {};
@@ -280,6 +294,7 @@ async function sync() {
       throw Object.assign(new Error('A newer version of the app is ready. Close the app and open it again while online. Your entries are kept.'), { code: 409 });
     }
     if (srv < CFG.SCHEMA_VER) throw Object.assign(new Error('The study workbook has not been upgraded yet. Your entries stay on this phone and are sent after the upgrade.'), { code: 409 });
+    releaseDrafts();
     const pending = S.outbox.filter((c) => c.status === 'pending');
     for (let i = 0; i < pending.length; i += PUSH_BATCH) {
       const batch = pending.slice(i, i + PUSH_BATCH).map((c) => ({ cid: c.cid, tab: c.tab, rid: c.rid, create: c.create, values: c.values, base: c.base, by: c.by }));
@@ -407,7 +422,7 @@ function topBar(title, opts) {
 }
 function syncBar() {
   if (T.practice) return el('div', { class: 'sync practice' }, el('span', { class: 'grow' }, T.preview ? PMODE[T.pmode].name.toUpperCase() + ' AS ' + previewName(T.preview).toUpperCase() + ' · ' + PMODE[T.pmode].tag : 'PRACTICE: nothing is saved or sent'), el('button', { onclick: practiceStop }, 'Leave'));
-  const n = S.outbox.filter((c) => c.status === 'pending').length, bad = S.outbox.filter((c) => c.status !== 'pending').length;
+  const n = S.outbox.filter((c) => c.status === 'pending').length, bad = S.outbox.filter(isBad).length;
   const online = navigator.onLine;
   const text = T.syncing ? 'Sending and updating…' : T.revoked ? 'This phone no longer has access. Tell the PI.'
     : (online ? 'Online' : 'Offline') + ' · ' + (n ? n + ' waiting to send' : 'all sent') + (bad ? ' · ' + bad + ' need fixing' : '')
@@ -623,14 +638,39 @@ function waitingEnrol() {
   view('S0_SCREEN').forEach((r) => { const id = s_(r.study_id).toUpperCase(); if (id && r.eligible === 'Y' && r.enrolled === 'Y' && !done[id] && out.indexOf(id) < 0) out.push(id); });
   return out.sort();
 }
+// Screening lines marked eligible whose enrolment answer or study number is still missing (lines saved before 10 Nov 2026 could be incomplete).
+// Straight to the enrolment form for a screened number (age, sex and smear grade copied from the screening line). A line that does not yet
+// say eligible and enrolled opens instead, to be completed first.
+function enrolFromScreen(sid) {
+  const id = normId(sid), sc = view('S0_SCREEN').filter((r) => code_(r.study_id) === id)[0];
+  if (find('S1_ENROL', { study_id: id })) { findPatient(id); return; }
+  if (sc && sc.eligible === 'Y' && sc.enrolled === 'Y') { recordRecent(id); go('form', { tab: 'S1_ENROL', key: {}, preset: carryPreset(id, sc), carried: carryKeys(sc) }); return; }
+  if (sc) { go('form', { tab: 'S0_SCREEN', key: screenKey(sc), focus: sc.eligible !== 'Y' ? 'eligible' : 'enrolled' }); toast('Complete the screening line first: it must say eligible and enrolled.'); return; }
+  findPatient(id);
+}
+function screenIncomplete() { return view('S0_SCREEN').filter((r) => r.eligible === 'Y' && r.enrolled !== 'N' && !s_(r.study_id)); }
+function screenKey(r) { return r.screen_no ? { screen_no: r.screen_no } : { _rid: r._rid }; }
+function screenLabel(r) { return (r.screen_no ? 'Screening No. ' + r.screen_no : 'New screening') + (r.screen_date ? ' · ' + dateTxt_(r.screen_date) : ''); }
+function screenOutcome(r) {
+  const done = enrolledMap(), id = s_(r.study_id).toUpperCase();
+  if (r.eligible === 'N') return 'not eligible';
+  if (r.eligible !== 'Y') return 'outcome not recorded';
+  if (r.enrolled === 'N') return 'eligible, not enrolled';
+  if (!id) return 'eligible, study number not given';
+  return id + (done[id] ? ' · enrolled' : ' · waiting to enrol');
+}
+function openScreened(r) {                                     // a line waiting to enrol offers Enrol; any other opens the screening line
+  const id = s_(r.study_id).toUpperCase();
+  if (id && r.eligible === 'Y' && r.enrolled === 'Y') findPatient(id); else go('form', { tab: 'S0_SCREEN', key: screenKey(r) });
+}
 // Enrolled numbers whose name, record number and telephone are not yet recorded (known from the last register load; the register is online only)
 function identifiersPending(L) { return L && L.link ? L.rows.filter((r) => r.status === 'E' && !r.mrn && !r.phone) : []; }
 // Useful at a glance on the Screen tile: how many patients this phone has screened today (including lines not yet sent).
 function screenedToday() { const t = todayIso(), n = view('S0_SCREEN').filter((r) => s_(r.screen_date) === t).length; return n ? n + ' screened today' : 'None screened today'; }
 function enrolTile() {
-  const w = waitingEnrol();
-  return el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', { class: 'tt' }, icon('invite'), 'Enrolment'),
-    el('span', null, w.length ? ['Waiting now:', el('br'), w[0] + (w.length > 1 ? ' and ' + (w.length - 1) + ' more' : '')] : 'Patient Study Number'));
+  const w = waitingEnrol(), wi = screenIncomplete(), n = w.length + wi.length;
+  return el('button', { class: 'tile primary', id: 'enrol-tile', onclick: () => go('form', { tab: 'S1_ENROL', key: {} }) }, el('b', { class: 'tt' }, icon('invite'), 'Enrolment'),
+    el('span', null, n ? [el('b', { class: 'wcount' }, n + ' waiting to enrol'), el('br'), w.length ? w[0] + (w.length > 1 ? ' and ' + (w.length - 1) + ' more' : '') : 'screening line to complete'] : 'None waiting'));
 }
 // Every patient carries a card with the study number. Typing it here opens whatever that person needs next, whatever the role.
 // One rule for every box that takes the number on the patient's card: "7", "07", "007", "TBDM7" and "tbdm 7" all become TBDM-007.
@@ -864,8 +904,12 @@ function homeWarn(bad, waiting, oldest) {
     waiting.length && Date.now() - oldest > 864e5 ? el('div', { class: 'card warn' }, el('b', null, 'Entries have waited more than a day.'), el('div', { class: 'small' }, 'Connect to the internet and press Sync. Until then they exist only on this phone.')) : null;
 }
 function recentBlock(sent) {
+  const sc = canData() ? view('S0_SCREEN').slice().sort((a, b) => (s_(b.screen_date) + String(+b.screen_no || 1e9).padStart(10, '0')).localeCompare(s_(a.screen_date) + String(+a.screen_no || 1e9).padStart(10, '0'))).slice(0, 5) : [];
   return [el('h2', null, 'Recent activity'),
     el('div', { class: 'card feedcard' },
+      sc.length ? [el('div', { class: 'small muted' }, 'Screened recently'), el('div', { class: 'list', id: 'recent-screened' }, sc.map((r) => el('button', { class: 'row', type: 'button', onclick: () => openScreened(r) },
+        el('div', { class: 'main' }, el('div', null, screenLabel(r)), el('div', { class: 'sub' }, screenOutcome(r))), statusChip(r), el('span', { class: 'chev' })))),
+        view('S0_SCREEN').length > 5 ? el('button', { class: 'feedmore', type: 'button', onclick: () => go('screening') }, 'See all ' + view('S0_SCREEN').length) : null] : null,
       T.recent.length ? [el('div', { class: 'small muted' }, 'Opened on this phone'), el('div', { class: 'chips' }, T.recent.map((sid) => el('button', { class: 'rchip', onclick: () => findPatient(sid) }, sid)))] : el('div', { class: 'small muted' }, 'Nothing opened yet in this session.'),
       el('div', { class: 'small muted fsent' }, sent))];
 }
@@ -886,7 +930,7 @@ function measureStatus() {
 }
 function measuresDue() { return measureStatus().filter((m) => m.need.length); }
 function piHome(out, bad, waiting, oldest, dueN) {
-  const nurse = can('measure') && !can('due'), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], idp = confRole() && (!T.practice || T.preview) ? identifiersPending((T.reg && T.reg.list) || confAsList()) : [];
+  const nurse = can('measure') && !can('due'), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], wi = canData() ? screenIncomplete() : [], idp = confRole() && (!T.practice || T.preview) ? identifiersPending((T.reg && T.reg.list) || confAsList()) : [];
   const group = {}; out.queries.forEach((q) => { const g = q[0] || 'Screening log'; (group[g] = group[g] || []).push(q); });
   const qkeys = Object.keys(group).sort(), md = nurse ? measuresDue() : [];
   const main = el('main', { class: 'pihome' },
@@ -902,11 +946,16 @@ function piHome(out, bad, waiting, oldest, dueN) {
       due.map((r) => ({ main: dueLabel(r), sub: winTxt(r), chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due'),
     !can('queries') ? null : feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
       qkeys.map((g) => ({ main: g, sub: group[g][0][4] + (group[g].length > 1 ? ' and ' + (group[g].length - 1) + ' more' : ''), chip: String(group[g].length), chipCls: 'bad', go: () => openQuery(group[g][0]) })), () => go('queries'), 'No queries'),
-    w.length ? feedCard('wait', 'Waiting to enrol', w.length, w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => findPatient(id) })), () => go('form', { tab: 'S1_ENROL', key: {} }), '') : null,
+    w.length + wi.length ? feedCard('wait', 'Waiting to enrol', w.length + wi.length, w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => enrolFromScreen(id) })).concat(wi.map((r) => ({ main: screenLabel(r), sub: 'Eligible: answer Enrolled and give the study number', chip: 'complete it', chipCls: 'warn', go: () => go('form', { tab: 'S0_SCREEN', key: screenKey(r) }) }))), () => go('screening'), '') : null,
+    draftsCard(),
     confQueue(),
     idp.length ? feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: 'Name, record number and telephone not recorded', go: () => { if (T.reg) T.reg.list = null; go('register'); } })), () => { if (T.reg) T.reg.list = null; go('register'); }, '') : null,
     recentBlock(waiting.length ? waiting.length + ' waiting to send' : 'All entries sent'));
   return homeTop().concat([main]);
+}
+function draftsCard() {
+  const d = S.outbox.filter((c) => c.status === 'draft');
+  return d.length ? feedCard('due hot', 'Drafts to complete', d.length, d.map((c) => ({ main: NAMES[c.tab] + ' · ' + s_(c.values.study_id), sub: (c.errors || {})._ || 'Not sent yet', chip: 'draft', chipCls: 'warn', go: () => go('form', { tab: c.tab, key: { study_id: s_(c.values.study_id) } }) })), () => go('queries'), '') : null;
 }
 function toRegister() { if (T.reg) T.reg.list = null; go('register'); }
 function assignTile() {
@@ -962,7 +1011,7 @@ function tools() {
 function home() {
   if (!isReader() && !can('view') && !can('screen') && !can('measure')) return dotsHome();      // a role with no study data on this phone (the register only, or nothing)
   if (!S.server) return homeTop().concat([el('main', null, el('div', { class: 'card' }, navigator.onLine ? 'Fetching the study data…' : 'Connect to the internet once to fetch the study data.'))]);
-  const out = !can('view') ? { schedule: [], queries: [] } : derived(), bad = S.outbox.filter((c) => c.status !== 'pending'), waiting = S.outbox.filter((c) => c.status === 'pending');
+  const out = !can('view') ? { schedule: [], queries: [] } : derived(), bad = S.outbox.filter(isBad), waiting = S.outbox.filter((c) => c.status === 'pending');
   const oldest = waiting.reduce((m, c) => Math.min(m, c.at), Infinity);
   if (role() === 'reader1' || role() === 'reader2') return readerHome(bad, waiting, oldest);
   return piHome(out, bad, waiting, oldest, out.schedule.filter((r) => r[5] !== 'upcoming').length);
@@ -1800,7 +1849,7 @@ function participants() {
       return el('button', { class: 'row', onclick: () => go('participant', { sid: r.study_id }) },
         el('div', { class: 'main' }, el('div', null, r.study_id), el('div', { class: 'sub' }, 'ATT from ' + (r.att_start_date ? dmy(r.att_start_date) : '?') + ' · diabetes ' + ({ K: 'known', N: 'new', 0: 'no' }[r.dm_status] || 'not recorded'))),
         end ? el('span', { class: 'chip' }, { C: 'completed', W: 'withdrawn', L: 'lost', X: 'transferred', D: 'died' }[end]) : n ? el('span', { class: 'chip ' + (n[5] === 'overdue' ? 'bad' : n[5] === 'due now' ? 'warn' : '') }, n[1] + ' ' + n[5]) : null,
-        r._pending ? el('span', { class: 'chip ' + (r._pending === 'pending' ? 'pend' : 'bad') }, r._pending === 'pending' ? 'unsent' : 'fix') : null, el('span', { class: 'chev' }));
+        r._pending ? el('span', { class: 'chip ' + (r._pending === 'pending' ? 'pend' : r._pending === 'draft' ? 'warn' : 'bad') }, r._pending === 'pending' ? 'unsent' : r._pending === 'draft' ? 'draft' : 'fix') : null, el('span', { class: 'chev' }));
     }) : [el('div', { class: 'empty' }, 'No participants')]));
   };
   q.addEventListener('input', fill); fill();
@@ -1866,6 +1915,7 @@ function labOrderScreen(p) {
 function statusChip(row) {
   if (!row) return el('span', { class: 'chip' }, 'not entered');
   if (row._pending === 'pending') return el('span', { class: 'chip pend' }, 'waiting to send');
+  if (row._pending === 'draft') return el('span', { class: 'chip warn' }, 'draft');
   if (row._pending) return el('span', { class: 'chip bad' }, 'needs fixing');
   return el('span', { class: 'chip ok' }, 'in workbook');
 }
@@ -2075,7 +2125,7 @@ function openQuery(q) {
   }
   if (NO_SCREEN_Q.test(q[4])) { go('screening'); toast('Open ' + (q[0] || 'the patient') + "'s screening line and enter " + (q[0] || 'the study number') + ' as its study number'); return; }
   if (SPIRO_V5_Q.test(q[4]) && q[0]) { go('form', { tab: 'VISITS', key: { study_id: q[0], visit: 'V5' }, focus: 'smear_result', query: query }); return; }   // the fix is the Visit 5 smear, not the spirometry form
-  if (WAIT_ENROL_Q.test(q[4]) && q[0]) { findPatient(q[0]); return; }   // screened and waiting: straight to the enrolment prompt
+  if (WAIT_ENROL_Q.test(q[4]) && q[0]) { enrolFromScreen(q[0]); return; }   // screened and waiting: straight to the enrolment form
   if (!keys || !defOf(tab)) return q[0] ? go('participant', { sid: q[0] }) : go('screening');
   let key = null;
   if (tab === 'S0_SCREEN' || tab === 'EVENTS') key = q[7] ? { [APP_SERIAL[tab]]: q[7] } : null;
@@ -2112,7 +2162,7 @@ function queries() {
         el('div', { class: 'main' }, el('div', null, g), el('div', { class: 'sub' }, forms.join(', '))), el('span', { class: 'qcount' }, String(list.length)), el('span', { class: 'chev' })),
       open ? el('div', { class: 'qbody' }, list.map(qrow)) : null);
   };
-  return topBar('Queries').concat([el('main', null, el('p', { class: 'small muted' }, 'Grouped by participant. Tap a study number to open its queries. Worked out on this phone from the latest data, including entries not yet sent.'),
+  return topBar('Queries').concat([el('main', null, draftsCard(), el('p', { class: 'small muted' }, 'Grouped by participant. Tap a study number to open its queries. Worked out on this phone from the latest data, including entries not yet sent.'),
     out.queries.length ? el('div', { class: 'list' }, order.map(block)) : el('div', { class: 'list' }, el('div', { class: 'empty' }, 'No queries')))]);
 }
 function screening() {
@@ -2128,7 +2178,7 @@ function qclog() {
       el('div', { class: 'main' }, el('div', null, (r.study_id || '') + ' · ' + (r.tab_checked || '') + ' ' + (r.visit_checked || '')), el('div', { class: 'sub' }, (r.qc_date || 'not yet checked') + ' · ' + (r.discrepancies || '0') + ' discrepancies')), statusChip(r), el('span', { class: 'chev' }))) : el('div', { class: 'empty' }, 'No checks yet')))]);
 }
 function attention() {
-  const bad = S.outbox.filter((c) => c.status !== 'pending');
+  const bad = S.outbox.filter(isBad);
   return topBar('Needs fixing').concat([el('main', null, el('p', { class: 'small muted' }, 'The workbook did not accept these. Open each one, correct it and save again, or discard it.'),
     bad.map((c) => el('div', { class: 'card alert' }, el('b', null, NAMES[c.tab] + ' · ' + (c.values.study_id || c.values.screen_no || '') + (c.values.visit ? ' ' + c.values.visit : '')),
       el('ul', { class: 'small' }, Object.keys(c.errors || {}).map((k) => el('li', null, (k === '_' ? '' : k + ': ') + c.errors[k]))),
@@ -2324,7 +2374,16 @@ function formScreen(p) {
   const title = NAMES[tab] + (F.vals.study_id && tab !== 'S0_SCREEN' ? ' · ' + F.vals.study_id : '') + (ctxVisit ? ' ' + ctxVisit : '');
   const main = el('main', { id: 'formmain' });
   const pend = F.existing && F.existing._pending ? S.outbox.filter((c) => c.cid === F.existing._cid)[0] : null;
-  if (pend && pend.status !== 'pending') main.append(el('div', { class: 'card alert' }, el('b', null, 'The workbook did not accept this entry:'), el('ul', { class: 'small' }, Object.keys(pend.errors || {}).map((k) => el('li', null, (k === '_' ? '' : k + ': ') + pend.errors[k])))));
+  if (pend && pend.status === 'draft') { const sc = view('S0_SCREEN').filter((r) => code_(r.study_id) === code_(pend.values.study_id))[0];
+    main.append(el('div', { class: 'card warn', id: 'draftbanner' }, el('b', null, 'Draft on this phone, not sent yet. '), (pend.errors || {})._ || '',
+      sc ? el('button', { type: 'button', class: 'btn qgo', onclick: () => go('form', { tab: 'S0_SCREEN', key: screenKey(sc) }) }, 'Open the screening line') : null)); }
+  else if (pend && pend.status !== 'pending') main.append(el('div', { class: 'card alert' }, el('b', null, 'The workbook did not accept this entry:'), el('ul', { class: 'small' }, Object.keys(pend.errors || {}).map((k) => el('li', null, (k === '_' ? '' : k + ': ') + pend.errors[k])))));
+  if (F.tab === 'S1_ENROL' && !F.existing && !F.ro && !s_(F.vals.study_id)) {        // who is waiting: tap one to fill the form from its screening line
+    const w = waitingEnrol(), wi = screenIncomplete();
+    if (w.length || wi.length) main.append(el('div', { class: 'card', id: 'waitcard' }, el('b', null, (w.length + wi.length) + ' screened and waiting to enrol'),
+      w.length ? el('div', { class: 'chips' }, w.map((id) => el('button', { class: 'rchip', type: 'button', onclick: () => { T.form = null; T.nav.pop(); enrolFromScreen(id); } }, id))) : null,
+      wi.length ? el('div', { class: 'small muted' }, wi.length + ' eligible screening line' + (wi.length > 1 ? 's have' : ' has') + ' no study number yet: ', el('button', { class: 'linkbtn', type: 'button', onclick: () => go('form', { tab: 'S0_SCREEN', key: screenKey(wi[0]) }) }, 'complete ' + screenLabel(wi[0]).split(' · ')[0])) : null));
+  }
   if (p.query) main.append(el('div', { class: 'card qbanner' }, el('b', null, 'Query: '), p.query,
     p.focus ? el('button', { type: 'button', class: 'btn qgo', onclick: () => focusField(p.focus) }, 'Show the field') : null));
   if (F.ro) main.append(el('div', { class: 'card small muted' }, watching() && accessWriteTab_(role(), acc(), F.tab) ? 'Read only in Surveillance. ' + previewName(T.preview) + ' can enter data here.' : 'View only: your role does not enter data here.'));
@@ -2585,6 +2644,16 @@ async function saveForm() {
   });
   APP_KEYS[F.tab].forEach((k) => { if (APP_SERIAL[F.tab] !== k && !s_(F.vals[k])) errs.push(def.cols.filter((c) => c.key === k)[0]); });
   if (F.tab === 'R_SCORES') { const gaps = readerGaps_(F.vals, true); Object.keys(gaps).forEach((k) => { const c = def.cols.filter((x) => x.key === k)[0]; if (c && errs.indexOf(c) < 0) { errs.push(c); const b = $('#f-' + k); if (b) { b.classList.add('err'); const mm = b.querySelector('.msg'); if (mm) mm.textContent = c.label.split(',')[0] + ' ' + gaps[k]; } } }); }
+  if (F.tab === 'S0_SCREEN') {                                 // a screening line is saved only when complete (the workbook checks the same rule)
+    screenDerive(F.vals);
+    const gaps = screenGaps_(F.vals);
+    Object.keys(gaps).forEach((k) => { const c = def.cols.filter((x) => x.key === k)[0]; if (c && errs.indexOf(c) < 0) { errs.push(c); const b = $('#f-' + k); if (b) { b.classList.add('err'); const mm = b.querySelector('.msg'); if (mm) mm.textContent = c.label.split(',')[0] + ' ' + gaps[k]; } } });
+    if (errs.length) {
+      const first = $('#f-' + errs[0].key); if (first) first.scrollIntoView({ block: 'center' });
+      toast('Not saved. Fill in first: ' + errs.map((c) => c.label.split(',')[0].toLowerCase()).join(', ') + '.');
+      return;
+    }
+  }
   if (F.tab === 'R_SCORES' && errs.some((c) => QUADRANTS.indexOf(c.key) >= 0)) {
     const miss = QUADRANTS.filter((k) => s_(F.vals[k]) === '');
     miss.forEach((k) => { const b = document.querySelector('.qcell[data-q="' + k + '"]'); if (b) b.classList.add('err'); });
@@ -2608,7 +2677,11 @@ async function saveForm() {
   Object.keys(UNIT_DEF).forEach((k) => { if (k in F.vals && UNIT_DEF[k].vals.every((x) => s_(F.vals[x]) === '') && !(F.existing && s_(F.existing[k]))) F.vals[k] = ''; });   // a unit only beside a value
   const vals = {}; def.cols.forEach((c) => { if (APP_SERIAL[F.tab] !== c.key || s_(F.vals[c.key])) vals[c.key] = F.vals[c.key]; });
   const entry = queueSave(F.tab, F.existing, vals);
+  const why = entry && F.tab === 'S1_ENROL' ? enrolBlock(s_(F.vals.study_id)) : '';
+  if (why) { entry.status = 'draft'; entry.errors = { _: why }; }
+  else if (entry && entry.status === 'draft') { entry.status = 'pending'; delete entry.errors; }
   await saveState();
+  if (why) { F.dirty = false; toast('Saved as a draft on this phone. ' + why + ' It is listed under Drafts to complete and is sent by itself once the screening line is complete.'); back(); return; }
   F.dirty = false;
   const after = () => { back(); if (navigator.onLine) sync(); };
   if (!entry) { toast('No changes'); back(); return; }

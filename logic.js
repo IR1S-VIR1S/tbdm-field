@@ -574,6 +574,26 @@ function readerGaps_(v, strict) {
   else if (code_(v.cavity) === 'Y' && str_(v.n_cavities) === '') g.n_cavities = 'is required when there is a cavity';
   return g;
 }
+// Enrolment items left blank (the conditional ones only where they apply), less those other queries already name. An enrolment saved
+// with blanks goes to the workbook and stays as a query until it is completed (PI, 10 Nov 2026).
+const ENROL_COVERED = ['age_years', 'sex', 'smear_grade', 'regimen', 'smoking', 'alcohol', 'htn', 'att_start_date', 'dm_status', 'dm_years', 'dm_drugs'];
+function enrolBlanks_(e) {
+  let k = ['enrol_date', 'att_start_date', 'age_years', 'sex', 'residence', 'education', 'smoking', 'alcohol', 'dm_status', 'htn', 'regimen', 'smear_grade', 'genexpert', 'optout_questionnaires', 'optout_spirometry', 'entered_by'];
+  if (e.smoking === '1' || e.smoking === '2') k.push('pack_years');
+  if (e.dm_status === 'K') k = k.concat(['dm_years', 'dm_drugs']);
+  if (e.genexpert === 'D') k.push('rif_res');
+  return k.filter(function (x) { return str_(e[x]) === '' && ENROL_COVERED.indexOf(x) < 0; });
+}
+// A screening line is saved only when complete (PI, 10 Nov 2026): date, age, sex, smear grade and the outcome; the exclusion when not
+// eligible; the study number when enrolled; the reason when eligible but not enrolled. Phone and workbook use this same rule.
+function screenGaps_(v) {
+  const g = {};
+  ['screen_date', 'age', 'sex', 'smear_grade', 'eligible', 'enrolled'].forEach(function (k) { if (str_(v[k]) === '') g[k] = 'is required'; });
+  if (code_(v.eligible) === 'N' && str_(v.excl_code) === '') g.excl_code = 'is required when not eligible';
+  if (code_(v.enrolled) === 'Y' && str_(v.study_id) === '') g.study_id = 'is required when enrolled';
+  if (code_(v.eligible) === 'Y' && code_(v.enrolled) === 'N' && str_(v.not_enrolled_reason) === '') g.not_enrolled_reason = 'is required when eligible but not enrolled';
+  return g;
+}
 
 // data: { TAB: [row objects with string values and _row] }; today: 'yyyy-mm-dd'
 // Which column a query points at: the first rule whose pattern matches the check and whose column exists in that tab.
@@ -878,7 +898,7 @@ function computeDerived_(data, today, held) {
   ids.forEach(function (sid) {
     if (gone(sid)) return;
     const e = enrol[sid], tag = function (c, d) { Q(sid, 'S1_ENROL', e._row, '', c, d); };
-    const miss = ['age_years', 'sex', 'smear_grade', 'regimen', 'smoking', 'alcohol', 'htn'].filter(function (k) { return !has(e[k]); });
+    const miss = ['age_years', 'sex', 'smear_grade', 'regimen', 'smoking', 'alcohol', 'htn'].filter(function (k) { return !has(e[k]); }).concat(enrolBlanks_(e));   // every blank item, so an enrolment saved incomplete stays a query until done
     if (miss.length) tag('Enrolment items missing', miss.join(', '));
     if (e.dm_status === 'K' && (!has(e.dm_drugs) || !has(e.dm_years))) tag('Known diabetes: duration or drugs missing', '');
     if (e.dm_status === '0' && has(e.dm_drugs) && e.dm_drugs !== '0') tag('Not diabetic but diabetes drugs recorded', 'drugs ' + e.dm_drugs);
@@ -1033,13 +1053,7 @@ function computeDerived_(data, today, held) {
     const d0 = dayNo_(e.att_start_date), dEnd = en.status === 'C' ? null : dayNo_(en.status_date);
     const expected = ['V1', 'V2', 'V3', 'V4', 'V5'].filter(function (v) { return en.status === 'C' || (d0 !== null && dEnd !== null && d0 + CFG.WINDOWS[v][2] <= dEnd); });
     // enrolment: every item, with the conditional ones only where they apply
-    let k1 = ['enrol_date', 'att_start_date', 'age_years', 'sex', 'residence', 'education', 'smoking', 'alcohol', 'dm_status', 'htn', 'regimen', 'smear_grade', 'genexpert', 'optout_questionnaires', 'optout_spirometry', 'entered_by'];
-    if (e.smoking === '1' || e.smoking === '2') k1.push('pack_years');
-    if (e.dm_status === 'K') k1 = k1.concat(['dm_years', 'dm_drugs']);
-    if (e.genexpert === 'D') k1.push('rif_res');
-    const COVERED = ['age_years', 'sex', 'smear_grade', 'regimen', 'smoking', 'alcohol', 'htn', 'att_start_date', 'dm_status', 'dm_years', 'dm_drugs'];   // already named by the queries above
-    const m1 = blanks(e, k1).filter(function (k) { return COVERED.indexOf(k) < 0; });
-    if (m1.length) R('S1_ENROL', e._row, '', 'enrolment fields blank', m1.join(', '));
+    // enrolment blanks are a standing query from the day it is saved (Enrolment items missing), so the review does not repeat them
     // baseline examination and radiograph
     const b0 = base[sid];
     if (!b0) { if (!already(sid, 'S2_BASELINE', 'V1', /missing/)) R('S2_BASELINE', '', 'V1', 'baseline examination missing', ''); }
