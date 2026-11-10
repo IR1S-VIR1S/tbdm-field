@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'acd5d07e2ba2';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'e0fa2cad6d7b';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -481,7 +481,7 @@ function setupScreen() {
         if (k < 0 || !readJoin(v.slice(k))) { m0.textContent = 'That is not an invitation link. Copy the whole link and paste it again.'; return; }
         render();
       } }, 'Continue'),
-      el('p', { class: 'small' }, 'If you added this app to the Home Screen after joining in the browser, the Home Screen copy starts empty. Ask for a new invitation and paste it here. No study data are stored until you join.'));
+      el('p', { class: 'small' }, 'If you installed this app, or added it to the Home Screen, after joining in the browser, this copy starts empty. Paste the same invitation link here: it works again for 24 hours after its first use, and the browser copy is then switched off. Sync the browser copy first if it holds unsent entries. After 24 hours, ask the PI for a new invitation.'));
   }
   const ini = el('input', { type: 'text', maxlength: '10', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'e.g. AG' });
   const p1 = el('input', { type: 'password', inputmode: 'numeric', maxlength: '12', autocomplete: 'new-password', placeholder: '6 digits or more' });
