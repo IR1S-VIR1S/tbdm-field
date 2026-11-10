@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '93104b3c5282';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'acd5d07e2ba2';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -47,7 +47,7 @@ function todayIso() { const d = new Date(); return d.getFullYear() + '-' + pad2(
 function nowHm() { const d = new Date(); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
 function rid() { const a = new Uint8Array(12); crypto.getRandomValues(a); return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join(''); }
 function ago(ms) { const m = Math.round((Date.now() - ms) / 60000); if (m < 1) return 'just now'; if (m < 60) return m + ' min ago'; const h = Math.round(m / 60); return h < 48 ? h + ' h ago' : Math.round(h / 24) + ' days ago'; }
-function toast(msg) { const t = el('div', { class: 'toast', role: 'status' }, msg); document.body.append(t); setTimeout(() => t.remove(), 2600); }
+function toast(msg) { const good = /^(Saved|Filled|Installing)/.test(String(msg)), t = el('div', { class: 'toast' + (good ? ' good' : ''), role: 'status' }, good ? icon('tick') : null, msg); document.body.append(t); setTimeout(() => t.remove(), 2600); }
 const defs = () => SCHEMA.concat([READER]);
 const defOf = (tab) => defs().filter((t) => t.tab === tab)[0];
 
@@ -366,9 +366,9 @@ let navSkip = false, navEpoch = 0;   // epoch: bumped when the stack is reset (l
 function navSnap() { return { depth: T.nav.length, epoch: navEpoch, nav: JSON.parse(JSON.stringify(T.nav)) }; }   // each history entry remembers the stack it stands for, so going forward can restore it
 function resetNav() { T.nav = []; navEpoch++; history.replaceState(navSnap(), ''); }
 // set while the app itself moves the history, so the listener does not pop a second time
-function go(name, p) { T.nav.push({ name, p: p || {} }); history.pushState(navSnap(), ''); T.form = null; render(); window.scrollTo(0, 0); }
+function go(name, p) { T.nav.push({ name, p: p || {} }); history.pushState(navSnap(), ''); T.form = null; T.anim = 'fwd'; render(); window.scrollTo(0, 0); }
 function back() {
-  T.nav.pop(); T.form = null; render(); window.scrollTo(0, 0);
+  T.nav.pop(); T.form = null; T.anim = 'back'; render(); window.scrollTo(0, 0);
   if (history.state && history.state.depth > T.nav.length && history.state.epoch === navEpoch) { navSkip = true; history.back(); }
 }
 window.addEventListener('popstate', (ev) => {
@@ -397,6 +397,7 @@ function render() {
     queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen, laborder: labOrderScreen, photos: photosScreen, roles: rolesScreen, invite: inviteScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
+  if (T.anim) { const m = app.querySelector('main'); if (m) m.classList.add('enter-' + T.anim); T.anim = null; }      // a new screen slides in; a redraw of the same screen does not
   const hasNav = !!(S && S.server) && navIds().concat(c.name === 'tools' ? ['tools'] : []).indexOf(c.name) >= 0;
   if (hasNav) { app.append(bottomNav(c.name === 'tools' ? 'settings' : c.name)); if (T.navEdit) app.append(navEditStrip()); }
   // iOS home-screen apps (WebKit bug 301994): on a page shorter than the screen, a bar pinned to the bottom floats about one
@@ -761,6 +762,12 @@ const ICONS = {
   invite: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-6 6.5-6s5.9 2.4 6.5 6"/><path d="M18.5 8v6M15.5 11h6"/>',
   eye: '<path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
   roles: '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 3.5v17"/><path d="m12.2 12 1.3 1.3 2.6-2.6"/>',
+  warn: '<path d="M12 3.5 21.5 20h-19z"/><path d="M12 9.5v5M12 17.3v.1"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.2 2"/>',
+  draft: '<path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m14.5 7.5 3 3"/>',
+  send: '<path d="M3.5 11.5 20.5 4l-6 16.5-3.2-6.3z"/><path d="m11.3 14.2 3.7-4"/>',
+  tick: '<circle cx="12" cy="12" r="8.5"/><path d="m8 12.3 2.8 2.8L16 9.6"/>',
+  flask: '<path d="M9.5 3.5h5M10.5 3.5v6L5 19a1.5 1.5 0 0 0 1.3 2h11.4A1.5 1.5 0 0 0 19 19l-5.5-9.5v-6"/><path d="M7.5 15h9"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>'
 };
 const ICON_DETAIL = { due: [1], query: [1], list: [1], ruler: [1] };   // inner strokes that must stay visible when the bar icon is filled
@@ -917,7 +924,7 @@ function feedCard(cls, title, count, rows, onAll, none, fold) {
   if (fold) {
     const open = fold.open, tog = () => { T.homeOpen = T.homeOpen || {}; T.homeOpen[fold.id] = !open; const y = window.scrollY; render(); window.scrollTo(0, y); };
     return el('div', { class: 'feed ' + cls + (open ? ' open' : ' folded'), 'data-secid': fold.id, 'data-tier': String(fold.tier) },
-      el('button', { class: 'feedhead', 'aria-expanded': open ? 'true' : 'false', onclick: tog }, el('span', { class: 'fold', 'aria-hidden': 'true' }, open ? '\u25be' : '\u25b8'), el('b', null, title), el('span', { class: 'fcount' }, String(count))),
+      el('button', { class: 'feedhead', 'aria-expanded': open ? 'true' : 'false', onclick: tog }, fold.icon ? icon(fold.icon) : null, el('b', null, title), el('span', { class: 'fcount' }, String(count)), el('span', { class: 'fold', 'aria-hidden': 'true' })),
       open ? [rows.length ? rows.slice(0, 3).map((r) => el('button', { class: 'feedrow', onclick: r.go }, el('span', { class: 'fmain' }, r.main, r.sub ? el('small', null, r.sub) : null), r.chip ? el('span', { class: 'chip ' + (r.chipCls || '') }, r.chip) : null)) : el('div', { class: 'feednone' }, none),
         count && onAll ? el('button', { class: 'feedmore', onclick: onAll }, count > 3 ? 'See all ' + count : 'Open the list') : null] : null);
   }
@@ -968,7 +975,8 @@ function piHome(out, bad, waiting, oldest, dueN) {
   const overdue = due.filter((r) => r[5] === 'overdue').length, drafts = S.outbox.filter((c) => c.status === 'draft');
   const pins = role() === 'pi' && !T.preview && !T.practice && S.server ? (S.server.pinHelp || []).length : 0, cq = confRole() ? S.confOut || [] : [], cx = newCxr().length;
   const H = (T.homeOpen = T.homeOpen || {}), sec = [];
-  const add = (id, tier, chip, count, build) => sec.push({ id, tier: count ? tier : 9, chip, count, build });
+  const SEC_ICON = { fix: 'warn', pin: 'lock', measure: 'ruler', due: 'clock', queries: 'query', wait: 'invite', drafts: 'draft', conf: 'send', idp: 'padlock', cxr: 'records' };
+  const add = (id, tier, chip, count, build) => sec.push({ id, tier: count ? tier : 9, chip, count, build, icon: SEC_ICON[id] });
   add('fix', 1, 'to fix', bad.length, () => homeWarn(bad, [], Infinity));
   add('pin', 1, 'forgotten PIN', pins, () => pinHelpCard());
   if (nurse) add('measure', 2, 'to measure', md.length, (f) => feedCard('due ' + (md.length ? 'hot' : 'calm'), 'Measurements to take', md.length,
@@ -993,10 +1001,10 @@ function piHome(out, bad, waiting, oldest, dueN) {
     n.classList.remove('flash'); void n.offsetWidth; n.classList.add('flash');
   };
   const strip = el('nav', { class: 'triage' + (live.length ? '' : ' calm'), id: 'triage', 'aria-label': 'Needs attention' },
-    live.length ? live.map((x) => el('button', { class: 'tchip t' + x.tier, type: 'button', 'data-sec': x.id, 'aria-label': x.count + ' ' + x.chip, onclick: () => jump(x.id) }, el('b', null, String(x.count)), ' ' + x.chip))
+    live.length ? live.map((x) => el('button', { class: 'tchip t' + x.tier, type: 'button', 'data-sec': x.id, 'aria-label': x.count + ' ' + x.chip, onclick: () => jump(x.id) }, icon(x.icon), el('b', null, String(x.count)), ' ' + x.chip))
       : el('span', { class: 'tchip t9' }, 'Nothing needs attention'));
   const blocks = sec.map((x) => {
-    const node = x.build({ id: x.id, open: x.id in H ? !!H[x.id] : x.tier === 1, tier: x.tier });
+    const node = x.build({ id: x.id, open: x.id in H ? !!H[x.id] : x.tier === 1, tier: x.tier, icon: x.icon });
     if (node) { node.dataset.secid = x.id; node.dataset.tier = String(x.tier); }
     return node;
   });
@@ -1973,10 +1981,10 @@ function labOrderScreen(p) {
 }
 function statusChip(row) {
   if (!row) return el('span', { class: 'chip' }, 'not entered');
-  if (row._pending === 'pending') return el('span', { class: 'chip pend' }, 'waiting to send');
-  if (row._pending === 'draft') return el('span', { class: 'chip warn' }, 'draft');
-  if (row._pending) return el('span', { class: 'chip bad' }, 'needs fixing');
-  return el('span', { class: 'chip ok' }, 'in workbook');
+  if (row._pending === 'pending') return el('span', { class: 'chip pend ic' }, icon('send'), 'waiting to send');
+  if (row._pending === 'draft') return el('span', { class: 'chip warn ic' }, icon('draft'), 'draft');
+  if (row._pending) return el('span', { class: 'chip bad ic' }, icon('warn'), 'needs fixing');
+  return el('span', { class: 'chip ok ic' }, icon('tick'), 'in workbook');
 }
 // A visit's forms stay faded and cannot be opened until the visit window starts (counted from the date ATT started).
 // A form that already has a record stays open, and so does everything once the window has begun, including late entry.
@@ -2459,7 +2467,7 @@ function formScreen(p) {
         const cols = g[1].map((k) => def.cols.filter((c) => c.key === k)[0]).filter((c) => c && visible(tab, c, null, F.vals));
         const expected = !g[2] || g[2].indexOf(v) >= 0 || cols.some((c) => s_(F.vals[c.key]) !== '');
         if (!cols.length) return;                                      // a group with nothing to show (Entered by)
-        if (expected || F.showAll) fieldsBox.append(el('div', { class: 'group-title' }, g[0] + (expected ? '' : ' (not usually done at this visit)')), ...cols.map(fieldEl));
+        if (expected || F.showAll) fieldsBox.append(el('div', { class: 'group-title' }, icon('flask'), g[0] + (expected ? '' : ' (not usually done at this visit)')), ...cols.map(fieldEl));
         else extra.push(g[0]);
       });
       if (extra.length) fieldsBox.append(el('button', { class: 'toggle', onclick: () => { F.showAll = true; fill(); } }, '+ Show other results (' + extra.join(', ') + ')'));
@@ -2698,7 +2706,7 @@ function labDili(v) {
 function paintCalc() {
   const box = $('#calc'); if (!box || !T.form) return;
   const items = liveCalc();
-  box.replaceChildren(items.length ? el('div', null, el('div', { class: 'group-title' }, 'Calculated by the app'), el('div', { class: 'calc' },
+  box.replaceChildren(items.length ? el('div', null, el('div', { class: 'group-title' }, icon('tick'), 'Calculated by the app'), el('div', { class: 'calc' },
     items.map((i) => el('div', { class: i[2] ? 'bad' : '' }, el('span', { class: 'small' }, i[0]), el('b', null, i[1]))))) : '');
 }
 async function saveForm() {

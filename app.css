@@ -471,3 +471,56 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .feed[data-tier="1"] { border-left: 5px solid #b3261e; } .feed[data-tier="2"] { border-left: 5px solid #ad4c0a; } .feed[data-tier="9"] { opacity: .85; }
 .feed.flash, .card.flash { animation: qflash 2s ease-out; }
 .formend { height: 1px; }
+
+/* ===== UI refresh (PI, 10 Nov 2026): calm neutral surfaces, colour only where something needs doing; lighter cards; one type scale;
+   icons on lists, chips and sections; quick touch feedback and screen transitions (off with "reduce motion"). ===== */
+/* type: one scale, normal case */
+h2, main h2, .duebox h2, .recentbox h2 { font-size: 17px; font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--ink); background: none; padding: 0; margin: 22px 4px 10px; border-radius: 0; }
+.group-title { display: flex; align-items: center; gap: 8px; font-size: 17px; color: var(--ink); margin: 22px 4px 10px; }
+.group-title .ico, .group-title svg { width: 20px; height: 20px; color: var(--brand-ink); flex: none; }
+/* cards: no outline, a soft shadow, more air */
+.card, .feed, .list { border-color: transparent; box-shadow: 0 1px 2px rgba(20,33,31,.05), 0 4px 14px -6px rgba(20,33,31,.14); }
+.card { margin-bottom: 14px; } .feed { margin-bottom: 12px; }
+.card.alert { border-color: #f3b4ad; } .card.warn { border-color: #f1d08a; }
+@media (prefers-color-scheme: dark) { .card, .feed, .list { border-color: var(--line); box-shadow: none; } }
+/* home lists: white cards; red or orange only as a stripe and the count, grey when empty */
+.feed .feedhead, .feed.due.calm .feedhead, .feed.due.hot .feedhead, .feed.queries.calm .feedhead, .feed.queries.hot .feedhead, .feed.conf .feedhead, .feed.wait .feedhead { background: none; color: var(--ink); }
+.feed .feedhead .ico, .feed .feedhead .ico svg { width: 22px; height: 22px; flex: none; }
+.feed .feedhead .ico { color: var(--muted); }
+.feed .fcount, .feed.due.hot .fcount, .feed.due.calm .fcount, .feed.queries.hot .fcount, .feed.queries.calm .fcount, .feed.conf .fcount, .feed.wait .fcount { background: var(--chip); color: var(--muted); }
+main .feed.feed[data-tier="1"] { border-left: 4px solid #b3261e; } main .feed.feed[data-tier="2"] { border-left: 4px solid #ad4c0a; }
+main .feed.feed[data-tier="1"] .fcount { background: #b3261e; color: #fff; } main .feed.feed[data-tier="2"] .fcount { background: #ad4c0a; color: #fff; }
+.feed[data-tier="1"] .feedhead .ico { color: #b3261e; } .feed[data-tier="2"] .feedhead .ico { color: #ad4c0a; }
+.feed[data-tier="9"] { opacity: 1; } .feed[data-tier="9"] .feedhead b { color: var(--muted); font-weight: 600; }
+.feed.due.hot, .feed.queries.hot, .feed.conf { border-color: transparent; }
+.feed[data-tier="1"] { border-left: 4px solid #b3261e; } .feed[data-tier="2"] { border-left: 4px solid #ad4c0a; } .feed[data-tier="3"], .feed[data-tier="9"] { border-left: 4px solid transparent; }
+.feed .fold { width: 10px; height: 10px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); transition: transform .18s ease; opacity: 1; margin: 0 4px 0 2px; flex: none; }
+.feed.open .fold { transform: rotate(45deg); }
+@media (prefers-color-scheme: dark) {
+  .feed .feedhead, .feed.due.calm .feedhead, .feed.queries.calm .feedhead, .feed.wait .feedhead { background: none; color: var(--ink); }
+  .feed .fcount, .feed.due.calm .fcount, .feed.queries.calm .fcount { background: var(--chip); color: var(--muted); }
+  main .feed.feed[data-tier="1"] .fcount { background: #b3261e; color: #fff; } main .feed.feed[data-tier="2"] .fcount { background: #ad4c0a; color: #fff; }
+  .feed[data-tier="1"] .feedhead .ico { color: #ff8a80; } .feed[data-tier="2"] .feedhead .ico { color: #f6b26b; }
+}
+/* chips with icons */
+.tchip .ico, .tchip .ico svg { width: 16px; height: 16px; } .tchip .ico { display: inline-flex; }
+.chip.ic { display: inline-flex; align-items: center; gap: 4px; } .chip.ic .ico, .chip.ic .ico svg { width: 13px; height: 13px; } .chip.ic .ico { display: inline-flex; }
+.toast.good { display: flex; align-items: center; gap: 8px; background: #0b5a3c; } .toast.good .ico, .toast.good .ico svg { width: 20px; height: 20px; flex: none; }
+/* touch feedback */
+.btn, .tile, .tool, .row, .feedhead, .feedrow, .feedmore, .tchip, .rchip, .pbtn, .seg button, .listpick, .bn, .qhead, .top .back, .top .icon { transition: transform .09s ease, filter .09s ease, background-color .12s ease; }
+.btn:active, .tile:active, .tool:active, .tchip:active, .rchip:active, .pbtn:active, .seg button:active, .top .back:active, .top .icon:active { transform: scale(.96); filter: brightness(.93); }
+button.row:active, .feedhead:active, .feedrow:active, .feedmore:active, .listpick:active, .qhead:active { background-color: rgba(14,94,90,.09); }
+.btn:disabled:active { transform: none; filter: none; }
+/* lists open smoothly; screens slide in; toasts and sheets rise */
+.feed.open > .feedrow, .feed.open > .feednone, .feed.open > .feedmore, .qgroup.open .qbody { animation: unfold .18s ease-out both; }
+@keyframes unfold { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+main.enter-fwd { animation: enterfwd .2s ease-out; } main.enter-back { animation: enterback .2s ease-out; }
+@keyframes enterfwd { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+@keyframes enterback { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+.toast { animation: toastin .18s ease-out; } @keyframes toastin { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+#modal .sheet { animation: sheetin .2s ease-out; } @keyframes sheetin { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .btn, .tile, .tool, .row, .feedhead, .feedrow, .feedmore, .tchip, .rchip, .pbtn, .seg button, .listpick, .bn, .qhead, .feed .fold { transition: none; }
+  .btn:active, .tile:active, .tool:active, .tchip:active, .rchip:active, .pbtn:active, .seg button:active { transform: none; }
+  .feed.open > .feedrow, .feed.open > .feednone, .feed.open > .feedmore, .qgroup.open .qbody, main.enter-fwd, main.enter-back, .toast, #modal .sheet { animation: none; }
+}
