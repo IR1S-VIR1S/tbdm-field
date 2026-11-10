@@ -2165,6 +2165,7 @@ function accessWriteTab_(role, a, tab) {
 function accessLimited_(role, a) { return role !== 'pi' && !/^reader/.test(role) && !a.forms; }   // writes limited to NURSE_SCOPE columns
 const APP_SERIAL = { S0_SCREEN: 'screen_no', EVENTS: 'event_no', QC_LOG: 'qc_no' };   // numbered by the server
 const APP_JOIN_DAYS = 7;
+const APP_REJOIN_HOURS = 24;                 // the same invitation can set up the installed copy for this long after its first use
 
 function appJson_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 function randomHex_(n) { let s = ''; while (s.length < n) s += Utilities.getUuid().replace(/-/g, ''); return s.slice(0, n); }
@@ -2252,12 +2253,16 @@ function appJoin_(req) {
   const k = 'APPJOIN_' + sha256_(code), raw = P.getProperty(k);
   if (!raw) return { ok: false, error: 'this invitation has already been used or was withdrawn' };
   const inv = JSON.parse(raw);
-  P.deleteProperty(k);
-  if (Date.now() > inv.expires) return { ok: false, error: 'this invitation has expired; ask the PI for a new one' };
-  if (!roleOf_(inv.email)) return { ok: false, error: 'this account no longer has a study role' };
+  // Installing the app can start an empty copy (iPhone Home Screen; a link first opened inside WhatsApp or Gmail), so for APP_REJOIN_HOURS
+  // after its first use the same invitation sets up that copy too. The earlier copy is cut off at once: still one phone copy per invitation.
+  const again = !!inv.used;
+  if (Date.now() > inv.expires || (again && Date.now() > inv.used + APP_REJOIN_HOURS * 36e5)) { P.deleteProperty(k); return { ok: false, error: again ? 'this invitation has already been used; ask the PI for a new one' : 'this invitation has expired; ask the PI for a new one' }; }
+  if (!roleOf_(inv.email)) { P.deleteProperty(k); return { ok: false, error: 'this account no longer has a study role' }; }
+  if (again && inv.tok) P.deleteProperty('APP_' + inv.tok);
   const token = randomHex_(64);
   P.setProperty('APP_' + sha256_(token), JSON.stringify({ email: inv.email, issued: Date.now(), device: str_(req.device).slice(0, 60) }));
-  logAudit_('APP', '', '', '', inv.email, 'phone app joined (' + str_(req.device).slice(0, 60) + ')', inv.email);
+  P.setProperty(k, JSON.stringify({ email: inv.email, expires: inv.expires, used: inv.used || Date.now(), tok: sha256_(token) }));
+  logAudit_('APP', '', '', '', inv.email, (again ? 'phone app set up again with the same invitation; the earlier copy was cut off (' : 'phone app joined (') + str_(req.device).slice(0, 60) + ')', inv.email);
   return { ok: true, token: token, email: inv.email, role: roleOf_(inv.email) };
 }
 
@@ -3554,4 +3559,4 @@ function menuAppRevoke() {
   ui.alert('Revoked', n + ' phone(s) or unused invitation(s) of ' + email + ' can no longer reach the study data. Data still waiting on those phones will not be accepted.', ui.ButtonSet.OK);
 }
 
-// SIGNATURE: hs6khYAmiSZjjm/c0785HHsBx/5p4V0otoQ8l1C6uYiTp9s/uVI/7QWzV9bm5/2SUYEl7YuhILMxOUFZyFDPjQABJCdFZY1/MbK/hzrV54EBh9neqNDb2Da+or9ytH6HB9Ssedi+0VwofRQPtg3jMp3rqz1LCS4OFUD8TnZDm3dn05oWwlzUC+c5ai77PSDZ8IGQHAYWuGtCXWFm2y0/Mo8xLLoWBWqMEvy0MN7ZbpEjCk8DsIO94BQwNlCutWUHTYMkFSvek0Q2cE0mquC7EV3rSuL1WrChro8QAMq5Azr/NU3OoWA3yG79omrqPp6J4JAyCQEQn6Ngp3RJA/BH6SantssMgtPnQQ3fqgejQmbKLbLQtZ0tCIMAC/ZJYn9Ctz3CeQiXBLq6uLd05jVm19CENE+vTFB2oXXhIHFoNf5G1QcyGCcVmxYCn7QRDPLfNf01gLNte0BD55zdGnllwEuR8MMIqBQyCet6g8Qn266BDmcdtKVvT5X3TlvAdpEy
+// SIGNATURE: OBgGkBDhsinxCJOE8TSAD8jDnuAcXQ+jt/jwsmZIxHlLRhpGagDM66reIuIBPLYroGhJvKWVqnQ+NtBUfIHWIuBBfYGJAklLWCNexgFy6aJmpf3mmwyrFcfsmugV+FMOVPJiMNnU2Pdoq+783z/23tOrkQXZCbDf2bp3OrM4y7HLmz0z2Xb39dFHfiMzB+vbi+cuVc/Cc9iTMMQTdtkbz8mkylAzqDZTxAhD4Q6vkIJBLyQ4EMhjZprzQBEUfwKIrP8HQSBR5IV/56dMl+vrH7j6AQ0hSO0Z8ovDAvMqlXMkt1AQDqSjev6V+30whIT5BQ6R+skHKJISGJVOP5h6qxF2S0TXuoj0j7Yn4s1rj8+iQGuiKV8j51bNDeTXOFKtOGH55TuWhlP0TgYjaUj3s5iqNiFj3kgKOaUBHJc+NtT3xb6RzvxW32jDTt5Y3Zl4LLEjiUZH8ZgY7UkeEnd9B+JA2fEg01KltLshyBuxTSrn5V8pfu79/ruDCI7OS+wY
