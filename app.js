@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '92b220fcc46d';                 // replaced by build.js with the build's hash
+const BUILD_ID = '93104b3c5282';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -403,6 +403,27 @@ function render() {
   // status bar above the real bottom. Pages long enough to scroll are fine, so short pages are made just taller than the screen.
   let sa = false; try { sa = !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)); } catch (e) { sa = false; }
   app.style.minHeight = hasNav && sa ? (Math.max(screen.height || 0, innerHeight) + 1) + 'px' : '';
+}
+// Install as an app (PI, 10 Nov 2026). Chrome on Android offers a real installation (its own icon, opens full screen, listed with the
+// phone's apps) when it fires beforeinstallprompt; the tile then installs in one tap. Otherwise the tile shows the menu steps. Hidden once
+// the app is running installed.
+function standalone() { try { return !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)); } catch (e) { return false; } }
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); T.installEvt = e; if (KEY && cur().name === 'settings') render(); });
+window.addEventListener('appinstalled', () => { T.installEvt = null; T.installed = true; if (KEY && cur().name === 'settings') render(); });
+function installTile() {
+  if (standalone() || T.installed) return null;
+  const help = () => modal('Install TBDM Field as an app', [
+    el('p', null, ANDROID ? 'In Chrome:' : 'On iPhone, in Safari:'),
+    ANDROID ? el('ol', null, el('li', null, 'Tap the menu (three dots, top right).'), el('li', null, 'Tap "Install app" (on some phones "Add to Home screen", then choose Install).'), el('li', null, 'Open TBDM Field from its new icon. It opens full screen, without the address bar.'),
+      el('li', null, 'If you only see "Create shortcut", the page was opened inside another app (WhatsApp, Gmail). Open the link in Chrome itself, then try again.'))
+      : el('ol', null, el('li', null, 'Tap Share (square with an arrow).'), el('li', null, 'Tap "Add to Home Screen", then Add.'), el('li', null, 'Open TBDM Field from its new icon.'))], [['Close', null]]);
+  const go1 = async () => {
+    if (!T.installEvt) { help(); return; }
+    const e = T.installEvt; T.installEvt = null;
+    try { e.prompt(); const r = await e.userChoice; if (r && r.outcome === 'accepted') { T.installed = true; toast('Installing. Open TBDM Field from its new icon.'); } else toast('Not installed. You can install it later from here.'); } catch (x) { help(); }
+    render();
+  };
+  return toolTile('update', 'Install app', T.installEvt ? 'One tap' : 'How to', go1, 'install-app');
 }
 // Roles that use the visit checklist (not the nurse, the DOTS incharge or the radiology readers).
 function hasGuide() { return can('checklist'); }                 // the per-visit checklist follows the Visit checklist tick
@@ -891,7 +912,15 @@ function bottomNav(active) {
   });          // the selected tab is always in view
   return nav;
 }
-function feedCard(cls, title, count, rows, onAll, none) {
+// fold (Home only): { id, open, tier } - the header opens and folds the list; See all (or Open the list) leads to the full list.
+function feedCard(cls, title, count, rows, onAll, none, fold) {
+  if (fold) {
+    const open = fold.open, tog = () => { T.homeOpen = T.homeOpen || {}; T.homeOpen[fold.id] = !open; const y = window.scrollY; render(); window.scrollTo(0, y); };
+    return el('div', { class: 'feed ' + cls + (open ? ' open' : ' folded'), 'data-secid': fold.id, 'data-tier': String(fold.tier) },
+      el('button', { class: 'feedhead', 'aria-expanded': open ? 'true' : 'false', onclick: tog }, el('span', { class: 'fold', 'aria-hidden': 'true' }, open ? '\u25be' : '\u25b8'), el('b', null, title), el('span', { class: 'fcount' }, String(count))),
+      open ? [rows.length ? rows.slice(0, 3).map((r) => el('button', { class: 'feedrow', onclick: r.go }, el('span', { class: 'fmain' }, r.main, r.sub ? el('small', null, r.sub) : null), r.chip ? el('span', { class: 'chip ' + (r.chipCls || '') }, r.chip) : null)) : el('div', { class: 'feednone' }, none),
+        count && onAll ? el('button', { class: 'feedmore', onclick: onAll }, count > 3 ? 'See all ' + count : 'Open the list') : null] : null);
+  }
   return el('div', { class: 'feed ' + cls },
     el('button', { class: 'feedhead', onclick: onAll }, el('b', null, title), el('span', { class: 'fcount' }, String(count)), el('span', { class: 'chev' })),
     rows.length ? rows.slice(0, 3).map((r) => el('button', { class: 'feedrow', onclick: r.go }, el('span', { class: 'fmain' }, r.main, r.sub ? el('small', null, r.sub) : null), r.chip ? el('span', { class: 'chip ' + (r.chipCls || '') }, r.chip) : null)) : el('div', { class: 'feednone' }, none),
@@ -933,38 +962,68 @@ function piHome(out, bad, waiting, oldest, dueN) {
   const nurse = can('measure') && !can('due'), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], wi = canData() ? screenIncomplete() : [], idp = confRole() && (!T.practice || T.preview) ? identifiersPending((T.reg && T.reg.list) || confAsList()) : [];
   const group = {}; out.queries.forEach((q) => { const g = q[0] || 'Screening log'; (group[g] = group[g] || []).push(q); });
   const qkeys = Object.keys(group).sort(), md = nurse ? measuresDue() : [];
+  // Triage (PI, 10 Nov 2026): every list is put in a tier - 1 act now (red), 2 act today (orange), 3 for information - and a strip of
+  // count chips pinned under the top bar shows every non-empty list, so nothing is missed below the fold. Tier 1 lists open; the rest fold
+  // to one line (tap to open). Empty lists go last, folded, with no chip.
+  const overdue = due.filter((r) => r[5] === 'overdue').length, drafts = S.outbox.filter((c) => c.status === 'draft');
+  const pins = role() === 'pi' && !T.preview && !T.practice && S.server ? (S.server.pinHelp || []).length : 0, cq = confRole() ? S.confOut || [] : [], cx = newCxr().length;
+  const H = (T.homeOpen = T.homeOpen || {}), sec = [];
+  const add = (id, tier, chip, count, build) => sec.push({ id, tier: count ? tier : 9, chip, count, build });
+  add('fix', 1, 'to fix', bad.length, () => homeWarn(bad, [], Infinity));
+  add('pin', 1, 'forgotten PIN', pins, () => pinHelpCard());
+  if (nurse) add('measure', 2, 'to measure', md.length, (f) => feedCard('due ' + (md.length ? 'hot' : 'calm'), 'Measurements to take', md.length,
+    md.map((m) => ({ main: m.sid, sub: m.need.join(', '), chip: String(m.need.length), chipCls: 'warn', go: () => go('measurefor', { sid: m.sid }) })), () => go('measure'), 'Nothing to measure', f));
+  if (can('due')) add('due', overdue ? 1 : 2, overdue ? 'overdue' : 'due now', due.length, (f) => feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
+    due.map((r) => ({ main: dueLabel(r), sub: winTxt(r), chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due', f));
+  if (can('queries')) add('queries', 2, 'queries', out.queries.length, (f) => feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
+    qkeys.map((g) => ({ main: g, sub: group[g][0][4] + (group[g].length > 1 ? ' and ' + (group[g].length - 1) + ' more' : ''), chip: String(group[g].length), chipCls: 'bad', go: () => openQuery(group[g][0]) })), () => go('queries'), 'No queries', f));
+  if (canData()) add('wait', 2, 'to enrol', w.length + wi.length, (f) => feedCard('wait', 'Waiting to enrol', w.length + wi.length,
+    w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => enrolFromScreen(id) })).concat(wi.map((r) => ({ main: screenLabel(r), sub: 'Eligible: answer Enrolled and give the study number', chip: 'complete it', chipCls: 'warn', go: () => go('form', { tab: 'S0_SCREEN', key: screenKey(r) }) }))), () => go('screening'), 'Nobody waiting', f));
+  add('drafts', 2, drafts.length === 1 ? 'draft' : 'drafts', drafts.length, (f) => draftsCard(f));
+  add('conf', 2, 'unsent', cq.length, (f) => confQueue(f));
+  if (confRole()) add('idp', 2, 'identifiers', idp.length, (f) => feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: 'Name, record number and telephone not recorded', go: toRegister })), toRegister, 'All recorded', f));
+  add('cxr', 3, cx === 1 ? 'new radiograph' : 'new radiographs', cx, () => newCxrCard());
+  sec.sort((a, b) => a.tier - b.tier);
+  const live = sec.filter((x) => x.count);
+  const jump = (id) => {
+    H[id] = true; render();
+    const n = document.querySelector('[data-secid="' + id + '"]'); if (!n) return;
+    const t = $('#triage'), off = ((document.querySelector('header.top') || {}).offsetHeight || 0) + (t ? t.offsetHeight : 0) + 8;
+    window.scrollTo({ top: n.getBoundingClientRect().top + window.scrollY - off, behavior: 'smooth' });
+    n.classList.remove('flash'); void n.offsetWidth; n.classList.add('flash');
+  };
+  const strip = el('nav', { class: 'triage' + (live.length ? '' : ' calm'), id: 'triage', 'aria-label': 'Needs attention' },
+    live.length ? live.map((x) => el('button', { class: 'tchip t' + x.tier, type: 'button', 'data-sec': x.id, 'aria-label': x.count + ' ' + x.chip, onclick: () => jump(x.id) }, el('b', null, String(x.count)), ' ' + x.chip))
+      : el('span', { class: 'tchip t9' }, 'Nothing needs attention'));
+  const blocks = sec.map((x) => {
+    const node = x.build({ id: x.id, open: x.id in H ? !!H[x.id] : x.tier === 1, tier: x.tier });
+    if (node) { node.dataset.secid = x.id; node.dataset.tier = String(x.tier); }
+    return node;
+  });
   const main = el('main', { class: 'pihome' },
-    homeWarn(bad, waiting, oldest), pinHelpCard(), newCxrCard(),
     el('div', { class: 'homerow' + (canData() ? '' : ' solo') },
       findBox(true),
       canData() ? el('button', { class: 'tile primary', onclick: () => go('form', { tab: 'S0_SCREEN', key: {} }) }, el('b', { class: 'tt' }, icon('check'), 'Screen a patient'), el('span', null, screenedToday())) : null,
       canData() ? enrolTile() : null),
     can('numbers') && !canData() ? el('div', { class: 'homerow solo' }, assignTile()) : null,
-    nurse ? feedCard('due ' + (md.length ? 'hot' : 'calm'), 'Measurements to take', md.length,
-      md.map((m) => ({ main: m.sid, sub: m.need.join(', '), chip: String(m.need.length), chipCls: 'warn', go: () => go('measurefor', { sid: m.sid }) })), () => go('measure'), 'Nothing to measure') : null,
-    !can('due') ? null : feedCard('due ' + (dueN ? 'hot' : 'calm'), 'Due and overdue', due.length,
-      due.map((r) => ({ main: dueLabel(r), sub: winTxt(r), chip: r[5], chipCls: r[5] === 'overdue' ? 'bad' : 'warn', go: () => go('participant', { sid: r[0] }) })), () => go('due'), 'Nothing due'),
-    !can('queries') ? null : feedCard('queries ' + (out.queries.length ? 'hot' : 'calm'), 'Open queries', out.queries.length,
-      qkeys.map((g) => ({ main: g, sub: group[g][0][4] + (group[g].length > 1 ? ' and ' + (group[g].length - 1) + ' more' : ''), chip: String(group[g].length), chipCls: 'bad', go: () => openQuery(group[g][0]) })), () => go('queries'), 'No queries'),
-    w.length + wi.length ? feedCard('wait', 'Waiting to enrol', w.length + wi.length, w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => enrolFromScreen(id) })).concat(wi.map((r) => ({ main: screenLabel(r), sub: 'Eligible: answer Enrolled and give the study number', chip: 'complete it', chipCls: 'warn', go: () => go('form', { tab: 'S0_SCREEN', key: screenKey(r) }) }))), () => go('screening'), '') : null,
-    draftsCard(),
-    confQueue(),
-    idp.length ? feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: 'Name, record number and telephone not recorded', go: () => { if (T.reg) T.reg.list = null; go('register'); } })), () => { if (T.reg) T.reg.list = null; go('register'); }, '') : null,
+    waiting.length && Date.now() - oldest > 864e5 ? homeWarn([], waiting, oldest) : null,
+    blocks,
     recentBlock(waiting.length ? waiting.length + ' waiting to send' : 'All entries sent'));
-  return homeTop().concat([main]);
+  setTimeout(() => { const t = $('#triage'), h = document.querySelector('header.top'); if (t && h) t.style.top = h.offsetHeight + 'px'; }, 0);
+  return homeTop().concat([strip, main]);
 }
-function draftsCard() {
+function draftsCard(fold) {
   const d = S.outbox.filter((c) => c.status === 'draft');
-  return d.length ? feedCard('due hot', 'Drafts to complete', d.length, d.map((c) => ({ main: NAMES[c.tab] + ' · ' + s_(c.values.study_id), sub: (c.errors || {})._ || 'Not sent yet', chip: 'draft', chipCls: 'warn', go: () => go('form', { tab: c.tab, key: { study_id: s_(c.values.study_id) } }) })), () => go('queries'), '') : null;
+  return d.length ? feedCard('due hot', 'Drafts to complete', d.length, d.map((c) => ({ main: NAMES[c.tab] + ' · ' + s_(c.values.study_id), sub: (c.errors || {})._ || 'Not sent yet', chip: 'draft', chipCls: 'warn', go: () => go('form', { tab: c.tab, key: { study_id: s_(c.values.study_id) } }) })), can('queries') ? () => go('queries') : null, '', fold) : null;
 }
 function toRegister() { if (T.reg) T.reg.list = null; go('register'); }
 function assignTile() {
   const spare = ownFree().length;
   return el('button', { class: 'tile primary', onclick: toRegister }, el('b', null, 'Assign a study number'), el('span', null, spare ? spare + ' spare number' + (spare === 1 ? '' : 's') + ' on this phone' : 'Online: next number from the register'));
 }
-function confQueue() {
+function confQueue(fold) {
   const q = confRole() ? S.confOut || [] : [];
-  return q.length ? feedCard('due hot', 'Waiting to send', q.length, q.map((c) => ({ main: s_(c.body.study_id) || 'New number', sub: c.err ? 'Not accepted: ' + c.err : 'Saved on this phone, sent at the next sync', chip: c.err ? 'fix' : 'unsent', chipCls: c.err ? 'bad' : 'warn', go: toRegister })), toRegister, '') : null;
+  return q.length ? feedCard('due hot', 'Waiting to send', q.length, q.map((c) => ({ main: s_(c.body.study_id) || 'New number', sub: c.err ? 'Not accepted: ' + c.err : 'Saved on this phone, sent at the next sync', chip: c.err ? 'fix' : 'unsent', chipCls: c.err ? 'bad' : 'warn', go: toRegister })), toRegister, '', fold) : null;
 }
 // A role with no study data on this phone (by default the DOTS incharge): the home lists the register work, if it has any.
 function dotsHome() {
@@ -2266,6 +2325,7 @@ function settings() {
     pi ? toolTile('eye', 'Surveillance', 'A role\'s view, read only', () => previewAsk('watch'), 'surveil') : null,
     pi ? toolTile('debug', 'Debugging', 'A role on made-up data', () => previewAsk('debug'), 'debug') : null,
     can('export') && !T.practice ? toolTile('export', 'Export data', 'Excel, CSV, SPSS', exportAsk, 'export-data') : null,
+    installTile(),
     toolTile('update', 'Update app', 'Get newest', () => confirmLeave(checkUpdate), 'update-now'),
     bioTile()];
   return topBar('Settings').concat([el('main', null,
@@ -2411,7 +2471,20 @@ function formScreen(p) {
   fill();
   setTimeout(paintCalc, 0);
   { const pc = photoCard(T.form); if (pc) main.append(pc);  }
-  const bar = F.ro ? null : el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => confirmLeave(back) }, 'Cancel'), el('button', { class: 'btn primary', id: 'savebtn', onclick: saveForm }, 'Save'));
+  // Screening (PI, 10 Nov 2026): Save appears only once the end of the form has been on screen, so every answer is seen before saving.
+  const saveBtn = () => el('button', { class: 'btn primary', id: 'savebtn', onclick: saveForm }, 'Save');
+  const gate = tab === 'S0_SCREEN' && !F.ro && !F.seenEnd && 'IntersectionObserver' in window;
+  const bar = F.ro ? null : el('div', { class: 'savebar' }, el('button', { class: 'btn', onclick: () => confirmLeave(back) }, 'Cancel'),
+    gate ? el('button', { class: 'btn', id: 'scrollend', type: 'button', onclick: () => { const e = $('#formend'); if (e) e.scrollIntoView({ block: 'end', behavior: 'smooth' }); } }, 'Check to the end \u2193') : saveBtn());
+  if (tab === 'S0_SCREEN' && !F.ro) {
+    const end = el('div', { id: 'formend', class: 'formend', 'aria-hidden': 'true' });
+    main.append(end);
+    if (gate) {
+      const show = () => { if (T.form !== F || F.seenEnd) return; F.seenEnd = true; const b = $('#scrollend'); if (b) b.replaceWith(saveBtn()); };
+      if ('IntersectionObserver' in window) { const io = new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting)) { io.disconnect(); show(); } }); setTimeout(() => io.observe(end), 0); }
+      else F.seenEnd = true;
+    }
+  }
   if (p.focus && !p._focused) { p._focused = true; setTimeout(() => focusField(p.focus), 120); }
   if (p.docFocus && !p._docFocused) { p._docFocused = true; setTimeout(() => { const c = $('#photocard'); if (!c) return; c.scrollIntoView({ block: 'center', behavior: 'smooth' }); c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash'); setTimeout(() => c.classList.remove('flash'), 2600); }, 150); }
   return topBar(title).concat([main, bar]);

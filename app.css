@@ -458,3 +458,16 @@ button.tick:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px
 .readnotes { margin: 8px 0 0; padding-left: 18px; color: #8a5a10; font-weight: 600; } .readnotes li { margin: 4px 0; }
 
 .photo-full .pf-img { cursor: grab; } .photo-full .pf-img.grabbing { cursor: grabbing; } .photo-full .pf-img img { user-select: none; -webkit-user-drag: none; }
+/* Home triage strip (10 Nov 2026): one chip per list that needs attention, pinned under the top bar; colour = tier, the count is always written */
+.triage { position: sticky; z-index: 4; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px; background: var(--bg); border-bottom: 1px solid var(--line); box-shadow: 0 6px 12px -10px rgba(0,0,0,.35); }
+.tchip { display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 14px; font-weight: 600; }
+.tchip b { font-size: 15px; }
+.tchip.t1 { background: #b3261e; border-color: #b3261e; color: #fff; }
+.tchip.t2 { background: #ad4c0a; border-color: #ad4c0a; color: #fff; }
+.tchip.t3 { background: var(--card); color: var(--ink); }
+.tchip.t9 { background: transparent; border-style: dashed; color: var(--muted); font-weight: 500; }
+.feed .fold { width: 18px; color: inherit; opacity: .8; font-size: 14px; }
+.feed.folded .feedhead { min-height: 48px; }
+.feed[data-tier="1"] { border-left: 5px solid #b3261e; } .feed[data-tier="2"] { border-left: 5px solid #ad4c0a; } .feed[data-tier="9"] { opacity: .85; }
+.feed.flash, .card.flash { animation: qflash 2s ease-out; }
+.formend { height: 1px; }
