@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'e0fa2cad6d7b';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'b2fe2230f6be';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -393,7 +393,7 @@ function render() {
   const app = $('#app');
   app.replaceChildren();
   if (!KEY) { app.append(T.hasVault ? lockScreen() : setupScreen()); return; }
-  const c = cur(), screens = { home: home, participants: participants, participant: participant, form: formScreen, due: due,
+  const c = cur(), screens = { activity: activityScreen, home: home, participants: participants, participant: participant, form: formScreen, due: due,
     queries: queries, measure: measureList, measurefor: measureFor, attention: attention, films: films, settings: settings, tools: tools, screening: screening, qclog: qclog, register: registerScreen, link: linkScreen, linkpick: linkPick, visits: visitsScreen, visitguide: visitGuideScreen, laborder: labOrderScreen, photos: photosScreen, roles: rolesScreen, invite: inviteScreen };
   const body = (screens[c.name] || home)(c.p);
   app.append(...body);
@@ -404,6 +404,49 @@ function render() {
   // status bar above the real bottom. Pages long enough to scroll are fine, so short pages are made just taller than the screen.
   let sa = false; try { sa = !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)); } catch (e) { sa = false; }
   app.style.minHeight = hasNav && sa ? (Math.max(screen.height || 0, innerHeight) + 1) + 'px' : '';
+}
+// Activity (PI only, online): what each person did, read from the workbook's audit log. Nothing is kept on the phone.
+function activityLoad() {
+  const A = T.act; if (!A || A.busy) return;
+  A.busy = true; A.err = '';
+  api({ op: 'activity', token: S.cfg.token, days: A.days, user: A.user || '' }, 60000).then((r) => {
+    A.busy = false;
+    if (!r.ok) A.err = r.error || 'not available'; else { A.data = r; A.open = {}; }
+    if (KEY && cur().name === 'activity') render();
+  }).catch((e) => { A.busy = false; A.err = e.message || String(e); if (KEY && cur().name === 'activity') render(); });
+}
+const ACT_NAMES = { APP: 'Phone app', ACCESS: 'Role access', REGISTER: 'Study number', NUMBERS: 'Study numbers', LINK_LIST: 'Confidential register', LINK_SAVE: 'Confidential link', LINK_VIEW: 'Confidential link', LINK_SWITCH: 'Confidential link switch',
+  PHOTO_ADD: 'Document photo', PHOTO_VIEW: 'Document photo', PHOTO_FLAG: 'Document photo', PHOTO_DELETE: 'Document photo', PHOTO_SWITCH: 'Document photos switch', DOC_READ: 'Document read', EXPORT: 'Export', QC_LOG: 'Verification sample',
+  SCHEMA_UPGRADE: 'Workbook upgrade', SCRIPT_UPDATE: 'Script update', ERASE_ALL: 'Erase', R_SCORES: 'Radiograph scores' };
+function actName(label) { const t = String(label || '').split('/').pop(); return NAMES[t] || ACT_NAMES[t] || t; }
+function activityScreen() {
+  if (role() !== 'pi' || T.preview || T.practice) return topBar('Activity').concat([el('main', null, el('div', { class: 'card' }, 'Activity is for the PI only.'))]);
+  const A = T.act || (T.act = { days: 7, user: '', data: null, busy: false, err: '', open: {} });
+  if (!A.data && !A.busy && !A.err) { if (navigator.onLine) setTimeout(() => { activityLoad(); render(); }, 0); else A.err = 'Activity opens only with a signal.'; }
+  const d = A.data, set = (k, v) => { A[k] = v; A.data = null; A.err = ''; render(); };
+  const when = (t) => (t.slice(0, 10) === todayIso() ? 'Today' : dateTxt_(t.slice(0, 10))) + ', ' + t.slice(11);
+  const short = (e) => e.split('@')[0];
+  const period = el('div', { class: 'chips', id: 'act-days' }, [[1, 'Today'], [7, '7 days'], [30, '30 days'], [90, '90 days']].map((x) => el('button', { class: 'rchip' + (A.days === x[0] ? ' on' : ''), type: 'button', 'data-days': String(x[0]), onclick: () => set('days', x[0]) }, x[1])));
+  const people = d ? el('div', { class: 'list', id: 'act-people' },
+    el('button', { class: 'row' + (A.user ? '' : ' sel'), type: 'button', onclick: () => set('user', '') }, el('div', { class: 'main' }, el('div', null, 'Everyone'), el('div', { class: 'sub' }, d.people.length + ' people active in this period')), el('span', { class: 'chev' })),
+    d.people.map((p) => el('button', { class: 'row' + (A.user === p.email ? ' sel' : ''), type: 'button', 'data-user': p.email, onclick: () => set('user', A.user === p.email ? '' : p.email) },
+      el('div', { class: 'main' }, el('div', null, short(p.email), ' ', el('span', { class: 'chip' }, p.role)), el('div', { class: 'sub' }, p.email + ' · last active ' + when(p.last))),
+      el('span', { class: 'chip ' + (p.today ? 'ok' : '') }, p.today ? p.today + ' today' : p.n + ' in period'), el('span', { class: 'chev' })))) : null;
+  const events = d ? el('div', { class: 'list', id: 'act-events' }, d.events.length ? d.events.map((e, i) => {
+    const open = !!A.open[i], has = e.fields.length > 0;
+    return el('div', { class: 'actev' + (open ? ' open' : '') },
+      el('button', { class: 'row', type: 'button', 'aria-expanded': open ? 'true' : 'false', onclick: () => { if (!has) return; A.open[i] = !open; const y = window.scrollY; render(); window.scrollTo(0, y); } },
+        el('div', { class: 'main' }, el('div', null, actName(e.label) + (e.sid ? ' · ' + e.sid : '')), el('div', { class: 'sub' }, short(e.user) + ' · ' + when(e.t) + ' · ' + e.what + (e.n > 1 ? ' (' + e.n + ' fields)' : ''))),
+        has ? el('span', { class: 'chev' }) : null),
+      open ? el('div', { class: 'actfields small' }, e.fields.map((f) => el('div', null, f.k ? el('b', null, f.k + ': ') : null, f.o ? f.o + ' → ' : '', f.n || (f.o ? '(cleared)' : '')))) : null);
+  }) : el('div', { class: 'empty' }, 'Nothing recorded in this period.')) : null;
+  return topBar('Activity').concat([el('main', null,
+    el('div', { class: 'card small muted' }, 'What each person did, from the workbook\'s audit log: entries saved, documents photographed or opened, the confidential register, invitations and settings. Names and other identifiers are never in this log.'),
+    period,
+    A.busy || (!d && !A.err) ? el('div', { class: 'card small' }, 'Loading…') : null,
+    A.err ? el('div', { class: 'card warn small', id: 'act-err' }, /unknown operation|older than this app/.test(A.err) ? 'The workbook script is older than this app. Update the script first.' : 'Not loaded: ' + A.err, ' ', el('button', { class: 'linkbtn', type: 'button', onclick: () => { A.err = ''; render(); } }, 'Try again')) : null,
+    d ? [el('h2', null, 'People'), people, el('h2', null, A.user ? 'What ' + short(A.user) + ' did' : 'What was done'), events,
+      d.more || d.capped ? el('div', { class: 'small muted' }, 'Showing the newest 300. Choose a person or a shorter period to see more, or open the audit log file.') : null] : null)]);
 }
 // Install as an app (PI, 10 Nov 2026). Chrome on Android offers a real installation (its own icon, opens full screen, listed with the
 // phone's apps) when it fires beforeinstallprompt; the tile then installs in one tap. Otherwise the tile shows the menu steps. Hidden once
@@ -2329,6 +2372,7 @@ function settings() {
     can('verify') && holds('QC_LOG') ? toolTile('check', 'Verification log', view('QC_LOG').length + ' checks', () => go('qclog')) : null,
     !T.preview && (can('screen') || can('view') || can('measure') || isReader()) ? toolTile('practice', 'Practice mode', 'Made-up patients', practiceAsk) : null,
     pi ? toolTile('roles', 'Role manager', 'Who can do what', () => { T.roles = null; go('roles'); }, 'role-manager') : null,
+    pi ? toolTile('clock', 'Activity', 'Who did what', () => { T.act = null; go('activity'); }, 'activity-log') : null,
     pi && !T.practice ? toolTile('invite', 'Invite a member', 'One-time link', () => { T.inv = null; go('invite'); }, 'invite-member') : null,
     pi ? toolTile('eye', 'Surveillance', 'A role\'s view, read only', () => previewAsk('watch'), 'surveil') : null,
     pi ? toolTile('debug', 'Debugging', 'A role on made-up data', () => previewAsk('debug'), 'debug') : null,

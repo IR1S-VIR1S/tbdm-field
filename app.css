@@ -524,3 +524,10 @@ main.enter-fwd { animation: enterfwd .2s ease-out; } main.enter-back { animation
   .btn:active, .tile:active, .tool:active, .tchip:active, .rchip:active, .pbtn:active, .seg button:active { transform: none; }
   .feed.open > .feedrow, .feed.open > .feednone, .feed.open > .feedmore, .qgroup.open .qbody, main.enter-fwd, main.enter-back, .toast, #modal .sheet { animation: none; }
 }
+
+.actev { border-bottom: 1px solid var(--line); } .actev:last-child { border-bottom: 0; } .actev .row { border-bottom: 0; width: 100%; }
+.actfields { padding: 0 16px 12px; color: var(--muted); display: grid; gap: 4px; word-break: break-word; } .actfields b { color: var(--ink); font-weight: 600; }
+.list .row.sel { background: rgba(14,94,90,.08); }
+.rchip.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+.linkbtn { background: none; border: 0; color: var(--brand-ink); font-weight: 700; text-decoration: underline; padding: 6px 2px; }
+#act-days { margin: 4px 0 12px; }
