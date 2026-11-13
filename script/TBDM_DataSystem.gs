@@ -2167,7 +2167,7 @@ function accessWriteTab_(role, a, tab) {
 }
 function accessLimited_(role, a) { return role !== 'pi' && !/^reader/.test(role) && !a.forms; }   // writes limited to NURSE_SCOPE columns
 const APP_SERIAL = { S0_SCREEN: 'screen_no', EVENTS: 'event_no', QC_LOG: 'qc_no' };   // numbered by the server
-const RELEASE_NOTE = 'Automatic updates: the workbook now updates itself each hour and tells you what changed. Activity log for the PI under Settings.';
+const RELEASE_NOTE = 'Link register pending: as soon as a participant is enrolled, the number is listed on the data entry, TB DOTS incharge and PI phones until name, record number and telephone are recorded.';
 const APP_JOIN_DAYS = 7;
 const APP_REJOIN_HOURS = 24;                 // the same invitation can set up the installed copy for this long after its first use
 
@@ -2314,6 +2314,7 @@ function appPull_(u) {
       .map(function (p) { return { study_id: str_(p.study_id), id: str_(p.photo_id).slice(0, 12) }; }); } catch (e) { out.cxrPhotos = []; }
   }
   out.regnums = regNums_();
+  out.linkOn = linkOn_();                                   // lets a data phone list enrolled numbers still waiting for the Link register
   out.held = heldBlocks_();
   return out;
 }
@@ -2435,7 +2436,12 @@ function navSet_(u, req) {
 function regNums_() {                                       // study numbers and outcome only, no names or contact details: lets Enrol offer a number the register has already given out
   try {
     if (!props_().getProperty('REGISTER_ID')) return [];
-    return regRows_(regSheet_()).filter(function (r) { return idOk_(str_(r.study_id).toUpperCase()); }).map(function (r) { return [str_(r.study_id).toUpperCase(), str_(r.status)]; });
+    const on = linkOn_();                                    // with the confidential link on, a third value says only whether identifiers are recorded (Y or N), never what they are
+    return regRows_(regSheet_()).filter(function (r) { return idOk_(str_(r.study_id).toUpperCase()); }).map(function (r) {
+      const p = [str_(r.study_id).toUpperCase(), str_(r.status)];
+      if (on) p.push(str_(r.mrn) || str_(r.phone) ? 'Y' : 'N');
+      return p;
+    });
   } catch (e) { return []; }
 }
 
@@ -3660,4 +3666,4 @@ function menuAppRevoke() {
   ui.alert('Revoked', n + ' phone(s) or unused invitation(s) of ' + email + ' can no longer reach the study data. Data still waiting on those phones will not be accepted.', ui.ButtonSet.OK);
 }
 
-// SIGNATURE: Zg891j1Yy/mOQpyE2X8QsgQxGj83H9PrGbk/UTrbcGIwy8bxpPp/EnbCi1xEC7Q3jHUdcgjsuBoZ3/5cDc5oKtQGI+Jg/1wqpFPHO9T2NnvACFJxf08Kuhi9H9bSjmNMPZLkkvDuAvXy7+o2r5XtbDro8esKEFOjO7F1kWpmvIfTEJd3c+yoAZu/f3DVr5kDP10aartr0XogI+FZrClf8LRcI/dxv6wzn69XzdDiSrXhl5xr8kVJBbv29xWtWt57zjjBdxQ8zXA+He8rdBkkAkNM7syyXh1/oltMvAc57VzGtBRGzDF16cRvKRCpdV3HqzEm2PwySkWGEZA5M1EzOpXFnv8jy37vtNZxqU0cWDifdFmQHLyUUUF2e4Ju2bM5fVKVwEv+8SHipHdXMy7exgq7701JtSseTO7f4mAWREY0fgk27kkY44k6IDeB6OFHu938cGyQNx5xBmyaSQPhR4pVVGRrfrD+uxHYH4k8RkrVSaXmNxk/denxrS3GbPBD
+// SIGNATURE: RNqmQ0SLOdmIeTE7Skb/W7reLPSJm6TYzMJcab9bLoKnDR207eFK+5tgLEBzGHnF08lIJi1V7ckowdzrVZ4tT4QYe3AvnQ1tEACMP1ZN3dwjETDNV+llEOJjnxgbyTBg8zWO7wB6jWE8bUquWB5NDg/qo0Mf7hNxnWZHs86/g9VYqaDalEpI2Y6B/CgB5iMM0hLobSeXzATC2M5o++QKLh3ESkwSsKlbUGoTzwqsKwwnXe7YtoRUOuQ//OHE4cjjXE6yu8f47Ed7LmtdBdkhCZXyJeuFXuuYsg0wDpRi/na6b/mr3MzsSrSQYXKHdlaYXNpp+uEzj0iU96mL10psSDUu3GSpsoS09J6KYTutWP5VnGU2R5d5Lf/5EP+pYL2oRbn/64WBdm/pmZuCS9y/H1V6DuZu1t9QZ4AuUHzNvFVWS+S8A/uERVcizRyrLQ03Sf7FTBjSunS89eE5ZoqmwGGi0jQNAw0+XwtvHfyzgbE6w+PwnWg7vV7a+trxueLg
