@@ -2231,6 +2231,7 @@ function doPost(e) {
     if (req.op === 'pull') return appJson_(appPull_(u));
     if (req.op === 'access_set') return appJson_(accessSet_(u, req));
     if (req.op === 'nav_set') return appJson_(navSet_(u, req));
+    if (req.op === 'activity') return appJson_(activity_(u, req));
     if (req.op === 'invite') return appJson_(appInvite_(u, req));
     if (req.op === 'pin_help_dismiss') return appJson_(pinHelpDismiss_(u, req));
     if (req.op === 'push') {
@@ -2313,6 +2314,39 @@ function appPull_(u) {
 }
 // The PI's Role manager: saves the ticks for the four adjustable roles. Unknown roles or keys are ignored, every value must be true or false,
 // and a tick that needs 'view' is saved off when 'view' is off. Each change is written to the audit log (role, tick, old and new value).
+// Activity (PI only): who did what, read from the audit log. Field-by-field edits made in one save are folded into one line per person,
+// form, participant and minute, with the fields changed inside it. The audit log never holds identifiers, so none can appear here.
+function activity_(u, req) {
+  if (!u || u.role !== 'pi') return { ok: false, error: 'only the PI can see the activity log', code: 401 };
+  const days = Math.max(1, Math.min(90, parseInt(req.days, 10) || 7)), who = str_(req.user).toLowerCase();
+  const sh = auditSS_().getSheetByName('LOG'), last = sh.getLastRow(), take = Math.min(Math.max(last - 1, 0), 4000);
+  const rows = take ? sh.getRange(last - take + 1, 1, take, 8).getValues() : [];
+  const since = Date.now() - days * 864e5, today = todayIso_(), stored = accessStored_();
+  const people = {}, events = [], open = {};
+  const fmt = function (d) { return Utilities.formatDate(d, CFG.TZ, 'yyyy-MM-dd HH:mm'); };
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i], d = r[0] instanceof Date ? r[0] : new Date(r[0]);
+    if (!(d.getTime() >= since)) continue;
+    const user = str_(r[1]).toLowerCase() || 'unknown', label = str_(r[2]), sid = str_(r[4]), note = str_(r[7]);
+    if (user.indexOf('@') > 0) {                              // edits Google did not attribute stay in the list of events, not among the people
+      const P = people[user] || (people[user] = { email: user, role: '', last: '', n: 0, today: 0 });
+      P.n++; if (fmt(d).slice(0, 10) === today) P.today++; P.last = fmt(d);
+    }
+    if (who && user !== who) continue;
+    const field = /\(phone app, initials/.test(note) || (str_(r[3]) && !/structural change/.test(note));
+    if (field) {
+      const k = [user, label, sid, Math.floor(d.getTime() / 60000)].join('|');
+      let ev = open[k];
+      if (!ev) { ev = open[k] = { t: fmt(d), user: user, label: label, sid: sid, what: /phone app/.test(note) ? 'saved from the phone' : 'edited in the workbook', n: 0, fields: [] }; events.push(ev); }
+      ev.n++;
+      if (ev.fields.length < 30) ev.fields.push({ k: note.replace(/\s*\(phone app.*$/, '') || str_(r[3]), o: str_(r[5]).slice(0, 80), n: str_(r[6]).slice(0, 80) });
+    } else events.push({ t: fmt(d), user: user, label: label, sid: sid, what: note || label, n: 1, fields: (str_(r[5]) || str_(r[6])) ? [{ k: '', o: str_(r[5]).slice(0, 80), n: str_(r[6]).slice(0, 80) }] : [] });
+  }
+  Object.keys(people).forEach(function (e) { const ro = roleOf_(e); people[e].role = ro ? accessRoleName_(ro, stored) : 'no role now'; });
+  events.reverse();
+  return { ok: true, days: days, people: Object.keys(people).map(function (e) { return people[e]; }).sort(function (a, b) { return a.last < b.last ? 1 : -1; }),
+    events: events.slice(0, 300), more: events.length > 300, scanned: take, capped: take === 4000 && last - 1 > 4000 };
+}
 function accessSet_(u, req) {
   if (!u || u.role !== 'pi') return { ok: false, error: 'only the PI can change role access', code: 401 };
   const inc = req.access && typeof req.access === 'object' ? req.access : null;
@@ -3559,4 +3593,4 @@ function menuAppRevoke() {
   ui.alert('Revoked', n + ' phone(s) or unused invitation(s) of ' + email + ' can no longer reach the study data. Data still waiting on those phones will not be accepted.', ui.ButtonSet.OK);
 }
 
-// SIGNATURE: OBgGkBDhsinxCJOE8TSAD8jDnuAcXQ+jt/jwsmZIxHlLRhpGagDM66reIuIBPLYroGhJvKWVqnQ+NtBUfIHWIuBBfYGJAklLWCNexgFy6aJmpf3mmwyrFcfsmugV+FMOVPJiMNnU2Pdoq+783z/23tOrkQXZCbDf2bp3OrM4y7HLmz0z2Xb39dFHfiMzB+vbi+cuVc/Cc9iTMMQTdtkbz8mkylAzqDZTxAhD4Q6vkIJBLyQ4EMhjZprzQBEUfwKIrP8HQSBR5IV/56dMl+vrH7j6AQ0hSO0Z8ovDAvMqlXMkt1AQDqSjev6V+30whIT5BQ6R+skHKJISGJVOP5h6qxF2S0TXuoj0j7Yn4s1rj8+iQGuiKV8j51bNDeTXOFKtOGH55TuWhlP0TgYjaUj3s5iqNiFj3kgKOaUBHJc+NtT3xb6RzvxW32jDTt5Y3Zl4LLEjiUZH8ZgY7UkeEnd9B+JA2fEg01KltLshyBuxTSrn5V8pfu79/ruDCI7OS+wY
+// SIGNATURE: RaAcPe8mEtKFotI7ZtlUbkNUERdp/Zrtr8oWRwheahfP65Ndo+oStR06Yr8GaUpXChKbZ8wErvdVETbrJjz28vxxvjExukb4XNZvoTlvHFvhIzFvtuhdqlGDlOWtQb6GAEtR9GWc8ZpbNYdrwyiYYsJwqmXURBY5qMioOWhKT3NlvPbH8ACGCM3xb4nZ2AsiO9GJdmbZZD/dJsv89lpafLHxw2+5qi0fQ0ywbR+Y0cG/l+J5wbIknSU2Axf+Ru4j0y7HkDYSHeMpfCzF90O8mEONcIjIe6XYNgQSnJdRDviTmAvlLcVHNE590xfXRjJ+cXR1pT0Y6qSlczHg6JLFCl69NUngiQTkOw14jHRsrRIJ4nKeHJmr/uJ7SUp9MIb87z4GGdktFAJWPjw33fltIsRKN+JfNpifWRmZwSVHxNbAvXPenWgHUuGOH7DPpxdMpyG4mMkZRNw+TEIE9ZM384A/3Pppwt0S2zz2XKPqJ7HiBzxU2r2YOUZxq7aAiU9S
