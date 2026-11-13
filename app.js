@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'b2fe2230f6be';                 // replaced by build.js with the build's hash
+const BUILD_ID = '5443f3bc0c0b';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -1018,7 +1018,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
   const overdue = due.filter((r) => r[5] === 'overdue').length, drafts = S.outbox.filter((c) => c.status === 'draft');
   const pins = role() === 'pi' && !T.preview && !T.practice && S.server ? (S.server.pinHelp || []).length : 0, cq = confRole() ? S.confOut || [] : [], cx = newCxr().length;
   const H = (T.homeOpen = T.homeOpen || {}), sec = [];
-  const SEC_ICON = { fix: 'warn', pin: 'lock', measure: 'ruler', due: 'clock', queries: 'query', wait: 'invite', drafts: 'draft', conf: 'send', idp: 'padlock', cxr: 'records' };
+  const SEC_ICON = { upd: 'tick', fix: 'warn', pin: 'lock', measure: 'ruler', due: 'clock', queries: 'query', wait: 'invite', drafts: 'draft', conf: 'send', idp: 'padlock', cxr: 'records' };
   const add = (id, tier, chip, count, build) => sec.push({ id, tier: count ? tier : 9, chip, count, build, icon: SEC_ICON[id] });
   add('fix', 1, 'to fix', bad.length, () => homeWarn(bad, [], Infinity));
   add('pin', 1, 'forgotten PIN', pins, () => pinHelpCard());
@@ -1034,6 +1034,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
   add('conf', 2, 'unsent', cq.length, (f) => confQueue(f));
   if (confRole()) add('idp', 2, 'identifiers', idp.length, (f) => feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: 'Name, record number and telephone not recorded', go: toRegister })), toRegister, 'All recorded', f));
   add('cxr', 3, cx === 1 ? 'new radiograph' : 'new radiographs', cx, () => newCxrCard());
+  const un = updateNotice(); add('upd', 3, 'workbook updated', un ? 1 : 0, () => updateCard(un));
   sec.sort((a, b) => a.tier - b.tier);
   const live = sec.filter((x) => x.count);
   const jump = (id) => {
@@ -1062,6 +1063,15 @@ function piHome(out, bad, waiting, oldest, dueN) {
     recentBlock(waiting.length ? waiting.length + ' waiting to send' : 'All entries sent'));
   setTimeout(() => { const t = $('#triage'), h = document.querySelector('header.top'); if (t && h) t.style.top = h.offsetHeight + 'px'; }, 0);
   return homeTop().concat([strip, main]);
+}
+// The workbook updated itself (signed script): what changed, shown once on the PI phone until dismissed.
+function updateNotice() { const n = role() === 'pi' && !T.preview && !T.practice && S.server ? S.server.updateNotice : null; return n && n.code && S.seenUpdate !== n.code ? n : null; }
+function updateCard(n) {
+  if (!n) return null;
+  return el('div', { class: 'card', id: 'updcard' }, el('b', null, 'Upgrade successful'), el('div', { class: 'small muted' }, 'The workbook updated itself on ' + dateTxt_(n.at.slice(0, 10)) + ' at ' + n.at.slice(11) + '.'),
+    el('div', { class: 'small' }, n.note ? 'Changes: ' + n.note : 'No changes listed.'),
+    n.moved === false ? el('div', { class: 'small bad' }, 'The web app was not moved to the new version. Open the workbook and run "PI: update the script (one click)".') : null,
+    el('button', { class: 'btn small', type: 'button', id: 'upd-ok', onclick: async () => { S.seenUpdate = n.code; await saveState(); render(); } }, 'OK'));
 }
 function draftsCard(fold) {
   const d = S.outbox.filter((c) => c.status === 'draft');
