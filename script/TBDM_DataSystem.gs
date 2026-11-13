@@ -1311,6 +1311,7 @@ function sha256_(s) {
 function notifyPI_(subject, body) { try { MailApp.sendEmail(piEmail_(), subject, body); } catch (e) { console.error('notifyPI_: ' + e); } }
 
 function onOpen() {
+  try { const un = JSON.parse(PropertiesService.getScriptProperties().getProperty('UPDATE_NOTICE') || 'null'); if (un) SpreadsheetApp.getActive().toast((un.note || 'No changes listed.'), 'Upgrade successful (' + un.at + ')', 15); } catch (e) { /* no notice */ }
   SpreadsheetApp.getUi().createMenu('TB-DM Study')
     .addItem('PI: refresh calculations, queries and alerts now', 'menuRefresh')
     .addItem('PI: manage users and sharing', 'menuUsers')
@@ -1326,6 +1327,7 @@ function onOpen() {
     .addSeparator()
     .addItem('PI: upgrade the workbook in place', 'menuUpgrade')
     .addItem('PI: update the script (one click)', 'menuUpdateScript')
+    .addItem('PI: automatic updates on or off', 'menuAutoUpdate')
     .addItem('PI: how to update without re-inviting', 'menuUpdateHelp')
     .addItem('PI: set up or repair', 'setup')
     .addToUi();
@@ -1846,6 +1848,7 @@ function sendAlert_(a) {
 
 // ---------------------------------------------------------------- scheduled jobs
 function hourlyJob() {
+  try { if (autoUpdate_() === 'updated') return; } catch (e) { console.error('autoUpdate_: ' + e); }      // the new script takes over at the next run
   const ss = dataSS_();
   if (props_().getProperty('ACCESS_PENDING') === 'Y') applyAccessJob();
   try { pullReaders_(ss); } catch (e) { console.error('pullReaders_: ' + e); }
@@ -2164,6 +2167,7 @@ function accessWriteTab_(role, a, tab) {
 }
 function accessLimited_(role, a) { return role !== 'pi' && !/^reader/.test(role) && !a.forms; }   // writes limited to NURSE_SCOPE columns
 const APP_SERIAL = { S0_SCREEN: 'screen_no', EVENTS: 'event_no', QC_LOG: 'qc_no' };   // numbered by the server
+const RELEASE_NOTE = 'Automatic updates: the workbook now updates itself each hour and tells you what changed. Activity log for the PI under Settings.';
 const APP_JOIN_DAYS = 7;
 const APP_REJOIN_HOURS = 24;                 // the same invitation can set up the installed copy for this long after its first use
 
@@ -2278,6 +2282,7 @@ function appPull_(u) {
   out.roleName = accessRoleName_(u.role, accessStored_());
   { const no = navOrders_(); out.navOrder = no[navKey_(u.role)] || null; if (u.role === 'pi') out.navOrders = no; }
   if (u.role === 'pi') out.pinHelp = pinHelpList_();
+  if (u.role === 'pi') { try { out.updateNotice = JSON.parse(props_().getProperty('UPDATE_NOTICE') || 'null'); } catch (e) { out.updateNotice = null; } }
   if (!/^reader/.test(u.role) && !acc.view) {             // without the full clinical data: only the tabs its ticks need, and only their columns
     const nss = dataSS_(), want = {};
     if (acc.screen) { want.S0_SCREEN = 1; want.S1_ENROL = 1; }
@@ -3528,6 +3533,77 @@ function scriptApiHelp_(code, text) {
   if (code === 401 || code === 403) return 'Google refused permission to edit this script (' + code + '). Check the "oauthScopes" line in appsscript.json, then run this again and allow the permissions.' + raw;
   return 'Google answered with error ' + code + '.' + raw;
 }
+// Automatic updates (PI, 13 Nov 2026): the hourly job looks at GitHub, and when a NEW script carrying the study's signature is there it installs
+// it exactly as the menu does (restore version first, same web app address), then tells the PI what changed by e-mail, in the workbook at its
+// next opening and on the PI phone. It never installs an unsigned script, and it leaves alone a script that needs the workbook upgraded
+// (changed columns): that one waits for the PI, who is told once. Switch: "PI: automatic updates on or off".
+function updNotes_(code) { const m = /const RELEASE_NOTE = '([^']*)'/.exec(code); return m ? m[1] : ''; }
+function installScript_(id, cur, file, code, hash, curHash) {
+  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'UTC', 'yyyy-MM-dd HH:mm'), out = { changed: false, moved: false, deps: 0 };
+  try {
+    out.before = scriptApi_('POST', 'projects/' + id + '/versions', { description: 'before update ' + stamp + ' (' + curHash.slice(0, 8) + ')' });
+    file.source = code;
+    scriptApi_('PUT', 'projects/' + id + '/content', { files: cur.files.map(function (f) { return { name: f.name, type: f.type, source: f.source }; }) });
+    out.changed = true;
+    out.after = scriptApi_('POST', 'projects/' + id + '/versions', { description: 'update ' + stamp + ' (' + hash.slice(0, 8) + ')' });
+    const deps = (scriptApi_('GET', 'projects/' + id + '/deployments').deployments || []).filter(function (d) {
+      return d.deploymentConfig && d.deploymentConfig.versionNumber && (d.entryPoints || []).some(function (e) { return e.entryPointType === 'WEB_APP'; });
+    });
+    out.deps = deps.length;
+    if (deps.length === 1) {
+      scriptApi_('PUT', 'projects/' + id + '/deployments/' + deps[0].deploymentId, { deploymentConfig: { scriptId: id, versionNumber: out.after.versionNumber, manifestFileName: 'appsscript', description: 'update ' + stamp + ' (' + hash.slice(0, 8) + ')' } });
+      out.moved = true;
+    }
+  } catch (e) { e.changed = out.changed; throw e; }
+  return out;
+}
+function autoUpdate_() {
+  const P = props_();
+  if (P.getProperty('AUTO_UPDATE') === 'off') return 'off';
+  const res = UrlFetchApp.fetch(UPDATE_SRC + '?t=' + new Date().getTime(), { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return 'unreachable';
+  const code = res.getContentText(), hash = sha256hex_(code), parts = sigSplit_(code);
+  if (!parts.sig || rsaVerify_(parts.body, parts.sig) !== true) return 'unsigned';          // only a script signed by the study, never a typed code
+  if (['onOpen', 'doPost', 'requirePI_', 'menuUpdateScript', 'setup', 'autoUpdate_'].some(function (m) { return code.indexOf('function ' + m) < 0; })) return 'incomplete';
+  try { new Function(code); } catch (e) { return 'syntax'; }
+  const id = ScriptApp.getScriptId(), cur = scriptApi_('GET', 'projects/' + id + '/content');
+  const mine = (cur.files || []).filter(function (f) { return f.type === 'SERVER_JS' && /function onOpen\b/.test(f.source || ''); });
+  if (mine.length !== 1) return 'files';
+  if (sigSplit_(mine[0].source).body === parts.body) return 'same';
+  const short = hash.slice(0, 8), sv = /SCHEMA_VER: (\d+)/.exec(code), note = updNotes_(code);
+  if (!sv || +sv[1] !== CFG.SCHEMA_VER) {                  // changed columns: the PI installs it and runs the upgrade himself
+    if (P.getProperty('AUTO_WAIT') !== short) {
+      P.setProperty('AUTO_WAIT', short);
+      notifyPI_('[TBDM] An update is waiting for you', 'A new study script (' + short + ') changes the workbook columns, so it was NOT installed automatically.\n\nIn the workbook: TB-DM Study > PI: update the script (one click), then PI: upgrade the workbook in place.' + (note ? '\n\nChanges: ' + note : ''));
+    }
+    return 'waits';
+  }
+  const curHash = sha256hex_(mine[0].source);
+  let r;
+  try { r = installScript_(id, cur, mine[0], code, hash, curHash); }
+  catch (e) {
+    if (!(e && e.changed)) return 'failed-clean';         // nothing was changed: try again next hour, quietly
+    notifyPI_('[TBDM] Automatic update did not finish', 'The automatic update to ' + short + ' stopped: ' + String(e && e.message || e) + '\n\nIn the workbook: TB-DM Study > PI: update the script (one click). To go back: Deploy > Manage deployments > pencil > the version called "before update".');
+    return 'failed';
+  }
+  const when = Utilities.formatDate(new Date(), CFG.TZ, 'yyyy-MM-dd HH:mm');
+  P.setProperty('UPDATE_NOTICE', JSON.stringify({ code: short, at: when, note: note, moved: r.moved, back: r.before.versionNumber }));
+  P.deleteProperty('AUTO_WAIT');
+  logAudit_('SCRIPT_UPDATE', '', '', curHash.slice(0, 8), short, 'automatic update, versions ' + r.before.versionNumber + ' to ' + r.after.versionNumber + ', signature checked' + (r.moved ? '' : ', web app NOT moved'), 'system');
+  notifyPI_('[TBDM] Upgrade successful (' + short + ')', 'The study script updated itself at ' + when + ' (signed by the study).\n\nChanges: ' + (note || 'none listed') + '\n\n' +
+    (r.moved ? 'Every phone keeps working at the same address. Nothing for you to do.' : 'The web app was NOT moved (found ' + r.deps + ' web app deployments): Deploy > Manage deployments > pencil > Version: New version > Deploy.') +
+    '\nTo go back: Deploy > Manage deployments > pencil > version ' + r.before.versionNumber + ' ("before update").');
+  return 'updated';
+}
+function menuAutoUpdate() {
+  requirePI_();
+  const ui = SpreadsheetApp.getUi(), P = props_(), on = P.getProperty('AUTO_UPDATE') !== 'off';
+  const b = ui.alert('Automatic updates are ' + (on ? 'ON' : 'OFF'), (on ? 'Each hour the workbook checks for a new script signed by the study, installs it and tells you what changed. An update that changes the workbook columns always waits for you.\n\nSwitch automatic updates OFF?' : 'New scripts wait until you press "PI: update the script (one click)".\n\nSwitch automatic updates ON?'), ui.ButtonSet.YES_NO);
+  if (b !== ui.Button.YES) return;
+  P.setProperty('AUTO_UPDATE', on ? 'off' : 'on');
+  logAudit_('SCRIPT_UPDATE', '', '', on ? 'ON' : 'OFF', on ? 'OFF' : 'ON', 'automatic updates switched', me_());
+  ui.alert('Automatic updates are now ' + (on ? 'OFF' : 'ON'), '', ui.ButtonSet.OK);
+}
 function menuUpdateScript() {
   requirePI_();
   const ui = SpreadsheetApp.getUi(), id = ScriptApp.getScriptId();
@@ -3556,24 +3632,15 @@ function menuUpdateScript() {
       if (ask.getSelectedButton() !== ui.Button.OK) return;
       if (ask.getResponseText().trim().toLowerCase() !== hash.slice(0, 8)) { stop('The code does not match', 'The file on GitHub is not the one you were given the code for, or the code was mistyped.'); return; }
     }
-    const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'UTC', 'yyyy-MM-dd HH:mm');
-    const before = scriptApi_('POST', 'projects/' + id + '/versions', { description: 'before update ' + stamp + ' (' + curHash.slice(0, 8) + ')' });
-    mine[0].source = code;
-    scriptApi_('PUT', 'projects/' + id + '/content', { files: cur.files.map(function (f) { return { name: f.name, type: f.type, source: f.source }; }) });
+    const r = installScript_(id, cur, mine[0], code, hash, curHash), before = r.before, after = r.after;
     changed = true;
-    const after = scriptApi_('POST', 'projects/' + id + '/versions', { description: 'update ' + stamp + ' (' + hash.slice(0, 8) + ')' });
-    const deps = (scriptApi_('GET', 'projects/' + id + '/deployments').deployments || []).filter(function (d) {
-      return d.deploymentConfig && d.deploymentConfig.versionNumber && (d.entryPoints || []).some(function (e) { return e.entryPointType === 'WEB_APP'; });
-    });
-    let where;
-    if (deps.length === 1) {
-      scriptApi_('PUT', 'projects/' + id + '/deployments/' + deps[0].deploymentId, { deploymentConfig: { scriptId: id, versionNumber: after.versionNumber, manifestFileName: 'appsscript', description: 'update ' + stamp + ' (' + hash.slice(0, 8) + ')' } });
-      where = 'The web app was moved to version ' + after.versionNumber + ' at the same address, so every phone keeps working.';
-    } else where = 'The web app was NOT moved (found ' + deps.length + ' web app deployments). Do it by hand: Deploy > Manage deployments > pencil > Version: New version > Deploy.';
+    const where = r.moved ? 'The web app was moved to version ' + after.versionNumber + ' at the same address, so every phone keeps working.'
+      : 'The web app was NOT moved (found ' + r.deps + ' web app deployments). Do it by hand: Deploy > Manage deployments > pencil > Version: New version > Deploy.';
+    props_().deleteProperty('AUTO_WAIT');
     logAudit_('SCRIPT_UPDATE', '', '', curHash.slice(0, 8), hash.slice(0, 8), 'versions ' + before.versionNumber + ' to ' + after.versionNumber + (signed === true ? ', signature checked' : ', update code typed'));
-    ui.alert('Script updated', 'Installed version ' + ver(code) + ' (code ' + hash.slice(0, 8) + (signed === true ? ', signed by the study' : '') + ').\n\n' + where + '\n\nReload this workbook so the menu refreshes. If anything looks wrong, go back with Deploy > Manage deployments > pencil > choose version ' + before.versionNumber + ' ("before update").', ui.ButtonSet.OK);
+    ui.alert('Script updated', 'Installed version ' + ver(code) + ' (code ' + hash.slice(0, 8) + (signed === true ? ', signed by the study' : '') + ').' + (updNotes_(code) ? '\n\nChanges: ' + updNotes_(code) : '') + '\n\n' + where + '\n\nReload this workbook so the menu refreshes. If anything looks wrong, go back with Deploy > Manage deployments > pencil > choose version ' + before.versionNumber + ' ("before update").', ui.ButtonSet.OK);
   } catch (e) {
-    if (changed) ui.alert('The update stopped part way', 'The new code is installed but the web app was not moved to it. ' + String(e.message || e) + '\n\nFinish by hand: Deploy > Manage deployments > pencil > Version: New version > Deploy. To undo, choose the version called "before update".', ui.ButtonSet.OK);
+    if (changed || (e && e.changed)) ui.alert('The update stopped part way', 'The new code is installed but the web app was not moved to it. ' + String(e.message || e) + '\n\nFinish by hand: Deploy > Manage deployments > pencil > Version: New version > Deploy. To undo, choose the version called "before update".', ui.ButtonSet.OK);
     else stop('The update did not finish', String(e.message || e));
   }
 }
@@ -3593,4 +3660,4 @@ function menuAppRevoke() {
   ui.alert('Revoked', n + ' phone(s) or unused invitation(s) of ' + email + ' can no longer reach the study data. Data still waiting on those phones will not be accepted.', ui.ButtonSet.OK);
 }
 
-// SIGNATURE: RaAcPe8mEtKFotI7ZtlUbkNUERdp/Zrtr8oWRwheahfP65Ndo+oStR06Yr8GaUpXChKbZ8wErvdVETbrJjz28vxxvjExukb4XNZvoTlvHFvhIzFvtuhdqlGDlOWtQb6GAEtR9GWc8ZpbNYdrwyiYYsJwqmXURBY5qMioOWhKT3NlvPbH8ACGCM3xb4nZ2AsiO9GJdmbZZD/dJsv89lpafLHxw2+5qi0fQ0ywbR+Y0cG/l+J5wbIknSU2Axf+Ru4j0y7HkDYSHeMpfCzF90O8mEONcIjIe6XYNgQSnJdRDviTmAvlLcVHNE590xfXRjJ+cXR1pT0Y6qSlczHg6JLFCl69NUngiQTkOw14jHRsrRIJ4nKeHJmr/uJ7SUp9MIb87z4GGdktFAJWPjw33fltIsRKN+JfNpifWRmZwSVHxNbAvXPenWgHUuGOH7DPpxdMpyG4mMkZRNw+TEIE9ZM384A/3Pppwt0S2zz2XKPqJ7HiBzxU2r2YOUZxq7aAiU9S
+// SIGNATURE: Zg891j1Yy/mOQpyE2X8QsgQxGj83H9PrGbk/UTrbcGIwy8bxpPp/EnbCi1xEC7Q3jHUdcgjsuBoZ3/5cDc5oKtQGI+Jg/1wqpFPHO9T2NnvACFJxf08Kuhi9H9bSjmNMPZLkkvDuAvXy7+o2r5XtbDro8esKEFOjO7F1kWpmvIfTEJd3c+yoAZu/f3DVr5kDP10aartr0XogI+FZrClf8LRcI/dxv6wzn69XzdDiSrXhl5xr8kVJBbv29xWtWt57zjjBdxQ8zXA+He8rdBkkAkNM7syyXh1/oltMvAc57VzGtBRGzDF16cRvKRCpdV3HqzEm2PwySkWGEZA5M1EzOpXFnv8jy37vtNZxqU0cWDifdFmQHLyUUUF2e4Ju2bM5fVKVwEv+8SHipHdXMy7exgq7701JtSseTO7f4mAWREY0fgk27kkY44k6IDeB6OFHu938cGyQNx5xBmyaSQPhR4pVVGRrfrD+uxHYH4k8RkrVSaXmNxk/denxrS3GbPBD
