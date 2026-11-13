@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = 'fd19fad5b105';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'ac62080c2045';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -2334,13 +2334,13 @@ function attention() {
 // scoring page (reader) marks that study number seen.
 const CXRSEEN = 'tbdm-cxrseen';
 function cxrKeys() {
-  if (!S || !S.server || !photosOn() || T.practice || T.preview) return [];
+  if (!S || !S.server || T.practice && !(T.preview && isReader() && T.pmode === 'watch') || !(T.preview ? S.server.photos : photosOn())) return [];
   if (role() === 'pi') return (S.server.cxrPhotos || []).map((x) => [x.study_id, 'p' + x.id]);
   if (isReader()) return (S.server.films || []).filter((f) => f.img > 0 && !f.poor).map((f) => [f.study_id, 'r' + f.study_id + ':' + f.img]);
   return [];
 }
-function cxrSeenSet() { try { return JSON.parse(localStorage.getItem(CXRSEEN) || 'null'); } catch (e) { return null; } }
-function cxrSeenSave(o) { try { o.keys = o.keys.slice(-800); localStorage.setItem(CXRSEEN, JSON.stringify(o)); } catch (e) { /* no storage: the badge just stays */ } }
+function cxrSeenSet() { if (T.preview) return T.cxrPrev || (T.cxrPrev = { keys: [] }); try { return JSON.parse(localStorage.getItem(CXRSEEN) || 'null'); } catch (e) { return null; } }
+function cxrSeenSave(o) { if (T.preview) { T.cxrPrev = o; return; } try { o.keys = o.keys.slice(-800); localStorage.setItem(CXRSEEN, JSON.stringify(o)); } catch (e) { /* no storage: the badge just stays */ } }
 function newCxr() {
   const keys = cxrKeys(); if (!keys.length) return [];
   let seen = cxrSeenSet();
@@ -2950,13 +2950,14 @@ function previewStart(r, mode) {
   if (!real || real.cfg.role !== 'pi' || (T.practice && !T.preview) || !PMODE[mode]) return;
   if (T.syncing) { toast('The phone is sending entries. Try again in a moment.'); return; }
   const a = accessFor_(r, (real.server && real.server.accessStored) || null), rs = real.server || {}, day = (n) => isoOf_(dayNo_(todayIso()) - n);
-  T.real = real; T.preview = r; T.pmode = mode; T.practice = true; T.reg = null; T.link = null; T.navScroll = 0;
+  T.real = real; T.preview = r; T.pmode = mode; T.practice = true; T.cxrPrev = null; T.reg = null; T.link = null; T.navScroll = 0;
   S = { cfg: Object.assign({}, real.cfg, { token: '', api: '', email: PMODE[mode].name.toLowerCase() + ' as ' + previewName(r), role: r }), outbox: [], lastSync: Date.now(), confOut: [],
     server: { access: a, tabs: {}, regnums: [], held: [], photos: false, at: Date.now(), films: [], navOrder: ((rs.navOrders || {})[navKeyOf(r)]) || null } };
   if (mode === 'watch') {
     const cx = rs.tabs && rs.tabs.S3_CXR, ci = (k) => (cx ? cx.cols.indexOf(k) : -1);
     Object.assign(S.server, { tabs: previewTabs(real, a, r), regnums: a.view ? rs.regnums || [] : [], linkOn: !!rs.linkOn, held: a.view ? rs.held || [] : [], at: rs.at,
-      films: /^reader/.test(r) && cx ? cx.rows.filter((x) => x[ci('study_id')]).map((x) => ({ study_id: x[ci('study_id')], cxr_date: x[ci('cxr_date')], repeat: x[ci('repeat_read')] === 'Y' })) : [] });
+      films: /^reader/.test(r) && cx ? cx.rows.filter((x) => x[ci('study_id')]).map((x) => ({ study_id: x[ci('study_id')], cxr_date: x[ci('cxr_date')], repeat: x[ci('repeat_read')] === 'Y', img: rs.cxrPhotos ? rs.cxrPhotos.filter((c) => c.study_id === x[ci('study_id')]).length : 0 })) : [] });
+    if (/^reader/.test(r)) S.server.photos = !!rs.photos;       // so the reader's New chest radiograph card can be shown (photosOn() stays off in surveillance)
     S.lastSync = real.lastSync;
     if ((a.numbers || a.ident) && real.conf && real.conf.rows) {         // the PI's register copy; names, record numbers and telephones only if that role is ticked for them
       S.conf = { at: real.conf.at, next: real.conf.next, rows: real.conf.rows.map((x) => a.ident ? Object.assign({}, x) : { study_id: x.study_id, assigned_date: x.assigned_date, status: x.status, reason: x.reason }) };
