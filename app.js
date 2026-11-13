@@ -4,7 +4,7 @@
  * calculations come from logic.js, which build.js copies from the workbook script itself. */
 'use strict';
 const APP_VERSION = '1.0';
-const BUILD_ID = '5443f3bc0c0b';                 // replaced by build.js with the build's hash
+const BUILD_ID = 'fd19fad5b105';                 // replaced by build.js with the build's hash
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 const PBKDF2_ROUNDS = 210000;
 const NAMES = { S0_SCREEN: 'Screening', S1_ENROL: 'Enrolment', S2_BASELINE: 'Baseline examination', S3_CXR: 'Chest radiograph',
@@ -313,7 +313,7 @@ async function sync() {
     if (S.server && S.server.photos && (S.photoOut || []).length) await pushPhotos(still);
     const pull = await api({ op: 'pull', token: S.cfg.token }); still();
     if (!pull.ok) throw Object.assign(new Error(pull.error || 'the server refused'), { code: pull.code });
-    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, navOrder: pull.navOrder || null, navOrders: pull.navOrders || null, roleName: pull.roleName || '', pinHelp: pull.pinHelp || [], cxrPhotos: pull.cxrPhotos || [], at: Date.now() };
+    S.server = { tabs: pull.tabs, films: pull.films || [], regnums: pull.regnums || [], linkOn: !!pull.linkOn, held: pull.held || [], photos: !!pull.photos, access: pull.access || null, accessStored: pull.accessStored || null, navOrder: pull.navOrder || null, navOrders: pull.navOrders || null, roleName: pull.roleName || '', pinHelp: pull.pinHelp || [], cxrPhotos: pull.cxrPhotos || [], at: Date.now() };
     if (pull.photos && (S.photoOut || []).length) await pushPhotos(still);          // photos taken before the feature reached this phone
     if (Array.isArray(pull.held) && S.nums && S.nums.blocks) S.nums.blocks = S.nums.blocks.filter((b) => pull.held.some((h) => h.from === b.from && h.to === b.to));   // the workbook was cleared: blocks it no longer holds are dropped
     T.weak = false; S.cfg.role = pull.role; S.cfg.email = pull.email; helpSave();
@@ -729,6 +729,29 @@ function openScreened(r) {                                     // a line waiting
   if (id && r.eligible === 'Y' && r.enrolled === 'Y') findPatient(id); else go('form', { tab: 'S0_SCREEN', key: screenKey(r) });
 }
 // Enrolled numbers whose name, record number and telephone are not yet recorded (known from the last register load; the register is online only)
+// Link register pending: every enrolled number whose name, record number and telephone are not recorded yet. A role that holds the
+// register uses its copy, plus enrolments this phone holds that the copy has not heard of (saved a moment ago, or not sent yet).
+// A data role never sees the register: the workbook tells it only yes or no for each number.
+function linkPending(L) {
+  const up = (v) => s_(v).toUpperCase(), enrolled = () => (S.server && S.server.tabs && S.server.tabs.S1_ENROL ? view('S1_ENROL') : []);
+  if (confRole()) {
+    const p = identifiersPending(L), have = {};
+    if (L && L.link) { L.rows.forEach((r) => { have[up(r.study_id)] = true; }); enrolled().forEach((r) => { const id = up(r.study_id); if (id && !have[id]) { have[id] = true; p.push({ study_id: id, status: 'E' }); } }); }
+    return p;
+  }
+  if (!canData() || !S.server || !S.server.linkOn) return [];
+  const done = {}, p = [];
+  (S.server.regnums || []).forEach((x) => { if (x[2] === 'Y') done[up(x[0])] = true; });
+  enrolled().forEach((r) => { const id = up(r.study_id); if (id && !done[id]) { done[id] = true; p.push({ study_id: id, status: 'E' }); } });
+  return p.sort((a, b) => (a.study_id < b.study_id ? -1 : 1));
+}
+const LINK_SUB = 'Name, record number and telephone not recorded';
+// A role without the register cannot open it: the row says who records these.
+function linkGo() {
+  if (confRole()) return toRegister();
+  modal('Link register pending', [el('p', null, 'These participants are enrolled, but their name, record number and telephone are not in the Link register yet.'),
+    el('p', null, 'They are recorded by the roles allowed to open the Link register (the TB DOTS incharge and the PI, unless the PI has set it otherwise). A number leaves this list after they have recorded it and this phone has synced.')], [['Close', () => {}]]);
+}
 function identifiersPending(L) { return L && L.link ? L.rows.filter((r) => r.status === 'E' && !r.mrn && !r.phone) : []; }
 // Useful at a glance on the Screen tile: how many patients this phone has screened today (including lines not yet sent).
 function screenedToday() { const t = todayIso(), n = view('S0_SCREEN').filter((r) => s_(r.screen_date) === t).length; return n ? n + ' screened today' : 'None screened today'; }
@@ -1009,7 +1032,7 @@ function measureStatus() {
 }
 function measuresDue() { return measureStatus().filter((m) => m.need.length); }
 function piHome(out, bad, waiting, oldest, dueN) {
-  const nurse = can('measure') && !can('due'), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], wi = canData() ? screenIncomplete() : [], idp = confRole() && (!T.practice || T.preview) ? identifiersPending((T.reg && T.reg.list) || confAsList()) : [];
+  const nurse = can('measure') && !can('due'), due = out.schedule.filter((r) => r[5] !== 'upcoming'), w = canData() ? waitingEnrol() : [], wi = canData() ? screenIncomplete() : [], idp = !T.practice || T.preview ? linkPending((T.reg && T.reg.list) || confAsList()) : [];
   const group = {}; out.queries.forEach((q) => { const g = q[0] || 'Screening log'; (group[g] = group[g] || []).push(q); });
   const qkeys = Object.keys(group).sort(), md = nurse ? measuresDue() : [];
   // Triage (PI, 10 Nov 2026): every list is put in a tier - 1 act now (red), 2 act today (orange), 3 for information - and a strip of
@@ -1032,7 +1055,7 @@ function piHome(out, bad, waiting, oldest, dueN) {
     w.map((id) => ({ main: id, sub: 'Screened, eligible, agreed', go: () => enrolFromScreen(id) })).concat(wi.map((r) => ({ main: screenLabel(r), sub: 'Eligible: answer Enrolled and give the study number', chip: 'complete it', chipCls: 'warn', go: () => go('form', { tab: 'S0_SCREEN', key: screenKey(r) }) }))), () => go('screening'), 'Nobody waiting', f));
   add('drafts', 2, drafts.length === 1 ? 'draft' : 'drafts', drafts.length, (f) => draftsCard(f));
   add('conf', 2, 'unsent', cq.length, (f) => confQueue(f));
-  if (confRole()) add('idp', 2, 'identifiers', idp.length, (f) => feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: 'Name, record number and telephone not recorded', go: toRegister })), toRegister, 'All recorded', f));
+  if (confRole() || idp.length || (canData() && S.server && S.server.linkOn)) add('idp', 2, 'to link', idp.length, (f) => feedCard('conf', 'Link register pending', idp.length, idp.map((r) => ({ main: r.study_id || r.id || 'Enrolled', sub: LINK_SUB, go: linkGo })), linkGo, 'All recorded', f));
   add('cxr', 3, cx === 1 ? 'new radiograph' : 'new radiographs', cx, () => newCxrCard());
   const un = updateNotice(); add('upd', 3, 'workbook updated', un ? 1 : 0, () => updateCard(un));
   sec.sort((a, b) => a.tier - b.tier);
@@ -1089,10 +1112,10 @@ function confQueue(fold) {
 // A role with no study data on this phone (by default the DOTS incharge): the home lists the register work, if it has any.
 function dotsHome() {
   if (!confRole()) return homeTop().concat([el('main', { class: 'pihome' }, el('div', { class: 'card' }, el('b', null, 'Nothing to do on this phone yet.'), el('div', { class: 'small' }, 'Your role has no tasks switched on. The PI sets them in the Role manager.')))]);
-  const L = T.reg && T.reg.list && !T.reg.list.cached && linkUp() ? T.reg.list : confAsList(), idp = identifiersPending(L), q = S.confOut || [];
+  const L = T.reg && T.reg.list && !T.reg.list.cached && linkUp() ? T.reg.list : confAsList(), idp = linkPending(L), q = S.confOut || [];
   const main = el('main', { class: 'pihome' },
     can('numbers') ? el('div', { class: 'homerow solo' }, assignTile()) : null,
-    feedCard('conf', 'Identifiers pending', idp.length, idp.map((r) => ({ main: r.study_id, sub: 'Name, record number and telephone not recorded', go: toRegister })), toRegister, L ? 'All enrolled numbers have identifiers' : 'Open the Link register once while online'),
+    feedCard('conf', 'Link register pending', idp.length, idp.map((r) => ({ main: r.study_id, sub: LINK_SUB, go: toRegister })), toRegister, L ? 'All enrolled numbers have identifiers' : 'Open the Link register once while online'),
     confQueue(),
     el('h2', null, 'Recent activity'),
     el('div', { class: 'card feedcard' }, el('div', { class: 'small muted' }, L && L.at ? 'Register copy saved ' + new Date(L.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : L ? 'Register up to date' : 'No copy of the register on this phone yet'),
@@ -2823,7 +2846,8 @@ async function saveForm() {
   const savedMsg = T.practice ? 'Saved in practice only. Nothing was sent.' : navigator.onLine ? 'Saved. Sending…' : 'Saved on this phone. It will be sent when online.';
   const willWarn = (F.tab === 'PHQ_GAD' && F.vals.declined !== 'Y' && num_(F.vals.phq9) > 0) || (F.tab === 'LABS' && /^(MET|CHECK)/.test(labDili(F.vals))) ||
     (F.tab === 'VISITS' && hepAny_(F.vals) === true) || (F.tab === 'S0_SCREEN' && F.vals.enrolled === 'Y' && F.vals.study_id && !enrolledMap()[s_(F.vals.study_id).toUpperCase()]);
-  if (!willWarn) toast(savedMsg);
+  const linkNote = F.tab === 'S1_ENROL' && !T.practice && S.server && (S.server.linkOn || (confRole() && S.conf)) ? ' Link register pending for ' + s_(F.vals.study_id).toUpperCase() + '.' : '';
+  if (!willWarn) toast(savedMsg + linkNote);
   if (F.tab === 'PHQ_GAD' && F.vals.declined !== 'Y' && num_(F.vals.phq9) > 0) {
     return modal('STOP: PHQ-9 item 9 is above 0', [el('p', null, 'Before the participant leaves, today:'), el('ol', null,
       el('li', null, 'Stop the questionnaire and stay with the participant.'), el('li', null, 'Call the supervising clinician now.'),
@@ -2931,7 +2955,7 @@ function previewStart(r, mode) {
     server: { access: a, tabs: {}, regnums: [], held: [], photos: false, at: Date.now(), films: [], navOrder: ((rs.navOrders || {})[navKeyOf(r)]) || null } };
   if (mode === 'watch') {
     const cx = rs.tabs && rs.tabs.S3_CXR, ci = (k) => (cx ? cx.cols.indexOf(k) : -1);
-    Object.assign(S.server, { tabs: previewTabs(real, a, r), regnums: a.view ? rs.regnums || [] : [], held: a.view ? rs.held || [] : [], at: rs.at,
+    Object.assign(S.server, { tabs: previewTabs(real, a, r), regnums: a.view ? rs.regnums || [] : [], linkOn: !!rs.linkOn, held: a.view ? rs.held || [] : [], at: rs.at,
       films: /^reader/.test(r) && cx ? cx.rows.filter((x) => x[ci('study_id')]).map((x) => ({ study_id: x[ci('study_id')], cxr_date: x[ci('cxr_date')], repeat: x[ci('repeat_read')] === 'Y' })) : [] });
     S.lastSync = real.lastSync;
     if ((a.numbers || a.ident) && real.conf && real.conf.rows) {         // the PI's register copy; names, record numbers and telephones only if that role is ticked for them
